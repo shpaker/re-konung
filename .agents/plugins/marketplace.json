@@ -1,0 +1,20 @@
+{
+  "name": "re-konung",
+  "interface": {
+    "displayName": "Konung"
+  },
+  "plugins": [
+    {
+      "name": "konung",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

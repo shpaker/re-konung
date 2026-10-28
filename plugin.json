@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "konung",
+  "description": "Install the Tiled extension that opens and saves the original maps of Konung: Legends of the North (Konung.N).",
+  "author": {
+    "name": "A.Shpak"
+  },
+  "homepage": "https://github.com/shpaker/re-konung",
+  "repository": "https://github.com/shpaker/re-konung",
+  "keywords": ["tiled", "konung", "level-editor", "reverse-engineering"]
+}
