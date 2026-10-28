@@ -1,16 +1,20 @@
-// Разбор ресурсов «Князя» (1999) без Tiled API: на входе ArrayBuffer, на выходе
-// простые объекты. Повторяет эталон konung/k1 на Python; при расхождении прав
-// Python — у него тесты. Форматы описаны в docs/k1/formats/.
+// Разбор и запись ресурсов «Князя» (1999) без Tiled API: на входе ArrayBuffer,
+// на выходе простые объекты, и обратно для карт. Повторяет эталон konung/k1 на
+// Python; при расхождении прав Python — у него тесты. Форматы — docs/k1/formats/.
 
 export const MAP_WIDTH = 80;
 export const MAP_HEIGHT = 160;
 const FINE_WIDTH = 160;
 const FINE_HEIGHT = 320;
-const MAX_DECORATIONS = 1000;
-const MAX_OBJECTS = 1000;
+export const FOOT_SIZE = FINE_WIDTH * FINE_HEIGHT;
+export const MAX_DECORATIONS = 1000;
+export const MAX_OBJECTS = 1000;
+const DECORATION_SIZE = 16;
 const OBJECT_SIZE = 36;
+// Номер тайла в тайловом слое — один байт: номер в GRAPH.RES + 1
+export const MAX_LAYER_TILE = 254;
 export const MAP_SIZE =
-    MAP_WIDTH * MAP_HEIGHT * 2 + FINE_WIDTH * FINE_HEIGHT + MAX_DECORATIONS * 16 + MAX_OBJECTS * OBJECT_SIZE;
+    MAP_WIDTH * MAP_HEIGHT * 2 + FOOT_SIZE + MAX_DECORATIONS * DECORATION_SIZE + MAX_OBJECTS * OBJECT_SIZE;
 
 // Ромб тайла 114×64, шаг по x — 116, шаг строки — 32, нечётные строки сдвинуты на 58
 export const TILE_STEP_X = 116;
@@ -23,6 +27,7 @@ const CURSOR_COUNT = 11;
 const TILE_SLOTS = 512;
 const OBJECT_SLOTS = 512;
 const DYNAMIC_OBJECTS = 30;
+export const SIMPLE_OBJECT_SLOTS = OBJECT_SLOTS - DYNAMIC_OBJECTS;
 const OBJECT_FRAMES = 8;
 const FLAME_SLOTS = 20;
 
@@ -179,7 +184,8 @@ export function parseMap(buffer) {
         ground.push(g);
         overlay.push(o);
     }
-    reader.pos += FINE_WIDTH * FINE_HEIGHT;
+    const foot = reader.bytes.slice(reader.pos, reader.pos + FOOT_SIZE);
+    reader.pos += FOOT_SIZE;
 
     const decorations = [];
     for (let slot = 0; slot < MAX_DECORATIONS; ++slot) {
@@ -204,7 +210,67 @@ export function parseMap(buffer) {
         }
         reader.pos = start + OBJECT_SIZE;
     }
-    return { ground, overlay, decorations, objects };
+    return { ground, overlay, foot, decorations, objects };
+}
+
+export function toHex(bytes) {
+    let out = "";
+    for (const byte of bytes)
+        out += byte.toString(16).padStart(2, "0");
+    return out;
+}
+
+export function fromHex(text, length) {
+    if (typeof text !== "string" || text.length !== length * 2 || /[^0-9a-f]/i.test(text))
+        throw new Error(`ожидалось ${length} байт в шестнадцатеричном виде`);
+    const bytes = new Uint8Array(length);
+    for (let i = 0; i < length; ++i)
+        bytes[i] = parseInt(text.substr(i * 2, 2), 16);
+    return bytes;
+}
+
+// Карта обратно в Konung.N. Декорации и объекты — подряд с нулевого слота,
+// остальные слоты — байты 0xFF, как во всех картах дистрибутива
+export function serializeMap(data) {
+    if (data.decorations.length > MAX_DECORATIONS)
+        throw new Error(`декораций ${data.decorations.length}, максимум ${MAX_DECORATIONS}`);
+    if (data.objects.length > MAX_OBJECTS)
+        throw new Error(`объектов ${data.objects.length}, максимум ${MAX_OBJECTS}`);
+
+    const bytes = new Uint8Array(MAP_SIZE).fill(0xff);
+    const view = new DataView(bytes.buffer);
+    let pos = 0;
+    for (let y = 0; y < MAP_HEIGHT; ++y) {
+        for (let x = 0; x < MAP_WIDTH; ++x) {
+            bytes[pos++] = data.ground[y][x];
+            bytes[pos++] = data.overlay[y][x];
+        }
+    }
+    bytes.set(data.foot, pos);
+    pos += FOOT_SIZE;
+
+    const decorationsStart = pos;
+    data.decorations.forEach((decoration, slot) => {
+        const at = decorationsStart + slot * DECORATION_SIZE;
+        view.setInt32(at, decoration.tile, true);
+        bytes.set(fromHex(decoration.unknown, 8), at + 4);
+        view.setInt16(at + 12, decoration.x, true);
+        view.setInt16(at + 14, decoration.y, true);
+    });
+
+    const objectsStart = decorationsStart + MAX_DECORATIONS * DECORATION_SIZE;
+    data.objects.forEach((object, slot) => {
+        const at = objectsStart + slot * OBJECT_SIZE;
+        view.setInt32(at, object.objectId, true);
+        bytes.set(fromHex(object.unknown, 4), at + 4);
+        bytes.set(fromHex(object.flames, FLAME_SLOTS), at + 8);
+        view.setInt16(at + 28, object.frameTime, true);
+        view.setInt16(at + 30, object.x, true);
+        view.setInt16(at + 32, object.y, true);
+        view.setUint8(at + 34, object.flags);
+        view.setUint8(at + 35, object.frame);
+    });
+    return bytes.buffer;
 }
 
 // Левый верхний угол тайла клетки
@@ -215,4 +281,10 @@ export function tilePosition(column, row) {
 // Позиция объекта: клетка мелкой сетки (вдвое мельче тайловой) → пиксели
 export function objectPosition(x, y) {
     return [x * (TILE_STEP_X / 2) - (y & 1) * (TILE_STEP_X / 4), y * (TILE_STEP_Y / 2)];
+}
+
+// Обратно: пиксели → ближайшая клетка мелкой сетки
+export function objectCell(x, y) {
+    const row = Math.round(y / (TILE_STEP_Y / 2));
+    return [Math.round((x + (row & 1) * (TILE_STEP_X / 4)) / (TILE_STEP_X / 2)), row];
 }

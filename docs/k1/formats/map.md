@@ -1,6 +1,6 @@
 # Konung.N и LIGHTS.N — карта локации
 
-43 карты с номерами от 1 до 50, одинаковые в RUS и ENG. Код — `konung/k1/map_file.py` (`parse`, `serialize`), `konung/k1/render.py`, `tiled/konung/lib/k1.mjs` (`parseMap`). Рендер целиком:
+43 карты с номерами от 1 до 50, одинаковые в RUS и ENG. Код — `konung/k1/map_file.py` (`parse`, `serialize`), `konung/k1/render.py`, `tiled/konung/lib/k1.mjs` (`parseMap`, `serializeMap`). Рендер целиком:
 
 ```bash
 uv run konung k1 map original/k1/rus/game out/k1/maps -n 1
@@ -57,7 +57,7 @@ uv run konung k1 map original/k1/rus/game out/k1/maps -n 1
 
 ## Запись
 
-`serialize` собирает файл обратно. Для этого важны факты, проверенные на всех 43 картах обоих изданий:
+`serialize` и `serializeMap` собирают файл обратно. Для этого важны факты, проверенные на всех 43 картах обоих изданий:
 - занятые слоты декораций и объектов всегда идут подряд с нулевого, без пропусков;
 - пустой слот — сплошные байты `0xFF` (16 у декорации, 36 у объекта);
 - у объектов встречаются только два набора служебных полей: `flags` 0, `frame` 0, `frameTime` 0, огни `00 × 8, FF × 12` (8127 объектов) или всё `0xFF` (1633 объекта). Чем они отличаются в игре — **неизвестно**;
