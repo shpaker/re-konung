@@ -15,6 +15,16 @@
 - [k1/editions.md](k1/editions.md) — RUS и ENG: состав, отличия, как распаковать.
 - [k1/inventory.md](k1/inventory.md) — все файлы игры и что о них известно.
 
+### Статус форматов
+
+| Файл | Что внутри | Статус | Код | Описание |
+|---|---|---|---|---|
+| `GRAPH.RES` | палитры, курсоры, тайлы, спрайты персонажей | разобран до последнего байта; спрайты персонажей — только границы блоков | `konung/k1/graph_res.py` | [graph-res.md](k1/formats/graph-res.md) |
+| `OBJECTS.RES` | объекты карты | простые объекты разобраны, динамические (30) — нет | `konung/k1/objects_res.py` | [objects-res.md](k1/formats/objects-res.md) |
+| RLE-картинки | сжатие всех спрайтов | разобрано | `konung/rle.py` | [rle.md](k1/formats/rle.md) |
+| `FLAMES.RES`, `LIGHTS.RES`, `SOUNDS.RES`, `*.RES` интерфейса | — | известно только по Slavik | — | [inventory.md](k1/inventory.md) |
+| `Maps.res`, `Game.res`, `Game.N`, `QUEST*.RES`, `*.flm` | — | не изучены | — | [inventory.md](k1/inventory.md) |
+
 ## «Князь 2» и «Князь 2.5»
 
 Пока ничего: нужны образы дисков. План и гипотезы — в [games.md](games.md).
