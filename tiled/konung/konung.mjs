@@ -592,12 +592,14 @@ function buildGameGroup(map, state, hero, number, graph, dynamicSprites, tables)
             slot: exit.slot, targetMap: exit.targetMap, arrivalX: exit.arrivalX, arrivalY: exit.arrivalY,
             direction: exit.direction, unknown: exit.unknown,
         });
-    // itemNames — названия предметов клада для чтения, при сохранении не читается
-    for (const entry of entities.loot)
-        addPoint(loot, `$ ${entry.gold}`, k1.characterPosition(entry.x, entry.y), {
-            slot: entry.slot, gold: entry.gold, items: entry.items, record: entry.record,
-            itemNames: k1.lootItemNames(state, tables, entry.items).join("; "),
-        });
+    // itemNames — названия предметов клада для чтения, при сохранении не читается;
+    // без названий из exe его нет, как и mapName
+    for (const entry of entities.loot) {
+        const properties = { slot: entry.slot, gold: entry.gold, items: entry.items, record: entry.record };
+        if (tables.names)
+            properties.itemNames = k1.lootItemNames(state, tables, entry.items).join("; ");
+        addPoint(loot, `$ ${entry.gold}`, k1.characterPosition(entry.x, entry.y), properties);
+    }
     for (const exit of entities.arrivals)
         addPoint(arrivals, `← ${exit.mapId}`, k1.characterPosition(exit.arrivalX, exit.arrivalY), {
             slot: exit.slot, fromMap: exit.mapId, direction: exit.direction,

@@ -866,11 +866,16 @@ export function parseExecutable(buffer) {
             row.push(view.getInt32(first + direction * DRAW_ORDER_ROW_SIZE + i * 4, true));
         drawOrder.push(row);
     }
-    return {
-        equipment, drawOrder, flameAnimations: findFlameAnimations(view, bytes.length),
-        names: Object.assign({ equipment: equipmentNames }, findItemNames(bytes, view)),
-        texts: findTexts(bytes),
-    };
+    // Без названий рисовать можно: если они не нашлись однозначно (другое
+    // издание) — names и texts null, а снаряжение и огни остаются
+    let names = null, texts = null;
+    try {
+        names = Object.assign({ equipment: equipmentNames }, findItemNames(bytes, view));
+        texts = findTexts(bytes);
+    } catch (error) {
+        names = texts = null;
+    }
+    return { equipment, drawOrder, flameAnimations: findFlameAnimations(view, bytes.length), names, texts };
 }
 
 // Тексты exe — записи фиксированной длины «текст + нули», как в
@@ -883,33 +888,43 @@ const ITEM_TABLES = { accessories: 9, alchemies: 14, misc: 54 };
 // Классы 0x41–0x50 называются по виду из таблицы монстров, с 0x51 — по имени
 const MONSTER_CLASS = 0x40, FIRST_VILLAGER_CLASS = 0x51;
 
-// CP866: 0x80–0xAF — А…п, 0xE0–0xEF — р…я, 0xF0/0xF1 — Ё/ё
+// CP866 целиком, как Python-кодек cp866: 0x80–0xAF — А…п, 0xB0–0xDF — псевдографика,
+// 0xE0–0xEF — р…я, 0xF0–0xFF — Ё, ё, Є, є, Ї, ї, Ў, ў, °, ∙, ·, √, №, ¤, ■ и неразрывный пробел
+const CP866_BOX = "░▒▓│┤╡╢╖╕╣║╗╝╜╛┐" +
+    "└┴┬├─┼╞╟╚╔╩╦╠═╬╧" +
+    "╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀";
+const CP866_TAIL = "ЁёЄєЇїЎў°∙·√№¤■ ";
+
 function cp866(byte) {
     if (byte < 0x80)
         return String.fromCharCode(byte);
     if (byte < 0xb0)
         return String.fromCharCode(0x410 + byte - 0x80);
-    if (byte >= 0xe0 && byte < 0xf0)
+    if (byte < 0xe0)
+        return CP866_BOX[byte - 0xb0];
+    if (byte < 0xf0)
         return String.fromCharCode(0x440 + byte - 0xe0);
-    if (byte === 0xf0)
-        return "Ё";
-    if (byte === 0xf1)
-        return "ё";
-    return "?";
+    return CP866_TAIL[byte - 0xf0];
+}
+
+// Запись «текст + нули» (непустой текст из байт ≥ 0x20, дальше только нули);
+// без сборки строки — для поиска таблиц
+function isText(bytes, at, size) {
+    let end = at;
+    while (end < at + size && bytes[end] !== 0) {
+        if (bytes[end] < 0x20)
+            return false;
+        ++end;
+    }
+    return end !== at && isFilled(bytes, end, at + size - end, 0);
 }
 
 // Текст записи; null — запись не «текст + нули» (пустая тоже null)
 function textAt(bytes, at, size) {
-    let end = at;
-    while (end < at + size && bytes[end] !== 0) {
-        if (bytes[end] < 0x20)
-            return null;
-        ++end;
-    }
-    if (end === at || !isFilled(bytes, end, at + size - end, 0))
+    if (!isText(bytes, at, size))
         return null;
     let text = "";
-    for (let i = at; i < end; ++i)
+    for (let i = at; i < at + size && bytes[i] !== 0; ++i)
         text += cp866(bytes[i]);
     return text;
 }
@@ -917,22 +932,23 @@ function textAt(bytes, at, size) {
 // Монстры (первые заполнены, хвост пуст), 171 имя и 21 прозвище; имя 0 и прозвище 0 пусты
 function isNamesBlock(bytes, start) {
     const nicknamesStart = MONSTER_NAMES + PEOPLE_NAMES;
+    // Сначала обязательно пустые записи: так отсекается почти всё сразу
+    if (!isFilled(bytes, start + MONSTER_NAMES * NAME_SIZE, NAME_SIZE, 0) ||
+        !isFilled(bytes, start + nicknamesStart * NAME_SIZE, NAME_SIZE, 0))
+        return false;
     let seenEmpty = false;
     for (let index = 0; index < NAMES_BLOCK; ++index) {
         const at = start + index * NAME_SIZE;
         const empty = isFilled(bytes, at, NAME_SIZE, 0);
-        if (index === MONSTER_NAMES || index === nicknamesStart) {
-            if (!empty)
-                return false;
+        if (index === MONSTER_NAMES || index === nicknamesStart)
             continue;
-        }
         if (index < MONSTER_NAMES && index && empty) {
             seenEmpty = true;
             continue;
         }
         if (index < MONSTER_NAMES && seenEmpty)
             return false;
-        if (textAt(bytes, at, NAME_SIZE) === null)
+        if (!isText(bytes, at, NAME_SIZE))
             return false;
     }
     return true;
@@ -978,12 +994,12 @@ function readTexts(bytes, start, step, count, size = step) {
 function findTexts(bytes) {
     const found = [];
     for (let start = 0; start + NAMES_BLOCK * NAME_SIZE <= bytes.length; start += 4)
-        if (textAt(bytes, start, NAME_SIZE) !== null && isNamesBlock(bytes, start))
+        if (isText(bytes, start, NAME_SIZE) && isNamesBlock(bytes, start))
             found.push(start);
     if (found.length !== 1)
         throw new Error(`имена в exe не найдены однозначно (${found.length})`);
     const all = readTexts(bytes, found[0], NAME_SIZE, NAMES_BLOCK);
-    const maps = onlyRun(recordRuns(bytes, MAP_NAME_SIZE, at => textAt(bytes, at, MAP_NAME_SIZE) !== null),
+    const maps = onlyRun(recordRuns(bytes, MAP_NAME_SIZE, at => isText(bytes, at, MAP_NAME_SIZE)),
         MAP_NAMES, "названия карт");
     return {
         monsters: all.slice(0, MONSTER_NAMES),
@@ -995,7 +1011,7 @@ function findTexts(bytes) {
 
 // Украшения, зелья, прочее: 120 байт названия и 4 × s16, у всех обе картинки > 0
 function findItemNames(bytes, view) {
-    const runs = recordRuns(bytes, ITEM_INFO_SIZE, at => textAt(bytes, at, ITEM_NAME_SIZE) !== null &&
+    const runs = recordRuns(bytes, ITEM_INFO_SIZE, at => isText(bytes, at, ITEM_NAME_SIZE) &&
         view.getInt16(at + ITEM_NAME_SIZE + 4, true) > 0 && view.getInt16(at + ITEM_NAME_SIZE + 6, true) > 0);
     const names = {};
     for (const [table, count] of Object.entries(ITEM_TABLES))
@@ -1018,7 +1034,7 @@ export function itemName(tables, typeId, infoId) {
         table = names.alchemies;
     else if (typeId === 11)
         table = names.misc;
-    return table && table[infoId] !== undefined ? table[infoId] : null;
+    return table && infoId >= 0 && infoId < table.length ? table[infoId] : null;
 }
 
 // Имя персонажа, как его собирает игра (konung/k1/executable.character_name)

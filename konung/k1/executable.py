@@ -30,7 +30,7 @@ FLAME_KINDS = 7
 FLAME_FRAMES = 74
 
 # Тексты — записи фиксированной длины: текст, дальше нули. RUS — CP866, ENG —
-# латиница (в ней почти нет старших байт, CP866 читает и её)
+# латиница, кроме одного байта CP866 в одном имени; CP866 читает оба
 TEXT_ENCODING = "cp866"
 # Монстры, имена людей и прозвища — сплошной блок 30 + 171 + 21 записей по 32 байта;
 # имя 0 и прозвище 0 пустые, у монстров заполнены первые 20
@@ -101,9 +101,10 @@ class Executable:
     draw_order: list[tuple[int, ...]]
     # [вид огня] → (первый, последний) кадр FLAMES.RES, оба включены
     flame_animations: list[tuple[int, int]]
-    # Таблицы ITEM_TABLES по имени
+    # Таблицы ITEM_TABLES по имени и тексты; без них рисовать можно, поэтому
+    # если они не нашлись однозначно (другое издание) — пусто и None
     items: dict[str, list[ItemInfo]]
-    texts: Texts
+    texts: Texts | None
 
 
 def _is_equipment_table(data: bytes, start: int) -> bool:
@@ -195,12 +196,14 @@ def _is_names_block(data: bytes, start: int) -> bool:
     empty = bytes(NAME_SIZE)
     monsters_end = MONSTER_NAMES
     nicknames_start = MONSTER_NAMES + PEOPLE_NAMES
+    # Сначала обязательно пустые записи: так отсекается почти всё сразу
+    for index in (monsters_end, nicknames_start):
+        if data[start + index * NAME_SIZE : start + (index + 1) * NAME_SIZE] != empty:
+            return False
     seen_empty = False
     for index in range(NAMES_BLOCK):
         field = data[start + index * NAME_SIZE : start + (index + 1) * NAME_SIZE]
         if index in (monsters_end, nicknames_start):
-            if field != empty:
-                return False
             continue
         if index < monsters_end:
             if field == empty and index:
@@ -303,34 +306,48 @@ def parse(data: bytes) -> Executable:
         DRAW_ORDER_ROW.unpack_from(data, first + direction * DRAW_ORDER_ROW.size)
         for direction in range(DIRECTIONS)
     ]
-    return Executable(
-        equipment, draw_order, _find_flame_animations(data), _find_items(data), _parse_texts(data)
-    )
+    try:
+        items, texts = _find_items(data), _parse_texts(data)
+    except ValueError:
+        items, texts = {}, None
+    return Executable(equipment, draw_order, _find_flame_animations(data), items, texts)
 
 
 def item_name(tables: Executable, type_id: int, info_id: int) -> str | None:
-    """Название предмета по виду и номеру описания; None — у вида нет таблицы."""
+    """Название предмета по виду и номеру описания; None — у вида нет таблицы
+    или номера нет в таблице."""
     if type_id in EQUIPMENT_TYPES:
-        name = tables.equipment[info_id].name
+        table = tables.equipment
     elif type_id in ACCESSORY_TYPES:
-        name = tables.items["accessories"][info_id].name
+        table = tables.items.get("accessories")
     elif type_id == ALCHEMY_TYPE:
-        name = tables.items["alchemies"][info_id].name
+        table = tables.items.get("alchemies")
     elif type_id == MISC_TYPE:
-        name = tables.items["misc"][info_id].name
+        table = tables.items.get("misc")
     else:
         return None
-    return _decode(name)
+    if not table or not 0 <= info_id < len(table):
+        return None
+    return _decode(table[info_id].name)
 
 
-def character_name(texts: Texts, class_id: int, name_id: int, nick_id: int) -> str:
+def _entry(table: list[str], index: int) -> str:
+    return table[index] if 0 <= index < len(table) else ""
+
+
+def character_name(texts: Texts | None, class_id: int, name_id: int, nick_id: int) -> str:
     """Имя персонажа, как его собирает игра: у монстров — название вида,
-    у людей, женщин и детей — имя и прозвище через пробел (прозвище 0 — без него)."""
+    у людей, женщин и детей — имя и прозвище через пробел (прозвище 0 — без него).
+
+    Без текстов или с номером вне таблицы — пустая строка.
+    """
+    if texts is None:
+        return ""
     kind = class_id & 0x7F
     if class_id & MONSTER_CLASS and kind < FIRST_VILLAGER_CLASS:
-        return texts.monsters[kind - MONSTER_CLASS - 1]
-    name = texts.names[name_id]
-    return f"{name} {texts.nicknames[nick_id]}" if nick_id else name
+        return _entry(texts.monsters, kind - MONSTER_CLASS - 1)
+    name = _entry(texts.names, name_id)
+    return f"{name} {_entry(texts.nicknames, nick_id)}" if nick_id else name
 
 
 def find(game_dir: Path) -> Path:

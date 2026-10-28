@@ -127,7 +127,7 @@ def cmd_k1_game(args: argparse.Namespace) -> None:
         tables = executable.load(args.game)
     except FileNotFoundError:
         tables = None
-    if tables is not None:
+    if tables is not None and tables.texts is not None:
         for character, record in zip(state.characters, dump["characters"], strict=True):
             if character is not None:
                 record["name"] = executable.character_name(
