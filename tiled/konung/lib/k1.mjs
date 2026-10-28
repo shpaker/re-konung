@@ -295,6 +295,51 @@ export function objectCell(x, y) {
     return [Math.round((x + (row & 1) * (TILE_STEP_X / 4)) / (TILE_STEP_X / 2)), row];
 }
 
+// Байт проходимости: младшие 4 бита 0xF — непроходимо, флаг 0x40 — здесь
+// застревают стрелы (гипотеза). В картах дистрибутива других значений нет
+export const FOOT_FLAGS = {
+    blocked: { test: value => (value & 0x0f) === 0x0f, set: value => value | 0x0f, clear: value => value & 0xf0 },
+    arrows: { test: value => (value & 0x40) !== 0, set: value => value | 0x40, clear: value => value & ~0x40 },
+};
+
+// Четыре клетки мелкой сетки в ромбе тайла: верхняя, левая, правая, нижняя.
+// Каждая клетка лежит ровно в одном тайле; клетки за краем возвращаются тоже
+export function fineCells(column, row) {
+    const x = 2 * column + (row & 1), y = 2 * row;
+    return [[x, y], [x, y + 1], [x + 1, y + 1], [x, y + 2]];
+}
+
+// Середины этих клеток в картинке тайла 116 × 64; ромб клетки — 58 × 32
+export const FINE_CELL_CENTERS = [[58, 16], [29, 32], [87, 32], [58, 48]];
+
+function footIndex(x, y) {
+    return x < FINE_WIDTH && y < FINE_HEIGHT ? y * FINE_WIDTH + x : -1;
+}
+
+// Маска тайла: бит i — у клетки i из fineCells стоит флаг
+export function footMask(foot, column, row, flag) {
+    let mask = 0;
+    fineCells(column, row).forEach(([x, y], i) => {
+        const at = footIndex(x, y);
+        if (at >= 0 && flag.test(foot[at]))
+            mask |= 1 << i;
+    });
+    return mask;
+}
+
+// Меняются только клетки, где маска разошлась с байтом: остальные биты
+// байта и клетки, нетронутые в Tiled, остаются как в файле
+export function applyFootMask(foot, column, row, flag, mask) {
+    fineCells(column, row).forEach(([x, y], i) => {
+        const at = footIndex(x, y);
+        if (at < 0)
+            return;
+        const wanted = (mask >> i & 1) === 1;
+        if (wanted !== flag.test(foot[at]))
+            foot[at] = wanted ? flag.set(foot[at]) : flag.clear(foot[at]);
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Game.N — начальное состояние новой игры (docs/k1/formats/game-state.md),
 // эталон — konung/k1/game_state.py. Запись копирует исходный файл и меняет

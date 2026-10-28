@@ -31,6 +31,12 @@ TILE_STEP_X = 116
 TILE_STEP_Y = 32
 ODD_ROW_SHIFT = TILE_STEP_X // 2
 
+# Байт проходимости: младшие 4 бита 0xF — непроходимо, старшие — флаги.
+# В картах дистрибутива только 0x00, 0x0F, 0x40, 0x4F;
+# флаг 0x40 — здесь застревают стрелы (гипотеза)
+FOOT_BLOCKED = 0x0F
+FOOT_STOPS_ARROWS = 0x40
+
 
 @dataclass
 class Decoration:
@@ -78,6 +84,21 @@ class Lights:
 def tile_position(column: int, row: int) -> tuple[int, int]:
     """Левый верхний угол тайла клетки на картинке карты."""
     return column * TILE_STEP_X + (row & 1) * ODD_ROW_SHIFT, row * TILE_STEP_Y
+
+
+def is_blocked(foot: int) -> bool:
+    return foot & FOOT_BLOCKED == FOOT_BLOCKED
+
+
+def fine_cells(column: int, row: int) -> tuple[tuple[int, int], ...]:
+    """Четыре клетки мелкой сетки в ромбе тайла: верхняя, левая, правая, нижняя.
+
+    Ромб клетки мелкой сетки — 58 × 32, вчетверо меньше ромба тайла, и каждая
+    клетка лежит ровно в одном тайле. Клетки за краем мелкой сетки тоже
+    возвращаются — их отбрасывает вызывающий.
+    """
+    x, y = 2 * column + (row & 1), 2 * row
+    return (x, y), (x, y + 1), (x + 1, y + 1), (x, y + 2)
 
 
 def parse(data: bytes) -> KonungMap:

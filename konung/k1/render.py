@@ -180,6 +180,31 @@ MARKER_COLORS = {
 }
 MARKER_RADIUS = 8
 
+# Проходимость поверх карты — те же цвета, что у слоёв foot и foot-arrows в Tiled
+FOOT_BLOCKED_COLOR = (255, 40, 40, 110)
+FOOT_ARROWS_COLOR = (40, 120, 255, 110)
+
+
+def draw_foot(canvas: Image.Image, konung_map: map_file.KonungMap) -> None:
+    """Поверх карты — ромбы мелкой сетки: непроходимые красным, где застревают стрелы — синим.
+
+    Ромбы не перекрываются, поэтому каждый слой рисуется сразу с прозрачностью.
+    """
+    half_x, half_y = game_state.FINE_STEP_X // 2, game_state.FINE_STEP_Y
+    for color, marked in (
+        (FOOT_BLOCKED_COLOR, map_file.is_blocked),
+        (FOOT_ARROWS_COLOR, lambda value: bool(value & map_file.FOOT_STOPS_ARROWS)),
+    ):
+        overlay = Image.new("RGBA", canvas.size)
+        draw = ImageDraw.Draw(overlay)
+        for y, row in enumerate(konung_map.foot):
+            for x, value in enumerate(row):
+                if marked(value):
+                    cx, cy = game_state.character_position(x, y)
+                    top, bottom = (cx, cy - half_y), (cx, cy + half_y)
+                    draw.polygon((top, (cx + half_x, cy), bottom, (cx - half_x, cy)), fill=color)
+        canvas.alpha_composite(overlay)
+
 
 def draw_game(
     canvas: Image.Image, entities: game_state.MapEntities, characters: bool = True
