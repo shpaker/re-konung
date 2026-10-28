@@ -45,8 +45,9 @@ GAME_STATE_SIZE = (
     + VILLAGE_SLOTS * VILLAGE_SIZE
 )
 
-# Вид золота у предмета: у него концентрация — целое, у остальных — float
-GOLD_ITEM_TYPE = 12
+# Колчан со стрелами: концентрация у него — целое число стрел, у остальных — float
+# (Slavik game_item.cpp:185); название — запись 30–33 таблицы снаряжения
+QUIVER_ITEM_TYPE = 12
 
 # Виды отрядов (байт 0x1E); бродячих игра ставит в случайную клетку
 # прямоугольника появления, остальных — на место из записи персонажа
@@ -72,7 +73,7 @@ class Item:
     bonus_id: int
     special_id: int
     info_id: int
-    # 4 байта как есть: s32 у золота, f32 у остальных (value — для чтения)
+    # 4 байта как есть: s32 у колчана, f32 у остальных (value — для чтения)
     concentration: bytes
     weight: float
     poison: int
@@ -81,7 +82,7 @@ class Item:
 
     @property
     def concentration_value(self) -> int | float:
-        fmt = "<i" if self.type_id == GOLD_ITEM_TYPE else "<f"
+        fmt = "<i" if self.type_id == QUIVER_ITEM_TYPE else "<f"
         return struct.unpack(fmt, self.concentration)[0]
 
 

@@ -89,6 +89,28 @@ def test_executable_tables_are_found(k1_game):
     assert len(tables.flame_animations) == executable.FLAME_KINDS
 
 
+def test_every_character_and_item_has_a_name(k1_game):
+    # Тексты не сравниваются: в тестах их нет, проверяются только ссылки
+    tables = executable.load(k1_game)
+    texts = tables.texts
+    assert len(texts.names) == executable.PEOPLE_NAMES
+    assert len(texts.nicknames) == executable.NICKNAMES
+    assert len(texts.maps) == executable.MAP_NAMES
+    assert all(texts.maps)
+    assert {k: len(v) for k, v in tables.items.items()} == executable.ITEM_TABLES
+    for hero in game_state.numbers(k1_game):
+        state = game_state.load(k1_game, hero)
+        nameless = [
+            c.slot
+            for c in state.characters
+            if c and not executable.character_name(texts, c.class_id, c.name_id, c.nick_id)
+        ]
+        # В каждом Game.N один житель без имени и прозвища — так в данных
+        assert len(nameless) == 1, hero
+        for item in filter(None, state.items):
+            assert executable.item_name(tables, item.type_id, item.info_id), item.slot
+
+
 def test_flames_res_is_parsed_to_the_last_byte(k1_file, k1_game):
     data = k1_file("flames.res").read_bytes()
     flames = flames_res.parse(data)
