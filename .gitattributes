@@ -1,0 +1,5 @@
+# Переводы строк — LF везде, в том числе на Windows: на CRLF ломаются
+# frontmatter навыков и проверки prek
+* text=auto eol=lf
+
+*.png binary

@@ -1,0 +1,73 @@
+#:schema https://www.schemastore.org/prek.json
+# Проверки проекта для людей и агентов. Шимы ставит `just setup`, всё
+# вручную — `just check`. Команды хуков — рецепты justfile.
+
+minimum_prek_version = "0.5.7"
+default_install_hook_types = ["pre-commit", "commit-msg", "pre-push"]
+# Хуки файлов не трогают сообщение коммита: у них своя стадия commit-msg
+default_stages = ["pre-commit", "pre-push", "manual"]
+
+[[repos]]
+repo = "builtin"
+hooks = [
+    { id = "trailing-whitespace" },
+    { id = "end-of-file-fixer" },
+    { id = "mixed-line-ending", args = ["--fix=lf"] },
+    { id = "check-yaml" },
+    { id = "check-toml" },
+    { id = "check-json" },
+    { id = "check-merge-conflict" },
+    { id = "check-case-conflict" },
+    { id = "check-illegal-windows-names" },
+    # Оригиналы игры и их производные в git не попадают
+    { id = "check-added-large-files", args = ["--maxkb=512"] },
+    { id = "detect-private-key" },
+    # Коммиты — только от лица автора, без упоминаний ИИ (AGENTS.md, «Git»)
+    { id = "check-commit-trailers", stages = ["commit-msg", "pre-push"], args = [
+        "--deny=Co-authored-by=(?i)(claude|qwen|anthropic|openai|gemini|copilot|cursor)",
+    ] },
+    { id = "deny-pattern", name = "no AI mentions in commit message", stages = ["commit-msg"], args = [
+        "-i",
+        "generated with",
+        "co-authored-by",
+        "(^|[^./\\w])(claude|qwen|anthropic|chatgpt|copilot)",
+        "\\bИИ\\b",
+        "нейросет",
+    ] },
+]
+
+[[repos]]
+repo = "https://github.com/compilerla/conventional-pre-commit"
+rev = "v4.4.0"
+hooks = [
+    { id = "conventional-pre-commit", stages = ["commit-msg"], args = [
+        "feat", "fix", "refactor", "perf", "docs", "test", "build", "ci", "chore", "style", "revert",
+    ] },
+]
+
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "ruff-format"
+name = "ruff format"
+language = "system"
+entry = "uv run ruff format"
+types = ["python"]
+
+[[repos.hooks]]
+id = "ruff-check"
+name = "ruff check"
+language = "system"
+entry = "uv run ruff check --fix"
+types = ["python"]
+
+# Тесты — перед push и в `just check`
+[[repos.hooks]]
+id = "test"
+name = "just test"
+language = "system"
+entry = "just test"
+stages = ["pre-push", "manual"]
+pass_filenames = false
+always_run = true

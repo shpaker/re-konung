@@ -1,0 +1,28 @@
+# Оригинальные ресурсы игр и всё, что из них получено, в git не попадают
+/original/
+/out/
+*.rar
+*.iso
+*.mdf
+*.mds
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Сессия Tiled: открытые карты и вид редактора
+*.tiled-session
+
+# IDE и ОС
+.vscode/
+.idea/
+.claude/*
+!.claude/settings.json
+!.claude/skills/
+*.swp
+*~
+.DS_Store
+Thumbs.db
