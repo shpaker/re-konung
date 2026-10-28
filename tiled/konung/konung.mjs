@@ -75,7 +75,13 @@ function newTileset(name) {
     return tileset;
 }
 
-tiled.assetAboutToBeClosed.connect(asset => liveTilesets.delete(asset.fileName));
+// Закрытая карта откроется заново с новыми номерами персонажей — запрет снимается
+tiled.assetAboutToBeClosed.connect(asset => {
+    liveTilesets.delete(asset.fileName);
+    for (const key of [...restructured])
+        if (key.startsWith(`${asset.fileName}|`))
+            restructured.delete(key);
+});
 
 function loadGraph(directory) {
     const path = findFile(directory, "graph.res");
@@ -895,23 +901,28 @@ function applyGameEdits(state, group, number, hero) {
     const where = name => `${group.name}/${name}`;
 
     // Персонажи: место, направление и поля записи (класс, уровень, имя, прозвище,
-    // набор спрайтов, золото, очки, опыт, навыки, характеристики); добавлять
-    // и удалять нельзя — члены отряда лежат подряд, свободные слоты не разобраны
+    // набор спрайтов, золото, очки, опыт, навыки, характеристики). Первый объект
+    // с номером character — сам персонаж, следующие с тем же номером — его копии
+    // (новые персонажи); персонаж без объекта удаляется (k1.restructureCharacters)
     const fixed = new Map(entities.characters.map(c => [c.slot, c]));
     const seen = new Set();
+    state.additions = [];
     for (const object of sublayer(group, "characters").objects) {
         const tile = object.tile;
         const slot = tile ? tile.property("character") : undefined;
-        const character = fixed.get(slot);
-        if (!character || seen.has(slot))
-            throw new Error(`${where("characters")}: «${object.name || object.id}» — не персонаж этой карты; добавлять персонажей нельзя`);
+        let character = fixed.get(slot);
+        if (!character)
+            throw new Error(`${where("characters")}: «${object.name || object.id}» — не персонаж этой карты; новый персонаж — копия существующего`);
+        if (seen.has(slot)) {
+            character = Object.assign({}, character, { skills: character.skills.slice(), attributes: character.attributes.slice() });
+            state.additions.push({ template: slot, character });
+        }
         seen.add(slot);
         [character.x, character.y] = k1.characterCell(object.x - tile.property("offsetX"), object.y - tile.property("offsetY"));
         character.direction = integerProperty(object, "direction", character.direction, 0, DIRECTION_MAX);
         applyCharacterFields(character, object);
     }
-    if (seen.size !== fixed.size)
-        throw new Error(`${where("characters")}: персонажей удалять нельзя`);
+    state.removals = [...fixed.keys()].filter(slot => !seen.has(slot));
 
     // Отряды: прямоугольники появления и погони
     const groups = new Map(entities.groups.map(g => [g.slot, g]));
@@ -996,6 +1007,9 @@ function applyGameEdits(state, group, number, hero) {
 // Сумма Game.K после своего сохранения: «файл чужой» — только если он не совпадает
 // ни с открытым, ни с записанным этой картой. Ключ — путь карты и имя группы
 const savedChecksums = new Map();
+// Группы, у которых при сохранении менялся состав персонажей: номера в Game.K
+// сдвинулись, а у объектов карты остались прежние — до переоткрытия сохранять нельзя
+const restructured = new Set();
 
 // Game.K (TGame.K у обучения) для каждой группы game.K: берётся с диска рядом с
 // сохраняемой картой (иначе — рядом с открытой), получает правки этой карты и
@@ -1019,13 +1033,16 @@ function collectGameStates(map, fileName, files) {
         }
         const buffer = readBuffer(path);
         const key = `${fileName}|${group.name}`;
+        if (restructured.has(key))
+            throw new Error(`${group.name}: при прошлом сохранении менялся состав персонажей и их номера сдвинулись — откройте карту заново`);
         const current = checksum(buffer);
         if (current !== group.property("checksum") && current !== savedChecksums.get(key))
             throw new Error(`${FileInfo.fileName(path)} изменился после открытия карты (сохранена другая карта?) — откройте карту заново`);
         const state = k1.parseGameState(buffer);
         applyGameEdits(state, group, number, hero);
         const output = path.startsWith(`${target}/`) ? path : `${target}/${FileInfo.fileName(path)}`;
-        result.push({ key, path: output, buffer: k1.serializeGameState(state) });
+        const changed = state.additions.length > 0 || state.removals.length > 0;
+        result.push({ key, path: output, buffer: k1.serializeGameState(state), restructured: changed });
     }
     return result;
 }
@@ -1054,9 +1071,11 @@ function writeMap(map, fileName) {
         writeBuffer(fileName, buffer);
         if (lights)
             writeBuffer(lights.path, lights.buffer);
-        for (const { key, path, buffer: state } of states) {
+        for (const { key, path, buffer: state, restructured: changed } of states) {
             writeBuffer(path, state);
             savedChecksums.set(key, checksum(state));
+            if (changed)
+                restructured.add(key);
         }
     } catch (error) {
         return `Карта не сохранена: ${error.message}`;
