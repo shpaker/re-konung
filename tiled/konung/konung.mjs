@@ -76,11 +76,13 @@ function newTileset(name) {
 }
 
 // Закрытая карта откроется заново с новыми номерами персонажей — запрет снимается
+// со всех ключей, поставленных вместе с её ключом (путь документа и путь записи)
 tiled.assetAboutToBeClosed.connect(asset => {
     liveTilesets.delete(asset.fileName);
-    for (const key of [...restructured])
+    for (const key of [...restructured.keys()])
         if (key.startsWith(`${asset.fileName}|`))
-            restructured.delete(key);
+            for (const linked of restructured.get(key) || [])
+                restructured.delete(linked);
 });
 
 function loadGraph(directory) {
@@ -909,6 +911,10 @@ function applyGameEdits(state, group, number, hero) {
     state.additions = [];
     for (const object of sublayer(group, "characters").objects) {
         const tile = object.tile;
+        // Номер character — номер в Game.K этой группы: объект из слоя другого
+        // героя был бы копией чужого персонажа с тем же номером
+        if (tile && (!tile.tileset || tile.tileset.name !== `characters.${hero}`))
+            throw new Error(`${where("characters")}: «${object.name || object.id}» — персонаж из тайлсета ${tile.tileset ? tile.tileset.name : "?"}, а не characters.${hero}`);
         const slot = tile ? tile.property("character") : undefined;
         let character = fixed.get(slot);
         if (!character)
@@ -1009,7 +1015,7 @@ function applyGameEdits(state, group, number, hero) {
 const savedChecksums = new Map();
 // Группы, у которых при сохранении менялся состав персонажей: номера в Game.K
 // сдвинулись, а у объектов карты остались прежние — до переоткрытия сохранять нельзя
-const restructured = new Set();
+const restructured = new Map();
 
 // Game.K (TGame.K у обучения) для каждой группы game.K: берётся с диска рядом с
 // сохраняемой картой (иначе — рядом с открытой), получает правки этой карты и
@@ -1033,7 +1039,9 @@ function collectGameStates(map, fileName, files) {
         }
         const buffer = readBuffer(path);
         const key = `${fileName}|${group.name}`;
-        if (restructured.has(key))
+        // Запрет — на открытый документ: номера сдвинулись у его объектов, куда бы ни сохраняли
+        const lock = `${map.fileName || fileName}|${group.name}`;
+        if (restructured.has(lock))
             throw new Error(`${group.name}: при прошлом сохранении менялся состав персонажей и их номера сдвинулись — откройте карту заново`);
         const current = checksum(buffer);
         if (current !== group.property("checksum") && current !== savedChecksums.get(key))
@@ -1042,7 +1050,7 @@ function collectGameStates(map, fileName, files) {
         applyGameEdits(state, group, number, hero);
         const output = path.startsWith(`${target}/`) ? path : `${target}/${FileInfo.fileName(path)}`;
         const changed = state.additions.length > 0 || state.removals.length > 0;
-        result.push({ key, path: output, buffer: k1.serializeGameState(state), restructured: changed });
+        result.push({ key, lock, path: output, buffer: k1.serializeGameState(state), restructured: changed });
     }
     return result;
 }
@@ -1071,11 +1079,19 @@ function writeMap(map, fileName) {
         writeBuffer(fileName, buffer);
         if (lights)
             writeBuffer(lights.path, lights.buffer);
-        for (const { key, path, buffer: state, restructured: changed } of states) {
+        for (const { key, lock, path, buffer: state, restructured: changed } of states) {
             writeBuffer(path, state);
             savedChecksums.set(key, checksum(state));
-            if (changed)
-                restructured.add(key);
+            if (changed) {
+                // И под путём документа, и под путём записи: после «Сохранить как»
+                // документ называется по-новому, а закрытие снимает запрет по его имени
+                const linked = new Set([lock, key]);
+                for (const k of [lock, key])
+                    for (const other of restructured.get(k) || [])
+                        linked.add(other);
+                for (const k of linked)
+                    restructured.set(k, linked);
+            }
         }
     } catch (error) {
         return `Карта не сохранена: ${error.message}`;

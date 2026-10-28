@@ -21,10 +21,16 @@ from konung.k1.game_state import (
     Group,
 )
 
-# Одиночный NPC: отряд из одного персонажа без резерва
+# NPC на своих местах: обычно отряд из одного персонажа без резерва, но в каждом
+# Game.N есть такие отряды из 2, 14 и 21 персонажа
 NPC_GROUP = 0x53
 # Байт диалога 0xD0 у персонажа без своего диалога — так у большинства в файлах
 NO_DIALOG = 0xFF
+# Номер записи колчана со стрелами — восьмое из «разного» (0xCC, Slavik game.h:498,
+# game_character.cpp:694); во всех файлах 0, но это тоже ссылка на предмет
+ARROWS = 8
+# Резерв, размер и наибольший размер отряда — по байту
+GROUP_RESERVE_MAX = 0xFF
 
 
 class EditError(ValueError):
@@ -64,22 +70,27 @@ def _renumber(state: GameState, moved: Callable[[int], int | None]) -> None:
     state.characters = characters
 
 
+def _item_refs(character: Character) -> list[int]:
+    refs = [*character.equipment, *character.inventory, *character.accessories]
+    return [slot for slot in (*refs, character.misc[ARROWS]) if slot > 0]
+
+
 def _free_items(state: GameState, character: Character) -> None:
-    for slot in (*character.equipment, *character.inventory, *character.accessories):
-        if slot > 0:
-            state.items[slot] = None
+    for slot in _item_refs(character):
+        state.items[slot] = None
 
 
 def _clone_items(state: GameState, character: Character) -> None:
-    """У копии свои предметы: у каждой записи предмета ровно один владелец."""
+    """У копии свои предметы: у каждой записи предмета ровно один владелец.
+
+    Места вызывающий проверяет заранее (_check_room).
+    """
     free = (slot for slot in range(1, ITEM_SLOTS) if state.items[slot] is None)
 
     def clone(slot: int) -> int:
         if slot <= 0:
             return slot
-        new = next(free, None)
-        if new is None:
-            raise EditError(f"предметов больше {ITEM_SLOTS}: не хватает слотов")
+        new = next(free)
         item = copy.copy(state.items[slot])
         item.slot = new
         state.items[new] = item
@@ -88,6 +99,27 @@ def _clone_items(state: GameState, character: Character) -> None:
     character.equipment = tuple(map(clone, character.equipment))
     character.inventory = tuple(map(clone, character.inventory))
     character.accessories = tuple(map(clone, character.accessories))
+    misc = list(character.misc)
+    misc[ARROWS] = clone(misc[ARROWS])
+    character.misc = tuple(misc)
+
+
+def _reserves_end(state: GameState) -> int:
+    """Слот сразу за резервом последнего отряда."""
+    last = [g for g in state.groups if g is not None][-1]
+    return last.first_character + last.growth_limit
+
+
+def _check_room(state: GameState, template: Character, characters: int, groups: int) -> None:
+    """Хватит ли места на копию: characters слотов персонажей за резервами,
+    groups слотов отрядов и записи предметов — до любой правки состояния."""
+    if _reserves_end(state) + characters > CHARACTER_SLOTS:
+        raise EditError(f"персонажей больше {CHARACTER_SLOTS}: не хватает слотов")
+    if sum(1 for g in state.groups if g is not None) + groups > GROUP_SLOTS:
+        raise EditError(f"отрядов больше {GROUP_SLOTS}: не хватает слотов")
+    free = sum(1 for item in state.items[1:] if item is None)
+    if len(_item_refs(template)) > free:
+        raise EditError(f"предметов больше {ITEM_SLOTS}: не хватает слотов")
 
 
 def _remove_group(state: GameState, group: Group) -> None:
@@ -153,35 +185,36 @@ def _grow(state: GameState, group: Group) -> None:
 def add_character(state: GameState, template: Character, group: Group, x: int, y: int) -> int:
     """Новый персонаж — копия template на месте (x, y); возвращает его номер.
 
-    Копия одиночного NPC получает свой отряд — копию отряда template в первом
-    свободном слоте, за резервом последнего отряда. Остальные встают последним
-    членом отряда group; если резерв занят, он растёт на слот. Предметы копии
-    свои, врага и диалога у неё нет.
+    Копия одиночного NPC (отряд 0x53 с резервом 1) получает свой отряд — копию
+    отряда template в первом свободном слоте, за резервом последнего отряда.
+    Остальные встают последним членом отряда group; если резерв занят, он растёт
+    на слот. Предметы копии свои, врага и диалога у неё нет. Если места нет,
+    состояние не меняется.
     """
     if group.kind == PLAYER_GROUP:
         raise EditError("добавлять персонажей в отряд игрока нельзя")
+    own_group = group.kind == NPC_GROUP and group.growth_limit == 1
+    grows = not own_group and group.size == group.growth_limit
+    if grows and group.growth_limit == GROUP_RESERVE_MAX:
+        raise EditError(
+            f"в отряде {group.slot} уже {GROUP_RESERVE_MAX} персонажей — больше не помещается"
+        )
+    _check_room(state, template, 1 if own_group or grows else 0, 1 if own_group else 0)
     character = copy.deepcopy(template)
     character.x, character.y = x, y
     character.enemy = 0
     character.unknown_d0 = NO_DIALOG
     _clone_items(state, character)
-    if group.kind == NPC_GROUP:
-        used = [g for g in state.groups if g is not None]
-        if len(used) >= GROUP_SLOTS:
-            raise EditError(f"отрядов больше {GROUP_SLOTS}: не хватает слотов")
-        last = used[-1]
+    if own_group:
+        last = [g for g in state.groups if g is not None][-1]
         new_group = copy.deepcopy(group)
         new_group.slot = last.slot + 1
-        new_group.first_character = last.first_character + last.growth_limit
+        new_group.first_character = _reserves_end(state)
         new_group.size = 0
         new_group.max_size = new_group.growth_limit = 1
-        if new_group.first_character >= CHARACTER_SLOTS:
-            raise EditError(f"персонажей больше {CHARACTER_SLOTS}: не хватает слотов")
         state.groups[new_group.slot] = new_group
         group = new_group
-    elif group.size == group.growth_limit:
-        if state.characters[-1] is not None:
-            raise EditError(f"персонажей больше {CHARACTER_SLOTS}: не хватает слотов")
+    elif grows:
         _grow(state, group)
     slot = group.first_character + group.size
     character.slot, character.group = slot, group.slot

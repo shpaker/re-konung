@@ -761,8 +761,9 @@ function writeCharacterFields(bytes, at, character) {
 // первые size из них. Ссылки на персонажа: первый член отряда, враг (номер + 1),
 // рабочее место деревни; на отряд: отряд персонажа, староста, отряд-цель.
 
-const NPC_GROUP = 0x53, NO_DIALOG = 0xff;
-const ITEM_REFS = [[0x66, 6, true], [0x72, 32, false], [0xb2, 5, false]];
+const NPC_GROUP = 0x53, NO_DIALOG = 0xff, GROUP_RESERVE_MAX = 0xff;
+// Ссылки на предметы: снаряжение, инвентарь, украшения и колчан со стрелами (0xCC)
+const ITEM_REFS = [[0x66, 6, true], [0x72, 32, false], [0xb2, 5, false], [0xcc, 1, true]];
 
 // Запись как объект: при перекладке персонаж или отряд не теряется
 function record(data) {
@@ -963,33 +964,55 @@ function growGroup(model, group) {
     group.data[GROUP_LIMIT] += 1;
 }
 
+// Слот сразу за резервом последнего отряда
+function reservesEnd(model) {
+    const used = model.groups.filter(Boolean);
+    const last = used[used.length - 1];
+    return groupFirst(last) + last.data[GROUP_LIMIT];
+}
+
+// Хватит ли места на копию — до любой правки (как game_edit._check_room)
+function checkRoom(model, template, characters, groups) {
+    if (reservesEnd(model) + characters > CHARACTER_SLOTS)
+        throw new Error(`персонажей больше ${CHARACTER_SLOTS}: не хватает слотов`);
+    if (model.groups.filter(Boolean).length + groups > GROUP_SLOTS)
+        throw new Error(`отрядов больше ${GROUP_SLOTS}: не хватает слотов`);
+    let refs = 0, free = 0;
+    itemRefs(template, () => { ++refs; });
+    for (let slot = 1; slot < ITEM_SLOTS; ++slot)
+        if (isFilled(model.bytes, slot * ITEM_SIZE, ITEM_SIZE, 0xff))
+            ++free;
+    if (refs > free)
+        throw new Error(`предметов больше ${ITEM_SLOTS}: не хватает слотов`);
+}
+
 // Новый персонаж — копия template с полями копии (addition.character):
-// копия одиночного NPC получает свой отряд за последним, остальные встают
-// последним членом отряда template. Предметы свои, врага и диалога нет
+// копия одиночного NPC (отряд 0x53 с резервом 1) получает свой отряд за
+// последним, остальные встают последним членом отряда template. Предметы свои,
+// врага и диалога нет
 function addCharacter(model, template, group, addition) {
     if (group.data[GROUP_KIND] === PLAYER_GROUP)
         throw new Error("добавлять персонажей в отряд игрока нельзя");
+    const ownGroup = group.data[GROUP_KIND] === NPC_GROUP && group.data[GROUP_LIMIT] === 1;
+    const grows = !ownGroup && group.data[GROUP_SIZE_AT] === group.data[GROUP_LIMIT];
+    if (grows && group.data[GROUP_LIMIT] === GROUP_RESERVE_MAX)
+        throw new Error(`в отряде ${model.groups.indexOf(group)} уже ${GROUP_RESERVE_MAX} персонажей — больше не помещается`);
+    checkRoom(model, template, ownGroup || grows ? 1 : 0, ownGroup ? 1 : 0);
     const character = record(template.data.slice());
     writeCharacterFields(character.data, 0, addition.character);
     character.view.setInt16(6, 0, true);
     character.data[0xd0] = NO_DIALOG;
     cloneItems(model, character);
-    if (group.data[GROUP_KIND] === NPC_GROUP) {
+    if (ownGroup) {
         const used = model.groups.filter(Boolean);
-        if (used.length >= GROUP_SLOTS)
-            throw new Error(`отрядов больше ${GROUP_SLOTS}: не хватает слотов`);
         const last = used[used.length - 1];
         const own = record(group.data.slice());
-        setGroupFirst(own, groupFirst(last) + last.data[GROUP_LIMIT]);
+        setGroupFirst(own, reservesEnd(model));
         own.data[GROUP_SIZE_AT] = 0;
         own.data[GROUP_MAX] = own.data[GROUP_LIMIT] = 1;
-        if (groupFirst(own) >= CHARACTER_SLOTS)
-            throw new Error(`персонажей больше ${CHARACTER_SLOTS}: не хватает слотов`);
         model.groups[model.groups.indexOf(last) + 1] = own;
         group = own;
-    } else if (group.data[GROUP_SIZE_AT] === group.data[GROUP_LIMIT]) {
-        if (model.characters[CHARACTER_SLOTS - 1])
-            throw new Error(`персонажей больше ${CHARACTER_SLOTS}: не хватает слотов`);
+    } else if (grows) {
         growGroup(model, group);
     }
     const slot = groupFirst(group) + group.data[GROUP_SIZE_AT];

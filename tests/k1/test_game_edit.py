@@ -20,6 +20,8 @@ def _check_layout(state: game_state.GameState) -> None:
             assert character is not None and character.group == group.slot
             members.add(slot)
         first += group.growth_limit
+    # Резерв последнего отряда не выходит за блок: игра растит отряды в first + size
+    assert first <= game_state.CHARACTER_SLOTS
     assert {c.slot for c in state.characters if c} == members
     for village in filter(None, state.villages):
         elder = state.groups[village.elder_group]
@@ -42,6 +44,17 @@ def _check_layout(state: game_state.GameState) -> None:
 
 def _state(k1_game) -> game_state.GameState:
     return game_state.load(k1_game, 0)
+
+
+def test_every_state_file_has_the_dense_layout(k1_game):
+    paths = [
+        p
+        for p in k1_game.iterdir()
+        if p.name.lower().partition(".")[0] in ("game", "tgame") and p.suffix[1:].isdigit()
+    ]
+    assert len(paths) >= 3
+    for path in paths:
+        _check_layout(game_state.parse(path.read_bytes()))
 
 
 def _workers(state):
@@ -109,6 +122,32 @@ def test_copy_then_remove_original_keeps_layout(k1_game):
     original = state.characters[npc_group.first_character]
     game_edit.add_character(state, original, npc_group, 1, 2)
     game_edit.remove_character(state, original.slot)
+    _check_layout(state)
+
+
+def test_copy_of_npc_crowd_member_joins_its_group(k1_game):
+    # В каждом Game.N есть отряды 0x53 из нескольких персонажей
+    state = _state(k1_game)
+    crowd = next(g for g in state.groups if g and g.kind == game_edit.NPC_GROUP and g.size > 1)
+    groups_before = sum(1 for g in state.groups if g)
+    slot = game_edit.add_character(state, state.characters[crowd.first_character], crowd, 3, 4)
+    assert state.characters[slot].group == crowd.slot
+    assert sum(1 for g in state.groups if g) == groups_before
+    _check_layout(state)
+
+
+def test_no_room_keeps_state_unchanged(k1_game):
+    state = _state(k1_game)
+    village = next(g for g in state.groups if g and g.kind & game_state.VILLAGE_GROUP_BIT)
+    template = state.characters[village.first_character]
+    added = 0
+    with pytest.raises(game_edit.EditError):
+        while True:
+            before = game_state.serialize(state)
+            game_edit.add_character(state, template, village, 1, 1)
+            added += 1
+    assert added > 0
+    assert game_state.serialize(state) == before
     _check_layout(state)
 
 
