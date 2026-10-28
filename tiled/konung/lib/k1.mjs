@@ -475,9 +475,10 @@ export function serializeLights(tiles) {
 
 // ---------------------------------------------------------------------------
 // Game.N — начальное состояние новой игры (docs/k1/formats/game-state.md),
-// эталон — konung/k1/game_state.py. Запись копирует исходный файл и меняет
-// только то, что правится в Tiled: места, направления, прямоугольники,
-// клады и переходы. Клады и переходы пересобираются подряд с нулевого слота.
+// эталон — konung/k1/game_state.py и game_edit.py. Запись копирует исходный файл
+// и меняет только то, что правится в Tiled: места, направления, поля персонажей,
+// прямоугольники, клады и переходы, а также состав персонажей (state.additions,
+// state.removals). Клады и переходы пересобираются подряд с нулевого слота.
 
 const ITEM_SLOTS = 8192, ITEM_SIZE = 16;
 const GROUP_SLOTS = 200, GROUP_SIZE = 32;
@@ -693,24 +694,9 @@ export function serializeGameState(state) {
         [spawn.top, leash.top, spawn.bottom, leash.bottom, spawn.left, leash.left, spawn.right, leash.right]
             .forEach((value, i) => setS16(at + 8 + i * 2, value));
     }
-    for (const character of state.characters) {
-        if (!character)
-            continue;
-        const at = CHARACTERS_AT + character.slot * CHARACTER_SIZE;
-        bytes[at + 1] = character.direction;
-        bytes[at + 4] = character.classId;
-        setS16(at + 8, character.y);
-        setS16(at + 0x0a, character.x);
-        bytes[at + 0x33] = character.level;
-        view.setInt32(at + 0x34, character.gold, true);
-        view.setInt32(at + 0x38, character.freePoints, true);
-        view.setInt32(at + 0x3c, character.experience, true);
-        character.skills.forEach((value, i) => setS16(at + SKILLS_AT + i * 2, value));
-        character.attributes.forEach((value, i) => setS16(at + ATTRIBUTES_AT + i * 2, value));
-        bytes[at + 0xd4] = character.nameId;
-        bytes[at + 0xd5] = character.nickId;
-        bytes[at + 0xd6] = character.spriteSet;
-    }
+    for (const character of state.characters)
+        if (character)
+            writeCharacterFields(bytes, CHARACTERS_AT + character.slot * CHARACTER_SIZE, character);
     for (const village of state.villages) {
         for (const job of village.jobs) {
             const at = VILLAGES_AT + village.slot * VILLAGE_SIZE + JOBS_AT + job.job * JOB_SIZE;
@@ -746,7 +732,294 @@ export function serializeGameState(state) {
         const zone = exit.zone;
         [zone.top, zone.left, zone.bottom, zone.right].forEach((value, i) => setS16(at + 9 + i * 2, value));
     });
+    if ((state.additions && state.additions.length) || (state.removals && state.removals.length))
+        restructureCharacters(bytes, state.additions || [], state.removals || []);
     return bytes.buffer;
+}
+
+// Поля записи персонажа, которые правятся в Tiled (смещения — game-state.md)
+function writeCharacterFields(bytes, at, character) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    bytes[at + 1] = character.direction;
+    bytes[at + 4] = character.classId;
+    view.setInt16(at + 8, character.y, true);
+    view.setInt16(at + 0x0a, character.x, true);
+    bytes[at + 0x33] = character.level;
+    view.setInt32(at + 0x34, character.gold, true);
+    view.setInt32(at + 0x38, character.freePoints, true);
+    view.setInt32(at + 0x3c, character.experience, true);
+    character.skills.forEach((value, i) => view.setInt16(at + SKILLS_AT + i * 2, value, true));
+    character.attributes.forEach((value, i) => view.setInt16(at + ATTRIBUTES_AT + i * 2, value, true));
+    bytes[at + 0xd4] = character.nameId;
+    bytes[at + 0xd5] = character.nickId;
+    bytes[at + 0xd6] = character.spriteSet;
+}
+
+// ---------------------------------------------------------------------------
+// Добавление и удаление персонажей — как konung/k1/game_edit.py, тем же порядком
+// шагов. Отряды уложены плотно: за отрядом growth_limit слотов, его члены —
+// первые size из них. Ссылки на персонажа: первый член отряда, враг (номер + 1),
+// рабочее место деревни; на отряд: отряд персонажа, староста, отряд-цель.
+
+const NPC_GROUP = 0x53, NO_DIALOG = 0xff, GROUP_RESERVE_MAX = 0xff;
+// Ссылки на предметы: снаряжение, инвентарь, украшения и колчан со стрелами (0xCC)
+const ITEM_REFS = [[0x66, 6, true], [0x72, 32, false], [0xb2, 5, false], [0xcc, 1, true]];
+
+// Запись как объект: при перекладке персонаж или отряд не теряется
+function record(data) {
+    return { data, view: new DataView(data.buffer, data.byteOffset, data.byteLength) };
+}
+
+function readRecords(bytes, at, count, size) {
+    const records = [];
+    for (let i = 0; i < count; ++i) {
+        const start = at + i * size;
+        records.push(isFilled(bytes, start, size, 0) ? null : record(bytes.slice(start, start + size)));
+    }
+    return records;
+}
+
+const groupFirst = g => g.view.getInt16(0, true);
+const setGroupFirst = (g, value) => g.view.setInt16(0, value, true);
+const GROUP_MAX = 0x18, GROUP_LIMIT = 0x19, GROUP_TARGET = 0x1a, GROUP_SIZE_AT = 0x1c, GROUP_KIND = 0x1e;
+
+function restructureCharacters(bytes, additions, removals) {
+    const model = {
+        bytes,
+        view: new DataView(bytes.buffer),
+        characters: readRecords(bytes, CHARACTERS_AT, CHARACTER_SLOTS, CHARACTER_SIZE),
+        groups: readRecords(bytes, GROUPS_AT, GROUP_SLOTS, GROUP_SIZE),
+    };
+    // Шаблоны и удаляемые — по номерам до правок; дальше — по самим записям
+    const templates = additions.map(a => {
+        const character = model.characters[a.template];
+        if (!character)
+            throw new Error(`персонажа ${a.template} нет`);
+        return { addition: a, character, group: model.groups[character.data[5]] };
+    });
+    const removed = removals.map(slot => {
+        if (!model.characters[slot])
+            throw new Error(`персонажа ${slot} нет`);
+        return model.characters[slot];
+    });
+    for (const { addition, character, group } of templates)
+        addCharacter(model, character, group, addition);
+    for (const character of removed)
+        removeCharacter(model, character);
+    model.characters.forEach((c, slot) => {
+        const at = CHARACTERS_AT + slot * CHARACTER_SIZE;
+        if (c)
+            bytes.set(c.data, at);
+        else
+            bytes.fill(0, at, at + CHARACTER_SIZE);
+    });
+    model.groups.forEach((g, slot) => {
+        const at = GROUPS_AT + slot * GROUP_SIZE;
+        if (g)
+            bytes.set(g.data, at);
+        else
+            bytes.fill(0, at, at + GROUP_SIZE);
+    });
+}
+
+function villagesOf(model) {
+    const villages = [];
+    for (let v = 0; v < VILLAGE_SLOTS; ++v) {
+        const at = VILLAGES_AT + v * VILLAGE_SIZE;
+        if (!isFilled(model.bytes, at, VILLAGE_SIZE, 0))
+            villages.push(at);
+    }
+    return villages;
+}
+
+function jobCharacterAt(village, job) {
+    return village + JOBS_AT + job * JOB_SIZE + 2;
+}
+
+function slotOf(model, character) {
+    return model.characters.indexOf(character);
+}
+
+// Переложить персонажей: moved(номер) — новый номер, null — удалён.
+// Враг и рабочие места следуют за персонажем; first отрядов правит вызывающий
+function renumber(model, moved) {
+    const characters = new Array(CHARACTER_SLOTS).fill(null);
+    model.characters.forEach((character, slot) => {
+        if (!character)
+            return;
+        const target = moved(slot);
+        if (target === null)
+            return;
+        if (target < 0 || target >= CHARACTER_SLOTS)
+            throw new Error(`персонажей больше ${CHARACTER_SLOTS}: не хватает слотов`);
+        characters[target] = character;
+    });
+    for (const character of characters) {
+        if (!character)
+            continue;
+        const enemy = character.view.getInt16(6, true);
+        if (enemy > 0) {
+            const target = moved(enemy - 1);
+            character.view.setInt16(6, target === null ? 0 : target + 1, true);
+        }
+    }
+    for (const village of villagesOf(model))
+        for (let job = 0; job < JOB_ROLES.length; ++job) {
+            const at = jobCharacterAt(village, job);
+            const slot = model.view.getInt16(at, true);
+            if (slot) {
+                const target = moved(slot);
+                model.view.setInt16(at, target === null ? 0 : target, true);
+            }
+        }
+    model.characters = characters;
+}
+
+function itemRefs(character, visit) {
+    for (const [at, count, signed] of ITEM_REFS)
+        for (let i = 0; i < count; ++i) {
+            const offset = at + i * 2;
+            const slot = signed ? character.view.getInt16(offset, true) : character.view.getUint16(offset, true);
+            if (slot > 0) {
+                const replaced = visit(slot);
+                if (replaced !== undefined)
+                    character.view.setInt16(offset, replaced, true);
+            }
+        }
+}
+
+function freeItems(model, character) {
+    itemRefs(character, slot => { model.bytes.fill(0xff, slot * ITEM_SIZE, (slot + 1) * ITEM_SIZE); });
+}
+
+// У копии свои предметы: у каждой записи предмета ровно один владелец
+function cloneItems(model, character) {
+    let next = 1;
+    itemRefs(character, slot => {
+        while (next < ITEM_SLOTS && !isFilled(model.bytes, next * ITEM_SIZE, ITEM_SIZE, 0xff))
+            ++next;
+        if (next >= ITEM_SLOTS)
+            throw new Error(`предметов больше ${ITEM_SLOTS}: не хватает слотов`);
+        model.bytes.copyWithin(next * ITEM_SIZE, slot * ITEM_SIZE, (slot + 1) * ITEM_SIZE);
+        return next++;
+    });
+}
+
+function isWorker(model, slot) {
+    return villagesOf(model).some(village =>
+        JOB_ROLES.some((role, job) => model.view.getInt16(jobCharacterAt(village, job), true) === slot));
+}
+
+// Пустой отряд: следующие отряды на слот вниз, их персонажи — на его резерв
+function removeGroup(model, group) {
+    const removed = model.groups.indexOf(group);
+    const reserve = group.data[GROUP_LIMIT];
+    const end = groupFirst(group) + reserve;
+    renumber(model, slot => (slot >= end ? slot - reserve : slot));
+    const groups = new Array(GROUP_SLOTS).fill(null);
+    model.groups.forEach((other, slot) => {
+        if (!other || other === group)
+            return;
+        if (slot > removed)
+            setGroupFirst(other, groupFirst(other) - reserve);
+        if (other.data[GROUP_TARGET] > removed)
+            other.data[GROUP_TARGET] -= 1;
+        groups[slot > removed ? slot - 1 : slot] = other;
+    });
+    model.groups = groups;
+    for (const character of model.characters)
+        if (character && character.data[5] > removed)
+            character.data[5] -= 1;
+    for (const village of villagesOf(model))
+        if (model.bytes[village + 2] > removed)
+            model.bytes[village + 2] -= 1;
+}
+
+// Удалить персонажа: следующие члены его отряда на слот вниз; пустой отряд
+// одиночного NPC убирается целиком. Игрока и работников деревни — нельзя
+function removeCharacter(model, character) {
+    const slot = slotOf(model, character);
+    const group = model.groups[character.data[5]];
+    if (group.data[GROUP_KIND] === PLAYER_GROUP)
+        throw new Error("персонажей отряда игрока удалять нельзя");
+    if (isWorker(model, slot))
+        throw new Error(`персонаж ${slot} занимает рабочее место деревни — его удалять нельзя`);
+    freeItems(model, character);
+    const last = groupFirst(group) + group.data[GROUP_SIZE_AT] - 1;
+    renumber(model, s => (s === slot ? null : s > slot && s <= last ? s - 1 : s));
+    group.data[GROUP_SIZE_AT] -= 1;
+    if (group.data[GROUP_SIZE_AT] === 0 && group.data[GROUP_KIND] === NPC_GROUP)
+        removeGroup(model, group);
+}
+
+// Резерв отряда на слот больше: всё за ним на слот вверх
+function growGroup(model, group) {
+    const end = groupFirst(group) + group.data[GROUP_LIMIT];
+    renumber(model, slot => (slot >= end ? slot + 1 : slot));
+    const index = model.groups.indexOf(group);
+    model.groups.forEach((other, slot) => {
+        if (other && slot > index)
+            setGroupFirst(other, groupFirst(other) + 1);
+    });
+    group.data[GROUP_LIMIT] += 1;
+}
+
+// Слот сразу за резервом последнего отряда
+function reservesEnd(model) {
+    const used = model.groups.filter(Boolean);
+    const last = used[used.length - 1];
+    return groupFirst(last) + last.data[GROUP_LIMIT];
+}
+
+// Хватит ли места на копию — до любой правки (как game_edit._check_room)
+function checkRoom(model, template, characters, groups) {
+    if (reservesEnd(model) + characters > CHARACTER_SLOTS)
+        throw new Error(`персонажей больше ${CHARACTER_SLOTS}: не хватает слотов`);
+    if (model.groups.filter(Boolean).length + groups > GROUP_SLOTS)
+        throw new Error(`отрядов больше ${GROUP_SLOTS}: не хватает слотов`);
+    let refs = 0, free = 0;
+    itemRefs(template, () => { ++refs; });
+    for (let slot = 1; slot < ITEM_SLOTS; ++slot)
+        if (isFilled(model.bytes, slot * ITEM_SIZE, ITEM_SIZE, 0xff))
+            ++free;
+    if (refs > free)
+        throw new Error(`предметов больше ${ITEM_SLOTS}: не хватает слотов`);
+}
+
+// Новый персонаж — копия template с полями копии (addition.character):
+// копия одиночного NPC (отряд 0x53 с резервом 1) получает свой отряд за
+// последним, остальные встают последним членом отряда template. Предметы свои,
+// врага и диалога нет
+function addCharacter(model, template, group, addition) {
+    if (group.data[GROUP_KIND] === PLAYER_GROUP)
+        throw new Error("добавлять персонажей в отряд игрока нельзя");
+    const ownGroup = group.data[GROUP_KIND] === NPC_GROUP && group.data[GROUP_LIMIT] === 1;
+    const grows = !ownGroup && group.data[GROUP_SIZE_AT] === group.data[GROUP_LIMIT];
+    if (grows && group.data[GROUP_LIMIT] === GROUP_RESERVE_MAX)
+        throw new Error(`в отряде ${model.groups.indexOf(group)} уже ${GROUP_RESERVE_MAX} персонажей — больше не помещается`);
+    checkRoom(model, template, ownGroup || grows ? 1 : 0, ownGroup ? 1 : 0);
+    const character = record(template.data.slice());
+    writeCharacterFields(character.data, 0, addition.character);
+    character.view.setInt16(6, 0, true);
+    character.data[0xd0] = NO_DIALOG;
+    cloneItems(model, character);
+    if (ownGroup) {
+        const used = model.groups.filter(Boolean);
+        const last = used[used.length - 1];
+        const own = record(group.data.slice());
+        setGroupFirst(own, reservesEnd(model));
+        own.data[GROUP_SIZE_AT] = 0;
+        own.data[GROUP_MAX] = own.data[GROUP_LIMIT] = 1;
+        model.groups[model.groups.indexOf(last) + 1] = own;
+        group = own;
+    } else if (grows) {
+        growGroup(model, group);
+    }
+    const slot = groupFirst(group) + group.data[GROUP_SIZE_AT];
+    character.data[5] = model.groups.indexOf(group);
+    model.characters[slot] = character;
+    group.data[GROUP_SIZE_AT] += 1;
+    group.data[GROUP_MAX] = Math.max(group.data[GROUP_MAX], group.data[GROUP_SIZE_AT]);
 }
 
 // Клетка мелкой сетки: шаг 58 по x, 16 по строке; точка персонажа — середина клетки
