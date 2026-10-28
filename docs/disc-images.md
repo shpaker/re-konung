@@ -1,6 +1,6 @@
 # Образы дисков MDS/MDF
 
-Образы сняты Alcohol 120%: `*.mds` — описание дорожек, `*.mdf` — сырые секторы. 7-Zip такой MDF не открывает, поэтому дорожки достаёт `konung disc` (`konung/disc.py`).
+Образ своего диска снимается в Alcohol 120%: `*.mds` — описание дорожек, `*.mdf` — сырые секторы. 7-Zip такой MDF не открывает, поэтому дорожки достаёт `konung disc` (`konung/disc.py`).
 
 ```bash
 uv run konung disc original/k1/rus/image/konung.mds original/k1/rus/disc
@@ -10,7 +10,7 @@ uv run konung disc original/k1/rus/image/konung.mds original/k1/rus/disc
 
 ## MDS
 
-Всё little-endian. Сведения взяты из открытых описаний формата (libmirage) и проверены на наших двух образах.
+Всё little-endian. Сведения взяты из открытых описаний формата (libmirage) и проверены на двух изданиях (RUS и ENG).
 
 | Смещение | Тип | Смысл |
 |---|---|---|
@@ -32,7 +32,7 @@ uv run konung disc original/k1/rus/image/konung.mds original/k1/rus/disc
 
 Данные в сыром секторе: Mode 1 — с 16-го байта, Mode 2 Form 1 — с 24-го, по 2048 байт.
 
-## Наши образы
+## Проверенные издания
 
 | | RUS | ENG |
 |---|---|---|

@@ -14,7 +14,7 @@
 
 ## Фан-сайты и форумы
 
-- [gospitaliers.narod.ru](https://gospitaliers.narod.ru/knyaz_opisanie.htm) — описание серии, [файлы и утилиты](https://gospitaliers.narod.ru/knyaz_files2.htm): патчи 01/02, HD-патчи, редакторы сохранений; ссылки на «Народный форум Князя».
+- [gospitaliers.narod.ru](https://gospitaliers.narod.ru/knyaz_opisanie.htm) — описание серии; там же собраны патчи 01/02, HD-патчи и редакторы сохранений, есть ссылки на «Народный форум Князя».
 - [konung.topbb.ru](https://konung.topbb.ru/) — форум фанатов. Например, [читы и редакторы](https://konung.topbb.ru/viewtopic.php?id=135): смещения в сохранениях `konung.sa1`…`sa9`, Cheat Engine. О ресурсах ничего нет.
 - [old-games.ru, тема игры](https://www.old-games.ru/forum/threads/knjaz-legendy-lesnoj-strany-aka-konung-legends-of-the-north.27570/page-4) — HD-патч Morendil, совместимый с GOG; ролики `Konung\Video\*.flm`.
 - [ag.ru, HEX-коды](https://ag.ru/games/konung-legends-of-the-north/cheats/10659) — смещения в сохранениях.
