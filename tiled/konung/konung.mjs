@@ -592,21 +592,23 @@ function buildGameGroup(map, state, hero, number, graph, dynamicSprites, tables)
             addTileObject(shadows, shadowTile, item.x + shadowOffset[0], item.y + shadowOffset[1], {});
         const layer = item.preview ? mobs : characters;
         const c = item.character;
-        const properties = {
-            character: c.slot,
-            group: c.group,
-            classId: c.classId,
-            level: c.level,
-            direction: c.direction,
-            nameId: c.nameId,
-            nickId: c.nickId,
-            spriteSet: c.spriteSet,
-            gold: c.gold,
-            freePoints: c.freePoints,
-            experience: c.experience,
-        };
-        k1.SKILL_NAMES.forEach((name, i) => { properties[name] = c.skills[i]; });
-        k1.ATTRIBUTE_NAMES.forEach((name, i) => { properties[name] = c.attributes[i]; });
+        const properties = { character: c.slot, group: c.group };
+        // Поля записи — только у тех, кого читает сохранение; mobs — предпросмотр
+        if (!item.preview) {
+            Object.assign(properties, {
+                classId: c.classId,
+                level: c.level,
+                direction: c.direction,
+                nameId: c.nameId,
+                nickId: c.nickId,
+                spriteSet: c.spriteSet,
+                gold: c.gold,
+                freePoints: c.freePoints,
+                experience: c.experience,
+            });
+            k1.SKILL_NAMES.forEach((name, i) => { properties[name] = c.skills[i]; });
+            k1.ATTRIBUTE_NAMES.forEach((name, i) => { properties[name] = c.attributes[i]; });
+        }
         addTileObject(layer, tile, item.x + offset[0], item.y + offset[1], properties)
             .name = k1.characterName(tables.texts, c.classId, c.nameId, c.nickId) || `c${c.slot}`;
     }
@@ -854,14 +856,30 @@ const U8_MAX = 0xff, S16_MIN = -0x8000, S16_MAX = 0x7fff, S32_MIN = -0x80000000,
 // Номера имени и прозвища — записи таблиц exe (docs/k1/formats/executable.md)
 const NAME_ID_MAX = 170, NICK_ID_MAX = 20;
 
+// Классы, которые разбирает код: без бита 0x80 («мёртв»); у людей род занятий
+// (младшие 3 бита) 0–5 и нет бита 0x40; с битом 0x40 — монстры 0x41–0x50 и жители
+// 0x51–0x57. Других в данных нет, а вне них Slavik выходит за свои таблицы (гипотеза)
+const LAST_DYNAMIC_CLASS = 0x57, LAST_PROFESSION = 5;
+
+function isKnownClass(classId) {
+    if (classId & 0x80)
+        return false;
+    if (classId & 0x40)
+        return classId >= 0x41 && classId <= LAST_DYNAMIC_CLASS;
+    return (classId & 7) <= LAST_PROFESSION;
+}
+
 // Поля записи персонажа из свойств объекта. Набор спрайтов проверяется по классу:
-// у людей — модель 0–2, с битом 0x40 — динамический объект 0–29 (иначе нечего рисовать)
+// у людей — модель 0–2, с битом 0x40 — динамический объект 0–29
 function applyCharacterFields(character, object) {
     character.classId = integerProperty(object, "classId", character.classId, 0, U8_MAX);
+    if (!isKnownClass(character.classId))
+        throw new Error(`«${object.name || object.id}»: classId = ${character.classId} — такого класса в игре нет ` +
+            `(люди 0x00–0x3F с родом занятий 0–5, монстры и жители 0x41–0x57)`);
     character.level = integerProperty(object, "level", character.level, 0, U8_MAX);
     character.nameId = integerProperty(object, "nameId", character.nameId, 0, NAME_ID_MAX);
     character.nickId = integerProperty(object, "nickId", character.nickId, 0, NICK_ID_MAX);
-    const sets = character.classId & 0x40 ? k1.DYNAMIC_SPRITE_SETS : k1.HUMAN_SPRITE_SETS;
+    const sets = character.classId & 0x40 ? k1.DYNAMIC_OBJECTS : k1.CHARACTER_MODELS;
     character.spriteSet = integerProperty(object, "spriteSet", character.spriteSet, 0, sets - 1);
     for (const name of ["gold", "freePoints", "experience"])
         character[name] = integerProperty(object, name, character[name], S32_MIN, S32_MAX);

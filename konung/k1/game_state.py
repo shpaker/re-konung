@@ -34,8 +34,8 @@ JOBS = 5
 JOB_ROLES = ("elder", "healer", "merchant", "smith", "voevoda")
 
 # Навыки (Character.skills) и характеристики (Character.attributes) по порядку
-# в записи персонажа — по Slavik (docs/k1/formats/game-state.md); те же имена
-# у свойств персонажа в Tiled
+# в записи персонажа — по Slavik (docs/k1/formats/game-state.md); в Tiled
+# свойства персонажа называются так же, в camelCase (agility_base → agilityBase)
 SKILL_NAMES = (
     "fencing",
     "trading",

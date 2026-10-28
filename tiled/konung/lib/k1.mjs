@@ -26,7 +26,7 @@ const PALETTE_BANK_COLORS = 256 * 256;
 const CURSOR_COUNT = 11;
 export const TILE_SLOTS = 512;
 const OBJECT_SLOTS = 512;
-const DYNAMIC_OBJECTS = 30;
+export const DYNAMIC_OBJECTS = 30;
 export const SIMPLE_OBJECT_SLOTS = OBJECT_SLOTS - DYNAMIC_OBJECTS;
 const OBJECT_FRAMES = 8;
 const FLAME_SLOTS = 20;
@@ -504,8 +504,6 @@ export const SKILL_NAMES = [
 export const ATTRIBUTE_NAMES = [
     "agility", "agilityBase", "charisma", "charismaBase", "health", "strength", "strengthBase", "stamina", "staminaBase",
 ];
-// Наборы спрайтов: у людей — модели GRAPH.RES, у динамических — объекты Objects.res
-export const HUMAN_SPRITE_SETS = 3, DYNAMIC_SPRITE_SETS = 30;
 // В кладе предметы — 22 × s16 с 0x14
 const LOOT_ITEMS_AT = 0x14, LOOT_ITEMS_SIZE = 44;
 export const NEW_LOOT_ITEMS = "00".repeat(LOOT_ITEMS_SIZE);
@@ -789,7 +787,7 @@ export function rectCells(x, y, width, height) {
 // (docs/k1/formats/graph-res.md, objects-res.md). Картинки — по запросу.
 
 const DIRECTIONS = 8;
-const CHARACTER_MODELS = 3;
+export const CHARACTER_MODELS = 3;
 const EQUIPMENT_SETS = 24;
 const CHARACTER_ANIMATIONS = 10, CHARACTER_FRAMES = 12, CHARACTER_IMAGES = 768;
 const DYNAMIC_ANIMATIONS = 6, DYNAMIC_FRAMES = 18, DYNAMIC_IMAGES = 512;
