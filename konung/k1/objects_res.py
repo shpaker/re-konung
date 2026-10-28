@@ -1,7 +1,7 @@
 """OBJECTS.RES — объекты карты: 30 динамических и 482 простых (docs/k1/formats/objects-res.md).
 
 Простой объект — до 8 кадров (картинка + тень) со смещениями и точками огней.
-Динамические объекты пока не разобраны: в каталоге они есть, данные пропускаются.
+Динамический объект — монстр: анимации по 8 направлениям, как спрайт персонажа.
 """
 
 from dataclasses import dataclass
@@ -9,11 +9,16 @@ from pathlib import Path
 
 from konung import rle
 from konung.binary import Reader
+from konung.k1.graph_res import Sprites, read_sprites
 
 SLOTS = 512
 DYNAMIC_COUNT = 30
 FRAMES = 8
 FLAME_SLOTS = 20
+# Динамический объект: 6 анимаций × 8 направлений × до 18 кадров, 512 картинок
+DYNAMIC_ANIMATIONS = 6
+DYNAMIC_FRAMES = 18
+DYNAMIC_IMAGES = 512
 
 
 @dataclass
@@ -47,8 +52,8 @@ class SimpleObject:
 @dataclass
 class ObjectsRes:
     simple: dict[int, SimpleObject]
-    # Смещения динамических объектов в файле — до их разбора
-    dynamic_offsets: dict[int, int]
+    # Монстры: номер — Character.sprite_set у персонажей с битом 0x40 в классе
+    dynamic: dict[int, Sprites]
 
 
 def _simple(reader: Reader, object_id: int) -> SimpleObject:
@@ -93,18 +98,26 @@ def parse(data: bytes) -> ObjectsRes:
     entries = [(reader.s32(), reader.s32()) for _ in range(SLOTS)]
     data_start = reader.pos
 
-    dynamic_offsets = {}
+    dynamic = {}
     simple = {}
     for slot, (offset, _size) in enumerate(entries):
         if offset < 0:
             continue
         if slot < DYNAMIC_COUNT:
-            dynamic_offsets[slot] = data_start + offset
+            # Пропускаем метку и размер блока
+            dynamic[slot] = read_sprites(
+                data,
+                data_start + offset + 8,
+                DYNAMIC_ANIMATIONS,
+                DYNAMIC_FRAMES,
+                DYNAMIC_IMAGES,
+                weapons=False,
+            )
             continue
         reader.seek(data_start + offset)
         object_id = slot - DYNAMIC_COUNT
         simple[object_id] = _simple(reader, object_id)
-    return ObjectsRes(simple, dynamic_offsets)
+    return ObjectsRes(simple, dynamic)
 
 
 def load(path: Path) -> ObjectsRes:
