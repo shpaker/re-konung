@@ -14,13 +14,13 @@
 
 - [k1/editions.md](k1/editions.md) — RUS и ENG: состав, отличия, как распаковать.
 - [k1/inventory.md](k1/inventory.md) — все файлы игры и что о них известно.
-- [k1/tiled.md](k1/tiled.md) — как карта раскладывается в Tiled.
+- [k1/tiled.md](k1/tiled.md) — как карта раскладывается в Tiled, как её править и сохранять.
 
 ### Статус форматов
 
 | Файл | Что внутри | Статус | Код | Описание |
 |---|---|---|---|---|
-| `Konung.N` | карта локации N | разобран, кроме карты проходимости и части полей объектов | `konung/k1/map_file.py` | [map.md](k1/formats/map.md) |
+| `Konung.N` | карта локации N | разобран, кроме карты проходимости и части полей объектов; запись побайтно точная | `konung/k1/map_file.py` | [map.md](k1/formats/map.md) |
 | `LIGHTS.N` | освещение карты | разобрана структура, смысл значений — нет | `konung/k1/map_file.py` | [map.md](k1/formats/map.md) |
 | `GRAPH.RES` | палитры, курсоры, тайлы, спрайты персонажей | разобран до последнего байта; спрайты персонажей — только границы блоков | `konung/k1/graph_res.py` | [graph-res.md](k1/formats/graph-res.md) |
 | `OBJECTS.RES` | объекты карты | простые объекты разобраны, динамические (30) — нет | `konung/k1/objects_res.py` | [objects-res.md](k1/formats/objects-res.md) |
