@@ -14,6 +14,7 @@
 
 - [k1/editions.md](k1/editions.md) — RUS и ENG: состав, отличия, как распаковать.
 - [k1/inventory.md](k1/inventory.md) — все файлы игры и что о них известно.
+- [k1/tiled.md](k1/tiled.md) — как карта раскладывается в Tiled.
 
 ### Статус форматов
 

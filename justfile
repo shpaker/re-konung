@@ -23,6 +23,24 @@ fmt:
     uv run ruff format
     uv run ruff check --fix
 
+# Расширение Tiled «konung» — в папку расширений Tiled; запущенный Tiled подхватит его сам
+[windows]
+tiled-install:
+    $dest = Join-Path $env:LOCALAPPDATA 'Tiled/extensions/konung'; if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }; Copy-Item -Recurse tiled/konung $dest; Write-Output $dest
+
+[unix]
+tiled-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "$(uname)" in
+        Darwin) dest="$HOME/Library/Preferences/Tiled/extensions/konung" ;;
+        *) dest="${XDG_CONFIG_HOME:-$HOME/.config}/tiled/extensions/konung" ;;
+    esac
+    rm -rf "$dest"
+    mkdir -p "$(dirname "$dest")"
+    cp -r tiled/konung "$dest"
+    echo "$dest"
+
 # Образ диска «Князя» (RAR с MDS/MDF из original/k1/rar) → original/k1/<издание>/{image,disc,files,game}
 [windows]
 k1-unpack edition archive:
@@ -49,3 +67,22 @@ next-version:
 # Текст релиза последнего тега (запускается на коммите с тегом)
 changelog:
     uvx git-cliff --latest --strip all
+
+# Расширение Tiled для релиза: out/konung-tiled-<тег>.zip с папкой konung/ и файлом VERSION
+[unix]
+tiled-package tag:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    stage="$(mktemp -d)"
+    cp -r tiled/konung "$stage/konung"
+    echo "{{tag}}" > "$stage/konung/VERSION"
+    mkdir -p out
+    rm -f "out/konung-tiled-{{tag}}.zip"
+    (cd "$stage" && zip -qr - konung) > "out/konung-tiled-{{tag}}.zip"
+    rm -rf "$stage"
+    echo "out/konung-tiled-{{tag}}.zip"
+
+# Расширение Tiled для релиза (см. вариант для unix выше)
+[windows]
+tiled-package tag:
+    $stage = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid()); New-Item -ItemType Directory $stage | Out-Null; Copy-Item -Recurse tiled/konung (Join-Path $stage 'konung'); Set-Content -Encoding ascii (Join-Path $stage 'konung/VERSION') '{{tag}}'; New-Item -ItemType Directory -Force out | Out-Null; Compress-Archive -Force -Path (Join-Path $stage 'konung') -DestinationPath 'out/konung-tiled-{{tag}}.zip'; Remove-Item -Recurse -Force $stage; Write-Output 'out/konung-tiled-{{tag}}.zip'
