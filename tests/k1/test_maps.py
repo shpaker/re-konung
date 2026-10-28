@@ -32,6 +32,35 @@ def test_serialize_keeps_edits():
     assert [(o.object_id, o.x, o.y) for o in edited.objects] == [(117, 27, 33)]
 
 
+def test_foot_has_only_four_values(k1_game):
+    # Правило Slavik «младшие 4 бита = 0xF» и его версия с ошибкой приоритета
+    # («младший бит», docs/k1/formats/map.md) на этих значениях совпадают
+    for number in map_file.map_numbers(k1_game):
+        values = {v for row in map_file.load(k1_game, number).foot for v in row}
+        assert values <= {0x00, 0x0F, 0x40, 0x4F}, number
+        assert all(map_file.is_blocked(v) == bool(v & 1) for v in values)
+
+
+def test_fine_cells_split_tiles_without_overlap():
+    owners = {}
+    for row in range(map_file.HEIGHT):
+        for column in range(map_file.WIDTH):
+            for x, y in map_file.fine_cells(column, row):
+                if 0 <= x < map_file.FINE_WIDTH and 0 <= y < map_file.FINE_HEIGHT:
+                    assert (x, y) not in owners
+                    owners[(x, y)] = (column, row)
+    orphans = {
+        (x, y)
+        for y in range(map_file.FINE_HEIGHT)
+        for x in range(map_file.FINE_WIDTH)
+        if (x, y) not in owners
+    }
+    # Без тайла — только нечётные клетки верхней строки и левый край нечётных строк тайлов
+    assert orphans == {(x, 0) for x in range(1, map_file.FINE_WIDTH, 2)} | {
+        (0, y) for y in range(3, map_file.FINE_HEIGHT, 4)
+    }
+
+
 def test_lights_files_match_their_size(k1_game):
     for path in k1_game.iterdir():
         stem, _, suffix = path.name.partition(".")

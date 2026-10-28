@@ -55,11 +55,14 @@ def cmd_k1_map(args: argparse.Namespace) -> None:
                 sprite = characters.compose(character, px, py, state, graph, objects, tables)
                 if sprite is not None:
                     sprites.append(sprite)
-        image = render.render(map_file.load(args.game, number), graph, objects, sprites, flames)
+        konung_map = map_file.load(args.game, number)
+        image = render.render(konung_map, graph, objects, sprites, flames)
+        if args.foot:
+            render.draw_foot(image, konung_map)
         if entities is not None:
             # Персонажей видно спрайтами; маркеры — только когда спрайтов нет
             render.draw_game(image, entities, characters=objects is None)
-        suffix = "" if state is None else f"-game{args.state}"
+        suffix = ("" if state is None else f"-game{args.state}") + ("-foot" if args.foot else "")
         path = args.out / f"konung{number:02d}{suffix}.png"
         image.save(path)
         print(path)
@@ -157,6 +160,9 @@ def main() -> None:
     p.add_argument("--no-objects", action="store_true", help="только земля и декорации")
     p.add_argument(
         "--game", dest="state", type=int, help="номер Game.N: маркеры персонажей и переходов"
+    )
+    p.add_argument(
+        "--foot", action="store_true", help="проходимость поверх карты: красное — непроходимо"
     )
     p.set_defaults(func=cmd_k1_map)
 

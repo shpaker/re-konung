@@ -12,6 +12,14 @@ const MAX_MAP_NUMBER = 50;
 // Тени — чёрная маска под слоем объектов; Python-рендер берёт ту же прозрачность
 const SHADOW_OPACITY = 0.4;
 
+// Слои проходимости: тайл — 4 клетки мелкой сетки в ромбе тайла, номер тайла —
+// маска отмеченных клеток. Цвета — как в `konung k1 map --foot`
+const FOOT_LAYERS = [
+    { name: "foot", flag: k1.FOOT_FLAGS.blocked, color: 0x6eff2828 },
+    { name: "foot-arrows", flag: k1.FOOT_FLAGS.arrows, color: 0x6e2878ff },
+];
+const FOOT_MASKS = 16;
+
 // Значения полей для декораций и объектов, поставленных в Tiled: самые частые
 // в картах дистрибутива (docs/k1/formats/map.md)
 const NEW_DECORATION_UNKNOWN = "0016000000000000";
@@ -177,6 +185,22 @@ function buildTileset(name, count, imageOf, propertiesOf) {
     return tileset;
 }
 
+// Картинка тайла проходимости: ромбы 58 × 32 отмеченных клеток
+function footImage(mask, color) {
+    const width = k1.TILE_STEP_X, height = k1.GROUND_TILE_HEIGHT;
+    const halfX = width / 4, halfY = k1.TILE_STEP_Y / 2;
+    const pixels = new Uint32Array(width * height);
+    k1.FINE_CELL_CENTERS.forEach(([cx, cy], i) => {
+        if (!(mask >> i & 1))
+            return;
+        for (let y = cy - halfY; y < cy + halfY; ++y)
+            for (let x = cx - halfX; x < cx + halfX; ++x)
+                if (Math.abs(x + 0.5 - cx) / halfX + Math.abs(y + 0.5 - cy) / halfY <= 1)
+                    pixels[y * width + x] = color;
+    });
+    return { width, height, pixels };
+}
+
 function isGroundSized(decoded) {
     return decoded.width === k1.GROUND_TILE_WIDTH && decoded.height === k1.GROUND_TILE_HEIGHT;
 }
@@ -218,8 +242,8 @@ function buildMap(fileName) {
     map.setSize(k1.MAP_WIDTH, k1.MAP_HEIGHT);
     map.setTileSize(k1.TILE_STEP_X, k1.GROUND_TILE_HEIGHT);
     map.backgroundColor = "#000000";
-    // Проходимость Tiled не показывает, но при сохранении она нужна целиком.
-    // mapNumber — номер карты, чьи объекты Game.N показаны и пишутся при сохранении
+    // foot — исходные байты проходимости: правки слоёв проходимости ложатся
+    // поверх них, а клетки у края карты без тайла пишутся отсюда. mapNumber — номер карты, чьи объекты Game.N показаны и пишутся при сохранении
     const number = Number(FileInfo.suffix(fileName));
     setProperties(map, { source: FileInfo.fileName(fileName), mapNumber: number, foot: k1.toHex(data.foot) });
 
@@ -291,7 +315,28 @@ function buildMap(fileName) {
     addObjects(map, objects, shadowsTileset, objectsTileset, data.objects);
     addFlames(map, directory, objects, data.objects);
     addGameStates(map, directory, number, graph);
+    addFoot(map, data.foot);
     return map;
+}
+
+// Проходимость — над всеми слоями, скрыта: включить, когда нужна
+function addFoot(map, foot) {
+    for (const { name, flag, color } of FOOT_LAYERS) {
+        const tileset = buildTileset(name, FOOT_MASKS, mask => mask ? footImage(mask, color) : null);
+        map.addTileset(tileset);
+        const layer = new TileLayer(name);
+        layer.resize(Qt.size(k1.MAP_WIDTH, k1.MAP_HEIGHT));
+        const edit = layer.edit();
+        for (let y = 0; y < k1.MAP_HEIGHT; ++y)
+            for (let x = 0; x < k1.MAP_WIDTH; ++x) {
+                const mask = k1.footMask(foot, x, y, flag);
+                if (mask)
+                    edit.setTile(x, y, tileset.tile(mask));
+            }
+        edit.apply();
+        layer.visible = false;
+        map.addLayer(layer);
+    }
 }
 
 // Game.N рядом с картой: начальные состояния за героев 0–2 (TGame.N обучения — нет)
@@ -585,7 +630,19 @@ function graphTileId(tile, where) {
 function collectMap(map) {
     if (map.width !== k1.MAP_WIDTH || map.height !== k1.MAP_HEIGHT)
         throw new Error(`карта должна быть ${k1.MAP_WIDTH}×${k1.MAP_HEIGHT}, а она ${map.width}×${map.height}`);
+    // Исходные байты проходимости; слои foot и foot-arrows меняют в них только
+    // то, что правили. Клетки у края без тайла берутся отсюда как есть
     const foot = k1.fromHex(map.property("foot"), k1.FOOT_SIZE);
+    for (const { name, flag } of FOOT_LAYERS) {
+        const layer = layerByName(map, name, true);
+        for (let y = 0; y < k1.MAP_HEIGHT; ++y)
+            for (let x = 0; x < k1.MAP_WIDTH; ++x) {
+                const tile = layer.tileAt(x, y);
+                if (tile && (!tile.tileset || tile.tileset.name !== name))
+                    throw new Error(`${name} (${x}, ${y}): тайл не из тайлсета ${name}`);
+                k1.applyFootMask(foot, x, y, flag, tile ? tile.id : 0);
+            }
+    }
 
     const layers = {};
     for (const name of ["ground", "overlay"]) {
