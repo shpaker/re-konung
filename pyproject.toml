@@ -1,6 +1,7 @@
 [project]
 name = "konung"
-version = "0.1.0"
+# Версия — из git-тега vX.Y.Z (hatch-vcs); между тегами — X.Y.Z.devN+g<sha>
+dynamic = ["version"]
 description = "Разбор ресурсов игр серии «Князь» (1С/Snowball)"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -15,11 +16,14 @@ dev = [
 ]
 
 [build-system]
-requires = ["uv_build>=0.9,<0.14"]
-build-backend = "uv_build"
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
 
-[tool.uv.build-backend]
-module-root = ""
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["konung"]
 
 [tool.ruff]
 line-length = 100

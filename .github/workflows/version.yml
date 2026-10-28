@@ -1,0 +1,77 @@
+# Ручной релиз: следующая версия по коммитам с последнего тега (git-cliff),
+# тег и GitHub Release. Сам по себе не запускается — docs/releases.md
+name: version
+
+on:
+  workflow_dispatch:
+
+jobs:
+  tag:
+    name: Tag release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: version
+      cancel-in-progress: false
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    env:
+      HEAD_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v7
+      - uses: extractions/setup-just@v3
+
+      # Выпускается только коммит с зелёным CI
+      - name: Check CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          conclusion="$(gh run list --workflow ci.yml --commit "$HEAD_SHA" \
+            --event push --json conclusion --jq '.[0].conclusion')"
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::CI для $HEAD_SHA не зелёный: ${conclusion:-не найден}"
+            exit 1
+          fi
+
+      - name: Compute version
+        id: version
+        run: |
+          # Коммит уже выпущен: повторный запуск
+          if [ -n "$(git tag --contains "$HEAD_SHA")" ]; then
+            echo "::notice::Коммит $HEAD_SHA уже выпущен"
+            exit 0
+          fi
+          version="$(just next-version)"
+          if [ -z "$version" ]; then
+            echo "::notice::С последнего тега нечего выпускать"
+            exit 0
+          fi
+          echo "Следующая версия: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Push tag
+        if: steps.version.outputs.version != ''
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git tag "$VERSION" "$HEAD_SHA"
+          git push origin "$VERSION"
+
+  # Тег, запушенный с GITHUB_TOKEN, сам workflow не запускает: вызываем явно
+  release:
+    name: Release
+    needs: [tag]
+    if: needs.tag.outputs.version != ''
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ needs.tag.outputs.version }}
+    permissions:
+      contents: write
