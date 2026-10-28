@@ -14,6 +14,24 @@ def test_every_map_references_existing_resources(k1_game, k1_file):
         assert all(o.object_id in objects.simple for o in konung_map.objects), number
 
 
+def test_serialize_returns_every_map_byte_for_byte(k1_game):
+    for number in map_file.map_numbers(k1_game):
+        data = map_file.find(k1_game, "konung", number).read_bytes()
+        assert map_file.serialize(map_file.parse(data)) == data, number
+
+
+def test_serialize_keeps_edits():
+    empty = bytes(map_file.MAP_SIZE - 16000 - 36000) + b"\xff" * (16000 + 36000)
+    konung_map = map_file.parse(empty)
+    konung_map.ground[3][5] = 7
+    konung_map.decorations.append(map_file.Decoration(0, 230, 100, -20, bytes(8)))
+    konung_map.objects.append(map_file.MapObject(0, 117, 27, 33, b"\xff" * 20, 0, 0, 0, bytes(4)))
+    edited = map_file.parse(map_file.serialize(konung_map))
+    assert edited.ground[3][5] == 7
+    assert [(d.tile, d.x, d.y) for d in edited.decorations] == [(230, 100, -20)]
+    assert [(o.object_id, o.x, o.y) for o in edited.objects] == [(117, 27, 33)]
+
+
 def test_lights_files_match_their_size(k1_game):
     for path in k1_game.iterdir():
         stem, _, suffix = path.name.partition(".")

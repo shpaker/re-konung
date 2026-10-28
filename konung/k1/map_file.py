@@ -1,5 +1,6 @@
 """Konung.N — карта локации N; LIGHTS.N — её освещение (docs/k1/formats/map.md)."""
 
+import struct
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -115,6 +116,42 @@ def parse(data: bytes) -> KonungMap:
         objects.append(MapObject(slot, object_id, x, y, flames, frame_time, flags, frame, unknown))
 
     return KonungMap(ground, overlay, foot, decorations, objects)
+
+
+def serialize(konung_map: KonungMap) -> bytes:
+    """Карта обратно в формат Konung.N.
+
+    Декорации и объекты пишутся подряд с нулевого слота в порядке списков,
+    остальные слоты — байты 0xFF: так устроены все карты дистрибутива,
+    и parse → serialize возвращает их байт в байт.
+    """
+    if len(konung_map.decorations) > MAX_DECORATIONS:
+        raise ValueError(f"декораций {len(konung_map.decorations)}, максимум {MAX_DECORATIONS}")
+    if len(konung_map.objects) > MAX_OBJECTS:
+        raise ValueError(f"объектов {len(konung_map.objects)}, максимум {MAX_OBJECTS}")
+
+    out = bytearray()
+    for ground_row, overlay_row in zip(konung_map.ground, konung_map.overlay, strict=True):
+        for ground, overlay in zip(ground_row, overlay_row, strict=True):
+            out += bytes((ground, overlay))
+    for row in konung_map.foot:
+        out += row
+
+    for decoration in konung_map.decorations:
+        out += struct.pack("<i", decoration.tile) + decoration.unknown
+        out += struct.pack("<hh", decoration.x, decoration.y)
+    out += b"\xff" * DECORATION_SIZE * (MAX_DECORATIONS - len(konung_map.decorations))
+
+    for placed in konung_map.objects:
+        out += struct.pack("<i", placed.object_id) + placed.unknown + placed.flames
+        out += struct.pack(
+            "<hhhBB", placed.frame_time, placed.x, placed.y, placed.flags, placed.frame
+        )
+    out += b"\xff" * OBJECT_SIZE * (MAX_OBJECTS - len(konung_map.objects))
+
+    if len(out) != MAP_SIZE:
+        raise ValueError(f"получилось {len(out)} байт вместо {MAP_SIZE}: неверный размер слоёв")
+    return bytes(out)
 
 
 def parse_lights(data: bytes) -> Lights:
