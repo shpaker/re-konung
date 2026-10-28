@@ -1,0 +1,39 @@
+# GitHub Release для тега: текст — git-cliff, файлы — с этапом расширения Tiled.
+# Вызывается из version.yml
+name: release
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Тег релиза
+        required: true
+        type: string
+
+jobs:
+  release:
+    name: Create release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.version }}
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v7
+      - uses: extractions/setup-just@v3
+
+      - name: Release notes
+        run: just changelog > release_body.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: ${{ env.VERSION }}
+          body_path: release_body.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
