@@ -1,3 +1,5 @@
+import struct
+
 from konung.k1 import game_state, map_file
 
 
@@ -90,6 +92,36 @@ def test_serialize_keeps_edits():
     assert [(loot.x, loot.y, loot.gold, loot.map_id) for loot in edited.loot] == [(17, 40, 25, 3)]
     assert edited.exits[0].zone == zone
     assert (edited.exits[0].arrival_x, edited.exits[0].arrival_y) == (8, 164)
+
+
+def test_character_field_edits_touch_only_their_bytes(k1_game):
+    # Поля, которые правятся в Tiled: класс, уровень, имя, прозвище, набор спрайтов,
+    # золото, очки, опыт, навыки, характеристики (смещения — docs/k1/formats/game-state.md)
+    data = next(p for p in _state_files(k1_game) if p.name.lower() == "game.0").read_bytes()
+    state = game_state.parse(data)
+    character = next(c for c in state.characters if c and not c.has_dynamic_sprite)
+    character.class_id ^= 1
+    character.level = (character.level + 1) % 256
+    character.name_id, character.nick_id = 7, 3
+    character.sprite_set = (character.sprite_set + 1) % 3
+    character.gold, character.free_points, character.experience = 12345, 6, -7
+    skills = tuple(range(100, 100 + len(game_state.SKILL_NAMES)))
+    attributes = tuple(range(-4, -4 + len(game_state.ATTRIBUTE_NAMES)))
+    character.skills, character.attributes = skills, attributes
+    edited = game_state.serialize(state)
+    # Значения читаются по смещениям из документа, а не той же структурой, что пишет:
+    # блок персонажей — с 0x2A69A, записи по 256 байт
+    at = 0x2A69A + character.slot * game_state.CHARACTER.size
+    changed = {i - at for i, (a, b) in enumerate(zip(data, edited, strict=True)) if a != b}
+    allowed = {0x04, 0x33, 0xD4, 0xD5, 0xD6} | set(range(0x34, 0x40))
+    allowed |= set(range(0x40, 0x40 + 18)) | set(range(0x54, 0x54 + 18))
+    assert changed and changed <= allowed
+    assert edited[at + 0x04] == character.class_id
+    assert edited[at + 0x33] == character.level
+    assert edited[at + 0xD4 : at + 0xD7] == bytes((7, 3, character.sprite_set))
+    assert struct.unpack_from("<3i", edited, at + 0x34) == (12345, 6, -7)
+    assert struct.unpack_from("<9h", edited, at + 0x40) == skills
+    assert struct.unpack_from("<9h", edited, at + 0x54) == attributes
 
 
 def test_character_position_round_trips():

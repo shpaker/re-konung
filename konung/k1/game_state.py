@@ -33,6 +33,32 @@ JOBS = 5
 # Рабочие места деревни по порядку (Slavik game_locale.cpp, Locale::Jobs)
 JOB_ROLES = ("elder", "healer", "merchant", "smith", "voevoda")
 
+# Навыки (Character.skills) и характеристики (Character.attributes) по порядку
+# в записи персонажа — по Slavik (docs/k1/formats/game-state.md); в Tiled
+# свойства персонажа называются так же, в camelCase (agility_base → agilityBase)
+SKILL_NAMES = (
+    "fencing",
+    "trading",
+    "accuracy",
+    "carpentry",
+    "medicine",
+    "identification",
+    "smithing",
+    "armor",
+    "poison",
+)
+ATTRIBUTE_NAMES = (
+    "agility",
+    "agility_base",
+    "charisma",
+    "charisma_base",
+    "health",
+    "strength",
+    "strength_base",
+    "stamina",
+    "stamina_base",
+)
+
 VILLAGE_SIZE = (
     VILLAGE_HEAD.size + BUILDING_SLOTS * BUILDING.size + JOBS * JOB.size + VILLAGE_TAIL.size
 )
