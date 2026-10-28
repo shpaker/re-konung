@@ -2,10 +2,10 @@
 
 from functools import cache
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from konung import images
-from konung.k1 import map_file
+from konung.k1 import game_state, map_file
 from konung.k1.graph_res import GraphRes
 from konung.k1.objects_res import ObjectsRes
 
@@ -101,3 +101,51 @@ def _draw_objects(
     for x, y, simple, frame, _ in drawn:
         sprite = images.indexed_to_rgba(frame.image, graph.palette(simple.palette_offset))
         blit(canvas, sprite, x + frame.offset[0], y + frame.offset[1])
+
+
+# Маркеры Game.N: цвет на каждый вид, чтобы проверить места картинкой
+MARKER_COLORS = {
+    "spawn": (255, 64, 64, 255),
+    "leash": (255, 160, 0, 160),
+    "character": (255, 255, 0, 255),
+    "start": (0, 255, 0, 255),
+    "loot": (255, 215, 0, 255),
+    "exit": (64, 160, 255, 255),
+    "arrival": (0, 255, 255, 255),
+    "job": (255, 0, 255, 255),
+}
+MARKER_RADIUS = 8
+
+
+def draw_game(canvas: Image.Image, entities: game_state.MapEntities) -> None:
+    """Поверх карты — маркеры персонажей, отрядов, кладов и переходов."""
+    draw = ImageDraw.Draw(canvas)
+
+    def point(kind: str, x: int, y: int, label: str) -> None:
+        px, py = game_state.character_position(x, y)
+        r = MARKER_RADIUS
+        draw.ellipse((px - r, py - r, px + r, py + r), outline=MARKER_COLORS[kind], width=3)
+        draw.text((px + r + 2, py - r), label, fill=MARKER_COLORS[kind])
+
+    def rect(kind: str, area: game_state.Rect, label: str) -> None:
+        box = game_state.rect_pixels(area)
+        draw.rectangle(box, outline=MARKER_COLORS[kind], width=3)
+        draw.text((box[0] + 4, box[1] + 2), label, fill=MARKER_COLORS[kind])
+
+    if entities.start is not None:
+        # У отряда игрока прямоугольник — точка старта: top = y, left = x
+        point("start", entities.start.spawn.left, entities.start.spawn.top, "start")
+    for group in entities.groups:
+        if group.is_roaming:
+            rect("leash", group.leash, "")
+            rect("spawn", group.spawn, f"g{group.slot} {group.kind:#x} ×{group.size}")
+    for character in entities.characters:
+        point("character", character.x, character.y, f"c{character.slot}")
+    for _, job in entities.jobs:
+        point("job", job.x, job.y, job.role)
+    for loot in entities.loot:
+        point("loot", loot.x, loot.y, f"$ {loot.gold}")
+    for exit_ in entities.exits:
+        rect("exit", exit_.zone, f"→ {exit_.target_map}")
+    for exit_ in entities.arrivals:
+        point("arrival", exit_.arrival_x, exit_.arrival_y, f"← {exit_.map_id}")
