@@ -49,6 +49,21 @@ const catalogCache = new Map();
 const objectsCache = new Map();
 const tablesCache = new Map();
 
+// Тайлсеты, созданные скриптом, живут, пока на них есть ссылка из JS: если
+// сборщик мусора уберёт обёртку, Tiled 1.12.2 продолжает рисовать тайлы, но
+// map.tilesets даёт null, а следующая сборка мусора или закрытие карты роняют
+// Tiled. Поэтому ссылки держатся, пока карта открыта (ключ — путь файла)
+const liveTilesets = new Map();
+let readingTilesets = [];
+
+function newTileset(name) {
+    const tileset = new Tileset(name);
+    readingTilesets.push(tileset);
+    return tileset;
+}
+
+tiled.assetAboutToBeClosed.connect(asset => liveTilesets.delete(asset.fileName));
+
 function loadGraph(directory) {
     const path = findFile(directory, "graph.res");
     if (!graphCache.has(path))
@@ -100,7 +115,7 @@ function loadObjects(directory, graph) {
 
 // Тайлсет-коллекция, где номер тайла Tiled совпадает с номером в источнике
 function buildTileset(name, count, imageOf, propertiesOf) {
-    const tileset = new Tileset(name);
+    const tileset = newTileset(name);
     tileset.objectAlignment = Tileset.TopLeft;
     const empty = [];
     for (let index = 0; index < count; ++index) {
@@ -141,6 +156,13 @@ function addTileObject(group, tile, x, y, properties) {
 }
 
 function readMap(fileName) {
+    readingTilesets = [];
+    const map = buildMap(fileName);
+    liveTilesets.set(fileName, readingTilesets);
+    return map;
+}
+
+function buildMap(fileName) {
     const directory = FileInfo.path(fileName);
     const data = k1.parseMap(readBuffer(fileName));
     const graph = loadGraph(directory);
@@ -286,9 +308,9 @@ function buildGameGroup(map, state, hero, number, graph, dynamicSprites, tables)
     const group = new GroupLayer(`game.${hero}`);
 
     // Тайл на персонажа: модель со снаряжением одной картинкой
-    const charactersTileset = new Tileset(`characters.${hero}`);
+    const charactersTileset = newTileset(`characters.${hero}`);
     charactersTileset.objectAlignment = Tileset.TopLeft;
-    const shadowsTileset = new Tileset(`character-shadows.${hero}`);
+    const shadowsTileset = newTileset(`character-shadows.${hero}`);
     shadowsTileset.objectAlignment = Tileset.TopLeft;
     const sprites = new Map();
     const spriteOf = character => {
