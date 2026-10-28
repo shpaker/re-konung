@@ -121,8 +121,23 @@ def cmd_k1_game(args: argparse.Namespace) -> None:
             return value.hex()
         raise TypeError(type(value))
 
+    dump = dataclasses.asdict(state)
+    # Имена персонажей и названия предметов — из exe, если он рядом
+    try:
+        tables = executable.load(args.game)
+    except FileNotFoundError:
+        tables = None
+    if tables is not None and tables.texts is not None:
+        for character, record in zip(state.characters, dump["characters"], strict=True):
+            if character is not None:
+                record["name"] = executable.character_name(
+                    tables.texts, character.class_id, character.name_id, character.nick_id
+                )
+        for item, record in zip(state.items, dump["items"], strict=True):
+            if item is not None:
+                record["name"] = executable.item_name(tables, item.type_id, item.info_id)
     path.write_text(
-        json.dumps(dataclasses.asdict(state), default=plain, ensure_ascii=False, indent=1),
+        json.dumps(dump, default=plain, ensure_ascii=False, indent=1),
         encoding="utf-8",
     )
     print(path)

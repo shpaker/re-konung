@@ -92,7 +92,9 @@ function loadCatalog(directory) {
 
 // Таблицы снаряжения из exe: в RUS это konung.res, в ENG — KONUNG.EXE.
 // Без exe персонажи рисуются без снаряжения
-const NO_TABLES = { equipment: [], drawOrder: [[], [], [], [], [], [], [], []], flameAnimations: null };
+const NO_TABLES = {
+    equipment: [], drawOrder: [[], [], [], [], [], [], [], []], flameAnimations: null, names: null, texts: null,
+};
 const flamesCache = new Map();
 
 // Кадры огней FLAMES.RES; без файла огней нет
@@ -274,6 +276,10 @@ function buildMap(fileName) {
     // поверх них, а клетки у края карты без тайла пишутся отсюда. mapNumber — номер карты, чьи объекты Game.N показаны и пишутся при сохранении
     const number = Number(FileInfo.suffix(fileName));
     setProperties(map, { source: FileInfo.fileName(fileName), mapNumber: number, foot: k1.toHex(data.foot) });
+    // Название карты из exe — для чтения, при сохранении не читается
+    const texts = loadTables(directory).texts;
+    if (texts && texts.maps[number - 1])
+        map.setProperty("mapName", texts.maps[number - 1]);
 
     const graphTileset = buildTileset("graph", graph.tiles.length, index => graph.tiles[index]);
     const shadowsTileset = buildTileset("shadows", objects.length,
@@ -574,7 +580,7 @@ function buildGameGroup(map, state, hero, number, graph, dynamicSprites, tables)
             direction: c.direction,
             nameId: c.nameId,
             spriteSet: c.spriteSet,
-        }).name = `c${c.slot}`;
+        }).name = k1.characterName(tables.texts, c.classId, c.nameId, c.nickId) || `c${c.slot}`;
     }
     for (const g of entities.groups) {
         const common = { group: g.slot, kind: g.kind, size: g.size, maxSize: g.maxSize };
@@ -586,10 +592,14 @@ function buildGameGroup(map, state, hero, number, graph, dynamicSprites, tables)
             slot: exit.slot, targetMap: exit.targetMap, arrivalX: exit.arrivalX, arrivalY: exit.arrivalY,
             direction: exit.direction, unknown: exit.unknown,
         });
-    for (const entry of entities.loot)
-        addPoint(loot, `$ ${entry.gold}`, k1.characterPosition(entry.x, entry.y), {
-            slot: entry.slot, gold: entry.gold, items: entry.items, record: entry.record,
-        });
+    // itemNames — названия предметов клада для чтения, при сохранении не читается;
+    // без названий из exe его нет, как и mapName
+    for (const entry of entities.loot) {
+        const properties = { slot: entry.slot, gold: entry.gold, items: entry.items, record: entry.record };
+        if (tables.names)
+            properties.itemNames = k1.lootItemNames(state, tables, entry.items).join("; ");
+        addPoint(loot, `$ ${entry.gold}`, k1.characterPosition(entry.x, entry.y), properties);
+    }
     for (const exit of entities.arrivals)
         addPoint(arrivals, `← ${exit.mapId}`, k1.characterPosition(exit.arrivalX, exit.arrivalY), {
             slot: exit.slot, fromMap: exit.mapId, direction: exit.direction,

@@ -26,7 +26,7 @@
 | `GRAPH.RES` | палитры, курсоры, тайлы, спрайты персонажей | разобран до последнего байта, спрайты персонажей и снаряжения рисуются на карте | `konung/k1/graph_res.py`, `konung/k1/characters.py` | [graph-res.md](k1/formats/graph-res.md) |
 | `Game.N` | начальное состояние новой игры: персонажи, отряды, клады, переходы, деревни | раскладка разобрана, места проверены рендером; часть полей — по Slavik; запись побайтно точная | `konung/k1/game_state.py` | [game-state.md](k1/formats/game-state.md) |
 | `OBJECTS.RES` | объекты карты и динамические спрайты (монстры, женщины, дети) | разобран: простые и динамические объекты | `konung/k1/objects_res.py` | [objects-res.md](k1/formats/objects-res.md) |
-| `KONUNG.EXE` (`konung.res` в RUS) | таблицы снаряжения, порядка отрисовки и анимаций огней | найдены три таблицы | `konung/k1/executable.py` | [executable.md](k1/formats/executable.md) |
+| `KONUNG.EXE` (`konung.res` в RUS) | таблицы снаряжения, порядка отрисовки и анимаций огней; имена и названия | найдены таблицы снаряжения, отрисовки, огней, имён, прозвищ, монстров, карт и предметов | `konung/k1/executable.py` | [executable.md](k1/formats/executable.md) |
 | RLE-картинки | сжатие всех спрайтов | разобрано | `konung/rle.py` | [rle.md](k1/formats/rle.md) |
 | `FLAMES.RES` | кадры огней | разобран до последнего байта, огни рисуются на карте | `konung/k1/flames_res.py` | [flames-res.md](k1/formats/flames-res.md) |
 | `SOUNDS.RES`, `*.RES` интерфейса | — | известно только по Slavik | — | [inventory.md](k1/inventory.md) |
