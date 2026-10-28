@@ -49,6 +49,7 @@
 - `Konung.N` — карты, [formats/map.md](formats/map.md). Номера 1–50 с пропусками: 9, 13, 18, 26, 31, 34, 41.
 - `LIGHTS.N` — освещение карт, [formats/map.md](formats/map.md). Нет для карт 6, 8, 46. Маски — `LIGHTS.RES`, [formats/lights-res.md](formats/lights-res.md).
 - `Game.N` — начальное состояние новой игры за героя N (0 — Волк, 1 — Драгомир, 2 — Михаил), [formats/game-state.md](formats/game-state.md). `TGame.1` — то же для обучения.
+- `Tutorial.N`, `Tlights.N` (только ENG, N = 4, 5) — карты обучения и их свет, тот же формат, что у `Konung.N` и `LIGHTS.N` ([formats/map.md](formats/map.md)). Их читает `TUTORIAL.EXE`; `GRAPH.RES`, `Objects.res`, `LIGHTS.RES` и `FLAMES.RES` у него общие с игрой — в нём те же строки имён этих файлов (наш эксперимент).
 - `<экран><разрешение><язык>.RES` — экраны интерфейса: `MENU` (меню), `INTR`/`INTO` (вступление?), `NEW`/`NEWH` (новая игра, выбор героя), `PLAY` (игровой экран), `SAVE` (сохранение), `ME` (?). Разрешение 640 или 800, язык `R`/`E`/`T`. По Slavik: в начале — таблица картинок RLE с палитрами из `GRAPH.RES`.
 - `QUEST*.RES` — 337800 байт во всех языках, вероятно, тексты квестов фиксированной длины.
 

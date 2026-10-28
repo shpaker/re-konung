@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from konung.binary import Reader
+from konung.k1.graph_res import TILE_SLOTS
 
 WIDTH = 80
 HEIGHT = 160
@@ -38,6 +39,31 @@ FOOT_BLOCKED = 0x0F
 FOOT_STOPS_ARROWS = 0x40
 
 
+@dataclass(frozen=True)
+class FileSet:
+    """Префиксы имён файлов одного набора карт: карта, её свет, начальные состояния.
+
+    Номер у карты и света — номер локации, у состояния — номер героя.
+    """
+
+    map: str
+    lights: str
+    state: str
+
+
+GAME_FILES = FileSet("konung", "lights", "game")
+# Обучение, только в ENG: TUTORIAL.EXE собирает имена TUTORIAL.N, TLIGHTS.N
+# и TGAME.N, а GRAPH.RES, Objects.res, LIGHTS.RES и FLAMES.RES у него общие с игрой.
+# Источник — строки имён файлов в TUTORIAL.EXE (наш эксперимент)
+TUTORIAL_FILES = FileSet("tutorial", "tlights", "tgame")
+
+
+def file_set(map_name: str) -> FileSet:
+    """Набор, к которому относится файл карты: tutorial.N — обучение, остальное — игра."""
+    stem = map_name.partition(".")[0].lower()
+    return TUTORIAL_FILES if stem == TUTORIAL_FILES.map else GAME_FILES
+
+
 @dataclass
 class Decoration:
     """Тайл из GRAPH.RES, поставленный в произвольную точку карты (в пикселях)."""
@@ -47,6 +73,15 @@ class Decoration:
     x: int
     y: int
     unknown: bytes
+
+    @property
+    def is_raw(self) -> bool:
+        """Запись с тайлом за пределами GRAPH.RES: её не нарисовать, она хранится как есть.
+
+        Такая одна в Tutorial.4 и Tutorial.5 (слот 994). Запись пишется обратно
+        в свой слот, а не подряд с обычными (docs/k1/formats/map.md, «Запись»).
+        """
+        return self.tile >= TILE_SLOTS
 
 
 @dataclass
@@ -141,15 +176,34 @@ def parse(data: bytes) -> KonungMap:
     return KonungMap(ground, overlay, foot, decorations, objects)
 
 
+def decoration_slots(decorations: list[Decoration]) -> list[Decoration | None]:
+    """Декорации по слотам файла: сырые (is_raw) — в свой slot, обычные — по порядку
+    списка в свободные слоты с нулевого; None — пустой слот."""
+    if len(decorations) > MAX_DECORATIONS:
+        raise ValueError(f"декораций {len(decorations)}, максимум {MAX_DECORATIONS}")
+    slots: list[Decoration | None] = [None] * MAX_DECORATIONS
+    for decoration in decorations:
+        if not decoration.is_raw:
+            continue
+        if not 0 <= decoration.slot < MAX_DECORATIONS or slots[decoration.slot] is not None:
+            raise ValueError(f"сырая декорация: слот {decoration.slot} занят или вне 0–999")
+        slots[decoration.slot] = decoration
+    free = (slot for slot, placed in enumerate(slots) if placed is None)
+    for decoration in decorations:
+        if not decoration.is_raw:
+            slots[next(free)] = decoration
+    return slots
+
+
 def serialize(konung_map: KonungMap) -> bytes:
     """Карта обратно в формат Konung.N.
 
-    Декорации и объекты пишутся подряд с нулевого слота в порядке списков,
-    остальные слоты — байты 0xFF: так устроены все карты дистрибутива,
+    Объекты и обычные декорации пишутся подряд с нулевого слота в порядке
+    списков, сырые декорации — в свой слот (decoration_slots), остальные
+    слоты — байты 0xFF: так устроены все карты дистрибутива и обучения,
     и parse → serialize возвращает их байт в байт.
     """
-    if len(konung_map.decorations) > MAX_DECORATIONS:
-        raise ValueError(f"декораций {len(konung_map.decorations)}, максимум {MAX_DECORATIONS}")
+    decorations = decoration_slots(konung_map.decorations)
     if len(konung_map.objects) > MAX_OBJECTS:
         raise ValueError(f"объектов {len(konung_map.objects)}, максимум {MAX_OBJECTS}")
 
@@ -160,10 +214,12 @@ def serialize(konung_map: KonungMap) -> bytes:
     for row in konung_map.foot:
         out += row
 
-    for decoration in konung_map.decorations:
+    for decoration in decorations:
+        if decoration is None:
+            out += b"\xff" * DECORATION_SIZE
+            continue
         out += struct.pack("<i", decoration.tile) + decoration.unknown
         out += struct.pack("<hh", decoration.x, decoration.y)
-    out += b"\xff" * DECORATION_SIZE * (MAX_DECORATIONS - len(konung_map.decorations))
 
     for placed in konung_map.objects:
         out += struct.pack("<i", placed.object_id) + placed.unknown + placed.flames
@@ -205,10 +261,10 @@ def serialize_lights(lights: Lights) -> bytes:
     return out
 
 
-def lights_path(game_dir: Path, number: int) -> Path | None:
-    """LIGHTS.N карты; у карт 6, 8 и 46 его нет."""
+def lights_path(game_dir: Path, number: int, files: FileSet = GAME_FILES) -> Path | None:
+    """LIGHTS.N карты (TLights.N у обучения); у карт 6, 8 и 46 его нет."""
     try:
-        return find(game_dir, "lights", number)
+        return find(game_dir, files.lights, number)
     except FileNotFoundError:
         return None
 
@@ -222,14 +278,20 @@ def find(game_dir: Path, prefix: str, number: int) -> Path:
     raise FileNotFoundError(f"{game_dir}: нет {prefix}.{number}")
 
 
-def map_numbers(game_dir: Path) -> list[int]:
+def numbered(game_dir: Path, prefix: str) -> list[int]:
+    """Номера файлов вида prefix.N в папке, без учёта регистра."""
     numbers = []
     for path in game_dir.iterdir():
         stem, _, suffix = path.name.partition(".")
-        if stem.lower() == "konung" and suffix.isdigit():
+        if stem.lower() == prefix and suffix.isdigit():
             numbers.append(int(suffix))
     return sorted(numbers)
 
 
-def load(game_dir: Path, number: int) -> KonungMap:
-    return parse(find(game_dir, "konung", number).read_bytes())
+def map_numbers(game_dir: Path, files: FileSet = GAME_FILES) -> list[int]:
+    """Номера карт Konung.N (или Tutorial.N обучения) в папке игры."""
+    return numbered(game_dir, files.map)
+
+
+def load(game_dir: Path, number: int, files: FileSet = GAME_FILES) -> KonungMap:
+    return parse(find(game_dir, files.map, number).read_bytes())
