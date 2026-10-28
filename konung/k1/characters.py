@@ -51,6 +51,23 @@ def _frame(sprites: Sprites, animation: int, direction: int, frame: int) -> Spri
     return sequence[frame] if frame < len(sequence) else sequence[0]
 
 
+def _sprites(
+    character: game_state.Character, graph: GraphRes, objects: ObjectsRes
+) -> tuple[Sprites | None, int]:
+    """Спрайт персонажа и номер анимации его состояния."""
+    if character.has_dynamic_sprite:
+        return objects.dynamic.get(character.sprite_set), character.state % DYNAMIC_ANIMATIONS
+    return graph.models[character.sprite_set], character.state
+
+
+def frame_count(character: game_state.Character, graph: GraphRes, objects: ObjectsRes) -> int:
+    """Сколько кадров в анимации персонажа: его состояние и направление."""
+    sprites, animation = _sprites(character, graph, objects)
+    if sprites is None:
+        return 0
+    return len(sprites.sequences[animation][character.direction])
+
+
 def compose(
     character: game_state.Character,
     x: int,
@@ -59,17 +76,18 @@ def compose(
     graph: GraphRes,
     objects: ObjectsRes,
     tables: Executable,
+    frame_index: int | None = None,
 ) -> CharacterSprite | None:
-    """Кадр персонажа, стоящего в точке (x, y) карты; None — если кадра нет."""
-    if character.has_dynamic_sprite:
-        sprites = objects.dynamic.get(character.sprite_set)
-        animation = character.state % DYNAMIC_ANIMATIONS
-    else:
-        sprites = graph.models[character.sprite_set]
-        animation = character.state
+    """Кадр персонажа, стоящего в точке (x, y) карты; None — если кадра нет.
+
+    frame_index — номер кадра анимации; без него — кадр из записи персонажа.
+    """
+    sprites, animation = _sprites(character, graph, objects)
     if sprites is None:
         return None
-    frame = _frame(sprites, animation, character.direction, character.frame)
+    if frame_index is None:
+        frame_index = character.frame
+    frame = _frame(sprites, animation, character.direction, frame_index)
     if frame is None:
         return None
     image = sprites.image(frame.image_id)
@@ -93,7 +111,7 @@ def compose(
             if sprite_set < 0:
                 continue
             gear = graph.equipment[sprite_set]
-            gear_frame = _frame(gear, animation, character.direction, character.frame)
+            gear_frame = _frame(gear, animation, character.direction, frame_index)
             gear_image = gear.image(gear_frame.image_id) if gear_frame else None
             if gear_image is None:
                 continue
@@ -106,6 +124,24 @@ def compose(
                 )
             )
     return CharacterSprite(character, layers, shadow)
+
+
+def animation(
+    character: game_state.Character,
+    x: int,
+    y: int,
+    state: game_state.GameState,
+    graph: GraphRes,
+    objects: ObjectsRes,
+    tables: Executable,
+) -> list[CharacterSprite]:
+    """Все кадры анимации персонажа; кадр меняется каждый тик (Slavik game_play.cpp:3729)."""
+    sprites = []
+    for index in range(frame_count(character, graph, objects)):
+        sprite = compose(character, x, y, state, graph, objects, tables, index)
+        if sprite is not None:
+            sprites.append(sprite)
+    return sprites
 
 
 def placed(

@@ -97,7 +97,10 @@ function loadTables(directory) {
     return NO_TABLES;
 }
 
-// Кадр 0 каждого простого объекта: в картах дистрибутива кадр всегда 0 или 0xFF
+// Кадр 0 каждого простого объекта: в картах дистрибутива кадр всегда 0 или 0xFF.
+// У анимированного объекта все кадры в общей рамке (animation), а картинка,
+// тень и их смещения — первого кадра этой рамки. bottom — нижний край кадра 0
+// без рамки: по нему игра сортирует объекты
 function loadObjects(directory, graph) {
     const path = findFile(directory, "objects.res");
     if (!objectsCache.has(path)) {
@@ -105,12 +108,37 @@ function loadObjects(directory, graph) {
         const objects = [];
         for (let objectId = 0; objectId < k1.SIMPLE_OBJECT_SLOTS; ++objectId) {
             const simple = k1.readSimpleObject(catalog, graph, objectId);
-            if (simple && simple.frames[0].image)
-                objects[objectId] = simple.frames[0];
+            if (!simple || !simple.frames[0].image)
+                continue;
+            const first = simple.frames[0];
+            const entry = {
+                image: first.image, offset: first.offset, shadow: first.shadow, shadowOffset: first.shadowOffset,
+                bottom: first.offset[1] + first.image.height, animation: k1.objectAnimation(simple),
+            };
+            const animation = entry.animation;
+            if (animation) {
+                entry.image = animation.image.images[0];
+                entry.offset = animation.image.offset;
+                entry.shadow = animation.shadow ? animation.shadow.images[0] : null;
+                entry.shadowOffset = animation.shadow ? animation.shadow.offset : first.shadowOffset;
+            }
+            objects[objectId] = entry;
         }
         objectsCache.set(path, objects);
     }
     return objectsCache.get(path);
+}
+
+// Остальные кадры — новые тайлы того же тайлсета; первый тайл получает анимацию
+function animateTile(tileset, tile, images, duration, properties) {
+    const frames = [{ tileId: tile.id, duration }];
+    for (const image of images.slice(1)) {
+        const frame = tileset.addTile();
+        frame.setImage(toImage(image));
+        setProperties(frame, properties);
+        frames.push({ tileId: frame.id, duration });
+    }
+    tile.frames = frames;
 }
 
 // Тайлсет-коллекция, где номер тайла Tiled совпадает с номером в источнике
@@ -191,6 +219,18 @@ function buildMap(fileName) {
             shadowOffsetX: objects[objectId].shadowOffset[0],
             shadowOffsetY: objects[objectId].shadowOffset[1],
         }));
+    // Кадры анимированных объектов несут те же свойства: объект, поставленный
+    // любым кадром, сохраняется как этот объект
+    objects.forEach((entry, objectId) => {
+        const animation = entry && entry.animation;
+        if (!animation)
+            return;
+        animateTile(objectsTileset, objectsTileset.tile(objectId), animation.image.images, animation.duration,
+            objectsTileset.tile(objectId).properties());
+        if (animation.shadow)
+            animateTile(shadowsTileset, shadowsTileset.tile(objectId), animation.shadow.images, animation.duration,
+                { objectId });
+    });
     map.addTileset(graphTileset);
     map.addTileset(shadowsTileset);
     map.addTileset(objectsTileset);
@@ -307,7 +347,8 @@ function buildGameGroup(map, state, hero, number, graph, dynamicSprites, tables)
     const entities = k1.entitiesOnMap(state, number, hero);
     const group = new GroupLayer(`game.${hero}`);
 
-    // Тайл на персонажа: модель со снаряжением одной картинкой
+    // Тайл на персонажа: модель со снаряжением одной картинкой, кадры его
+    // анимации — в общей рамке; offsetX/offsetY — смещение рамки от точки
     const charactersTileset = newTileset(`characters.${hero}`);
     charactersTileset.objectAlignment = Tileset.TopLeft;
     const shadowsTileset = newTileset(`character-shadows.${hero}`);
@@ -315,18 +356,27 @@ function buildGameGroup(map, state, hero, number, graph, dynamicSprites, tables)
     const sprites = new Map();
     const spriteOf = character => {
         if (!sprites.has(character.slot)) {
-            const sprite = k1.composeCharacter(character, state, graph, dynamicSprites, tables);
+            const animation = k1.composeAnimation(character, state, graph, dynamicSprites, tables);
             let entry = null;
-            if (sprite) {
+            if (animation) {
+                const { image, shadow } = animation;
+                const properties = { character: character.slot, offsetX: image.offset[0], offsetY: image.offset[1] };
                 const tile = charactersTileset.addTile();
-                tile.setImage(toImage(sprite.image));
-                setProperties(tile, { character: character.slot, offsetX: sprite.offset[0], offsetY: sprite.offset[1] });
+                tile.setImage(toImage(image.images[0]));
+                setProperties(tile, properties);
+                if (image.images.length > 1)
+                    animateTile(charactersTileset, tile, image.images, animation.duration, properties);
                 let shadowTile = null;
-                if (sprite.shadow) {
+                if (shadow) {
                     shadowTile = shadowsTileset.addTile();
-                    shadowTile.setImage(toImage(sprite.shadow.image));
+                    shadowTile.setImage(toImage(shadow.images[0]));
+                    if (shadow.images.length > 1)
+                        animateTile(shadowsTileset, shadowTile, shadow.images, animation.duration, {});
                 }
-                entry = { sprite, tile, shadowTile };
+                entry = {
+                    tile, shadowTile, offset: image.offset, shadowOffset: shadow && shadow.offset,
+                    bottom: animation.bottom,
+                };
             }
             sprites.set(character.slot, entry);
         }
@@ -352,7 +402,7 @@ function buildGameGroup(map, state, hero, number, graph, dynamicSprites, tables)
         drawn.push(Object.assign({}, item, { entry, x, y }));
     }
     // Ближе к зрителю то, что ниже на экране
-    const bottom = item => item.y + item.entry.sprite.offset[1] + item.entry.sprite.image.height;
+    const bottom = item => item.y + item.entry.bottom;
     drawn.sort((a, b) => bottom(a) - bottom(b) || a.character.slot - b.character.slot);
 
     const shadows = new ObjectGroup("shadows");
@@ -371,12 +421,12 @@ function buildGameGroup(map, state, hero, number, graph, dynamicSprites, tables)
     characters.drawOrder = ObjectGroup.IndexOrder;
 
     for (const item of drawn) {
-        const { sprite, tile, shadowTile } = item.entry;
+        const { tile, shadowTile, offset, shadowOffset } = item.entry;
         if (shadowTile)
-            addTileObject(shadows, shadowTile, item.x + sprite.shadow.offset[0], item.y + sprite.shadow.offset[1], {});
+            addTileObject(shadows, shadowTile, item.x + shadowOffset[0], item.y + shadowOffset[1], {});
         const layer = item.preview ? mobs : characters;
         const c = item.character;
-        addTileObject(layer, tile, item.x + sprite.offset[0], item.y + sprite.offset[1], {
+        addTileObject(layer, tile, item.x + offset[0], item.y + offset[1], {
             character: c.slot,
             group: c.group,
             classId: c.classId,
@@ -434,7 +484,7 @@ function addObjects(map, objects, shadowsTileset, objectsTileset, placed) {
     }
     // Ближе к зрителю то, что ниже на экране: порядок по нижнему краю, как в игре;
     // при равенстве — по слоту в файле карты
-    const bottom = item => item.y + item.frame.offset[1] + item.frame.image.height;
+    const bottom = item => item.y + item.frame.bottom;
     drawn.sort((a, b) => bottom(a) - bottom(b) || a.object.slot - b.object.slot);
 
     // Тени выводятся из объектов: при сохранении слой shadows не читается
