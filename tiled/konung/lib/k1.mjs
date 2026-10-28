@@ -146,7 +146,11 @@ export function readSimpleObject(catalog, graph, objectId) {
     reader.u32();
     const paletteOffset = reader.u32() / 2;
     const frameTime = reader.s32();
-    reader.pos += FLAME_SLOTS * 5;
+    // Точки огней: вид и левый верхний угол кадра от позиции объекта
+    const flames = [];
+    for (let i = 0; i < flameCount; ++i)
+        flames.push({ kind: reader.s8(), x: reader.s16(), y: reader.s16() });
+    reader.pos += (FLAME_SLOTS - flameCount) * 5;
 
     const dataOffsets = [];
     for (let i = 0; i < OBJECT_FRAMES; ++i)
@@ -169,7 +173,7 @@ export function readSimpleObject(catalog, graph, objectId) {
         }
         return { image, shadow, offset: placement[i].image, shadowOffset: placement[i].shadow };
     });
-    return { objectId, flags, flameCount, frameCount, frameTime, frames };
+    return { objectId, flags, flameCount, flames, frameCount, frameTime, frames };
 }
 
 export function parseMap(buffer) {
@@ -738,7 +742,7 @@ export function parseExecutable(buffer) {
             row.push(view.getInt32(first + direction * DRAW_ORDER_ROW_SIZE + i * 4, true));
         drawOrder.push(row);
     }
-    return { equipment, drawOrder };
+    return { equipment, drawOrder, flameAnimations: findFlameAnimations(view, bytes.length) };
 }
 
 function sequenceFrame(sprites, animation, direction, frame) {
@@ -879,4 +883,53 @@ export function objectAnimation(simple) {
         shadow: alignFrames(frames.map(f => f.shadow && { image: f.shadow, offset: f.shadowOffset })),
         duration: simple.frameTime * TICK_MS,
     };
+}
+
+// ---------------------------------------------------------------------------
+// Огни (docs/k1/formats/flames-res.md), эталон — konung/k1/flames_res.py.
+
+export const FLAME_KINDS = 7;
+export const FLAME_FRAMES = 74;
+
+// Анимации огней в exe: 7 пар (первый, последний кадр) по 2 × s32, подряд
+// и без пропусков от кадра 0 до последнего; оба конца включены
+function findFlameAnimations(view, length) {
+    const found = [];
+    for (let start = 0; start + FLAME_KINDS * 8 <= length; start += 4) {
+        if (view.getInt32(start, true) !== 0)
+            continue;
+        const pairs = [];
+        for (let kind = 0; kind < FLAME_KINDS; ++kind)
+            pairs.push([view.getInt32(start + kind * 8, true), view.getInt32(start + kind * 8 + 4, true)]);
+        const contiguous = pairs.every(([first, last], kind) =>
+            first <= last && (kind === 0 || first === pairs[kind - 1][1] + 1));
+        if (contiguous && pairs[FLAME_KINDS - 1][1] === FLAME_FRAMES - 1)
+            found.push(pairs);
+    }
+    if (found.length !== 1)
+        throw new Error(`таблица огней в exe не найдена однозначно (${found.length})`);
+    return found[0];
+}
+
+// Огонь светится: альфа — из яркости, a = (2r + g + b) / 4; цвет остаётся как есть
+function flamePixel(reader) {
+    const color = reader.u16();
+    const r5 = (color >> 10) & 0x1f, g5 = (color >> 5) & 0x1f, b5 = color & 0x1f;
+    const r = (r5 << 3) | (r5 >> 2), g = (g5 << 3) | (g5 >> 2), b = (b5 << 3) | (b5 >> 2);
+    const a = (2 * r + g + b) >> 2;
+    return ((a << 24) | (r << 16) | (g << 8) | b) >>> 0;
+}
+
+// 74 блока: u32 метка, s32 размер, картинка RL16
+export function parseFlames(buffer) {
+    const reader = new Reader(buffer);
+    const frames = [];
+    while (reader.pos < buffer.byteLength) {
+        reader.u32();
+        const size = reader.s32();
+        const start = reader.pos;
+        frames.push(decodeRle(reader, flamePixel));
+        reader.pos = start + size;
+    }
+    return frames;
 }

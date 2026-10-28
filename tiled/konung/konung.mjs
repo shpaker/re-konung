@@ -80,7 +80,21 @@ function loadCatalog(directory) {
 
 // Таблицы снаряжения из exe: в RUS это konung.res, в ENG — KONUNG.EXE.
 // Без exe персонажи рисуются без снаряжения
-const NO_TABLES = { equipment: [], drawOrder: [[], [], [], [], [], [], [], []] };
+const NO_TABLES = { equipment: [], drawOrder: [[], [], [], [], [], [], [], []], flameAnimations: null };
+const flamesCache = new Map();
+
+// Кадры огней FLAMES.RES; без файла огней нет
+function loadFlames(directory) {
+    let path;
+    try {
+        path = findFile(directory, "flames.res");
+    } catch (error) {
+        return null;
+    }
+    if (!flamesCache.has(path))
+        flamesCache.set(path, k1.parseFlames(readBuffer(path)));
+    return flamesCache.get(path);
+}
 
 function loadTables(directory) {
     for (const name of ["konung.exe", "konung.res"]) {
@@ -114,6 +128,7 @@ function loadObjects(directory, graph) {
             const entry = {
                 image: first.image, offset: first.offset, shadow: first.shadow, shadowOffset: first.shadowOffset,
                 bottom: first.offset[1] + first.image.height, animation: k1.objectAnimation(simple),
+                flames: simple.flames,
             };
             const animation = entry.animation;
             if (animation) {
@@ -274,6 +289,7 @@ function buildMap(fileName) {
     map.addLayer(decorations);
 
     addObjects(map, objects, shadowsTileset, objectsTileset, data.objects);
+    addFlames(map, directory, objects, data.objects);
     addGameStates(map, directory, number, graph);
     return map;
 }
@@ -471,6 +487,42 @@ function buildGameGroup(map, state, hero, number, graph, dynamicSprites, tables)
     for (const layer of [shadows, groups, exits, loot, arrivals, villages, start, mobs, characters])
         group.addLayer(layer);
     return group;
+}
+
+// Огни объектов: тайлсет flames — тайл на каждый кадр FLAMES.RES, у первого кадра
+// каждого вида анимация по тику; слой flames над объектами выводится из них
+// и при сохранении не читается (docs/k1/tiled.md)
+function addFlames(map, directory, objects, placed) {
+    const frames = loadFlames(directory);
+    const animations = loadTables(directory).flameAnimations;
+    if (!frames || !animations)
+        return;
+    const tileset = buildTileset("flames", frames.length, index => frames[index], index => ({ frame: index }));
+    animations.forEach(([first, last], kind) => {
+        const tile = tileset.tile(first);
+        tile.setProperty("kind", kind);
+        const sequence = [];
+        for (let index = first; index <= last; ++index)
+            sequence.push({ tileId: index, duration: k1.TICK_MS });
+        tile.frames = sequence;
+    });
+    map.addTileset(tileset);
+
+    const layer = new ObjectGroup("flames");
+    layer.locked = true;
+    layer.drawOrder = ObjectGroup.IndexOrder;
+    for (const object of placed) {
+        const entry = objects[object.objectId];
+        if (!entry || !entry.flames.length)
+            continue;
+        const [x, y] = k1.objectPosition(object.x, object.y);
+        for (const flame of entry.flames) {
+            const range = animations[flame.kind];
+            if (range)
+                addTileObject(layer, tileset.tile(range[0]), x + flame.x, y + flame.y, { slot: object.slot });
+        }
+    }
+    map.addLayer(layer);
 }
 
 function addObjects(map, objects, shadowsTileset, objectsTileset, placed) {
