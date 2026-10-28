@@ -581,6 +581,8 @@ const EQUIPMENT_SETS = 24;
 const CHARACTER_ANIMATIONS = 10, CHARACTER_FRAMES = 12, CHARACTER_IMAGES = 768;
 const DYNAMIC_ANIMATIONS = 6, DYNAMIC_FRAMES = 18, DYNAMIC_IMAGES = 512;
 const COLORS_PER_PALETTE = 256;
+// Тик игры, мс: на нём меняются кадры объектов, персонажей и огней (Slavik game.h:30)
+export const TICK_MS = 60;
 // Палитры наборов снаряжения: в данных exe их нет — по Slavik resources.cpp:15
 const EQUIPMENT_PALETTES = [2, 2, 2, 2, 4, 4, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 5, 5, 5, 5];
 
@@ -746,17 +748,24 @@ function sequenceFrame(sprites, animation, direction, frame) {
     return frame < sequence.length ? sequence[frame] : sequence[0];
 }
 
-// Кадр персонажа одной картинкой (как konung/k1/characters.compose):
-// image — модель и снаряжение, offset — левый верхний угол от точки персонажа,
-// shadow — маска тени со своим смещением. dynamicSprites(slot) — динамический объект.
-export function composeCharacter(character, state, graph, dynamicSprites, tables) {
+// Спрайт персонажа и номер анимации его состояния
+function characterSprites(character, graph, dynamicSprites) {
     const sprites = character.dynamic
         ? dynamicSprites(character.spriteSet)
         : graph.characters.models[character.spriteSet];
+    const animation = character.dynamic ? character.state % DYNAMIC_ANIMATIONS : character.state;
+    return { sprites, animation };
+}
+
+// Кадр персонажа одной картинкой (как konung/k1/characters.compose):
+// image — модель и снаряжение, offset — левый верхний угол от точки персонажа,
+// shadow — маска тени со своим смещением. dynamicSprites(slot) — динамический объект.
+// frameIndex — номер кадра анимации, по умолчанию — из записи персонажа
+export function composeCharacter(character, state, graph, dynamicSprites, tables, frameIndex = character.frame) {
+    const { sprites, animation } = characterSprites(character, graph, dynamicSprites);
     if (!sprites)
         return null;
-    const animation = character.dynamic ? character.state % DYNAMIC_ANIMATIONS : character.state;
-    const frame = sequenceFrame(sprites, animation, character.direction, character.frame);
+    const frame = sequenceFrame(sprites, animation, character.direction, frameIndex);
     if (!frame)
         return null;
     const body = spriteImage(sprites, frame.imageId, graph.palette(character.paletteOffset));
@@ -773,7 +782,7 @@ export function composeCharacter(character, state, graph, dynamicSprites, tables
             if (set < 0)
                 continue;
             const gear = graph.characters.equipment[set];
-            const gearFrame = sequenceFrame(gear, animation, character.direction, character.frame);
+            const gearFrame = sequenceFrame(gear, animation, character.direction, frameIndex);
             const image = gearFrame && spriteImage(gear, gearFrame.imageId,
                 graph.palette(EQUIPMENT_PALETTES[set] * COLORS_PER_PALETTE));
             if (image)
@@ -806,5 +815,68 @@ export function composeCharacter(character, state, graph, dynamicSprites, tables
         image: { width, height, pixels },
         offset: [left, top],
         shadow: shadowImage && { image: shadowImage, offset: frame.shadowOffset },
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Анимации для Tiled: кадры тайла Tiled рисует от одной точки, поэтому кадры
+// с разными смещениями кладутся в общую рамку (объединение прямоугольников).
+
+// frames — [{ image, offset } | null]; null — кадра нет (пустая картинка рамки)
+export function alignFrames(frames) {
+    const present = frames.filter(Boolean);
+    if (!present.length)
+        return null;
+    const left = Math.min(...present.map(f => f.offset[0]));
+    const top = Math.min(...present.map(f => f.offset[1]));
+    const right = Math.max(...present.map(f => f.offset[0] + f.image.width));
+    const bottom = Math.max(...present.map(f => f.offset[1] + f.image.height));
+    const width = right - left, height = bottom - top;
+    const images = frames.map(frame => {
+        const pixels = new Uint32Array(width * height);
+        if (frame) {
+            const { image } = frame;
+            for (let y = 0; y < image.height; ++y)
+                pixels.set(image.pixels.subarray(y * image.width, (y + 1) * image.width),
+                    (frame.offset[1] - top + y) * width + (frame.offset[0] - left));
+        }
+        return { width, height, pixels };
+    });
+    return { offset: [left, top], images };
+}
+
+// Все кадры анимации персонажа в общей рамке (как characters.animation).
+// bottom — нижний край первого кадра от точки персонажа: по нему сортирует игра
+export function composeAnimation(character, state, graph, dynamicSprites, tables) {
+    const { sprites, animation } = characterSprites(character, graph, dynamicSprites);
+    if (!sprites)
+        return null;
+    const count = sprites.sequences[animation][character.direction].length;
+    const frames = [];
+    for (let index = 0; index < count; ++index) {
+        const frame = composeCharacter(character, state, graph, dynamicSprites, tables, index);
+        if (frame)
+            frames.push(frame);
+    }
+    if (!frames.length)
+        return null;
+    return {
+        image: alignFrames(frames),
+        shadow: alignFrames(frames.map(f => f.shadow)),
+        bottom: frames[0].offset[1] + frames[0].image.height,
+        duration: TICK_MS,
+    };
+}
+
+// Кадры анимированного простого объекта в общей рамке; null — объект не анимирован.
+// Кадр меняется раз в frameTime тиков (Slavik game_play.cpp:1003-1017)
+export function objectAnimation(simple) {
+    if (simple.frameCount < 2 || simple.frameTime < 1)
+        return null;
+    const frames = simple.frames.slice(0, simple.frameCount);
+    return {
+        image: alignFrames(frames.map(f => f.image && { image: f.image, offset: f.offset })),
+        shadow: alignFrames(frames.map(f => f.shadow && { image: f.shadow, offset: f.shadowOffset })),
+        duration: simple.frameTime * TICK_MS,
     };
 }

@@ -15,6 +15,8 @@ SLOTS = 512
 DYNAMIC_COUNT = 30
 FRAMES = 8
 FLAME_SLOTS = 20
+# Тик игры, мс: на нём меняются кадры объектов, персонажей и огней (Slavik game.h:30)
+TICK_MS = 60
 # Динамический объект: 6 анимаций × 8 направлений × до 18 кадров, 512 картинок
 DYNAMIC_ANIMATIONS = 6
 DYNAMIC_FRAMES = 18
@@ -47,6 +49,16 @@ class SimpleObject:
     flames: list[Flame]
     frames: list[Frame]
     unknown: int
+
+
+def frame_duration_ms(simple: SimpleObject) -> int | None:
+    """Сколько длится кадр анимированного объекта; None — объект не анимирован.
+
+    Кадр меняется раз в frame_time тиков (Slavik game_play.cpp:1003-1017).
+    """
+    if simple.frame_count < 2 or simple.frame_time < 1:
+        return None
+    return simple.frame_time * TICK_MS
 
 
 @dataclass

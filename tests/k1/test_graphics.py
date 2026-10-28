@@ -59,6 +59,19 @@ def test_objects_res_has_all_objects(k1_file):
         assert _frames_have_images(sprites), slot
 
 
+def test_animated_objects_have_every_frame(k1_file):
+    objects = objects_res.load(k1_file("objects.res"))
+    animated = {
+        object_id: simple
+        for object_id, simple in objects.simple.items()
+        if objects_res.frame_duration_ms(simple) is not None
+    }
+    assert sorted(animated) == [341, 342, 343, 355, 451, 452]
+    for simple in animated.values():
+        frames = simple.frames[: simple.frame_count]
+        assert all(frame.image is not None for frame in frames), simple.object_id
+
+
 def test_executable_tables_are_found(k1_game):
     tables = executable.load(k1_game)
     assert len(tables.equipment) == executable.EQUIPMENT_COUNT
@@ -78,6 +91,9 @@ def test_every_character_on_every_map_is_drawn(k1_game, k1_file):
             for character, x, y in characters.placed(entities, state):
                 sprite = characters.compose(character, x, y, state, graph, objects, tables)
                 assert sprite is not None, (hero, number, character.slot)
+                frames = characters.animation(character, x, y, state, graph, objects, tables)
+                count = characters.frame_count(character, graph, objects)
+                assert count > 0 and len(frames) == count, (hero, number, character.slot)
                 if not character.has_dynamic_sprite:
                     worn = [i for i in character.equipment if i > 0]
                     drawn = [
