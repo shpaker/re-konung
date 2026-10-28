@@ -341,6 +341,77 @@ export function applyFootMask(foot, column, row, flag, mask) {
 }
 
 // ---------------------------------------------------------------------------
+// Свет: LIGHTS.N карты и маски LIGHTS.RES (docs/k1/formats/lights-res.md),
+// эталон — konung/k1/map_file.py (parse_lights, serialize_lights) и lights_res.py
+
+export const LIGHTS_SIZE = MAP_WIDTH * MAP_HEIGHT + FOOT_SIZE;
+export const LIGHT_MASKS = 19;
+export const LIGHT_MASK_WIDTH = 114;
+export const LIGHT_MASK_HEIGHT = 64;
+// Две маски в начале LIGHTS.RES (64 × 64 и 64 × 43): Slavik их не использует
+const LIGHTS_RES_TILES_AT = 64 * 64 + 64 * 43;
+const LIGHTS_RES_SIZE = LIGHTS_RES_TILES_AT + LIGHT_MASKS * LIGHT_MASK_WIDTH * LIGHT_MASK_HEIGHT;
+// Slavik переводит яркость в 0–255 как 255 / 100 · v
+const LIGHT_BRIGHTNESS_SCALE = 100;
+
+// Маски тайлов: яркость на пиксель
+export function parseLightsRes(buffer) {
+    if (buffer.byteLength !== LIGHTS_RES_SIZE)
+        throw new Error(`LIGHTS.RES ${buffer.byteLength} байт, ожидалось ${LIGHTS_RES_SIZE}`);
+    const bytes = new Uint8Array(buffer);
+    const size = LIGHT_MASK_WIDTH * LIGHT_MASK_HEIGHT;
+    const masks = [];
+    for (let i = 0; i < LIGHT_MASKS; ++i)
+        masks.push(bytes.slice(LIGHTS_RES_TILES_AT + i * size, LIGHTS_RES_TILES_AT + (i + 1) * size));
+    return masks;
+}
+
+// Картинка маски цветом color (0xRRGGBB): прозрачность — яркость. Маска заполняет
+// весь прямоугольник, а игра светит ею только пиксели тайла — вне ромба прозрачно
+export function lightImage(mask, color) {
+    const width = LIGHT_MASK_WIDTH, height = LIGHT_MASK_HEIGHT;
+    const pixels = new Uint32Array(width * height);
+    for (let y = 0; y < height; ++y)
+        for (let x = 0; x < width; ++x)
+            if (Math.abs(x + 0.5 - width / 2) / (width / 2) + Math.abs(y + 0.5 - height / 2) / (height / 2) <= 1) {
+                const alpha = Math.floor(mask[y * width + x] * 255 / LIGHT_BRIGHTNESS_SCALE);
+                pixels[y * width + x] = ((alpha << 24) | color) >>> 0;
+            }
+    return { width, height, pixels };
+}
+
+// Номер маски + 1 на клетку тайловой сетки, 0 — света нет: [строка][столбец]
+export function parseLights(buffer) {
+    if (buffer.byteLength !== LIGHTS_SIZE)
+        throw new Error(`свет ${buffer.byteLength} байт, ожидалось ${LIGHTS_SIZE}`);
+    const bytes = new Uint8Array(buffer);
+    const tiles = [];
+    for (let y = 0; y < MAP_HEIGHT; ++y)
+        tiles.push(Array.from(bytes.subarray(y * MAP_WIDTH, (y + 1) * MAP_WIDTH)));
+    return tiles;
+}
+
+// Обратно в LIGHTS.N. Мелкий блок — номер маски тайла на 4 его клетки
+// (fineCells), у края — 0: так устроены все файлы дистрибутива
+export function serializeLights(tiles) {
+    const bytes = new Uint8Array(LIGHTS_SIZE);
+    const fineAt = MAP_WIDTH * MAP_HEIGHT;
+    for (let y = 0; y < MAP_HEIGHT; ++y)
+        for (let x = 0; x < MAP_WIDTH; ++x) {
+            const value = tiles[y][x];
+            if (!Number.isInteger(value) || value < 0 || value > LIGHT_MASKS)
+                throw new Error(`свет (${x}, ${y}): маска ${value}, нужно от 0 до ${LIGHT_MASKS}`);
+            bytes[y * MAP_WIDTH + x] = value;
+            for (const [fx, fy] of fineCells(x, y)) {
+                const at = footIndex(fx, fy);
+                if (at >= 0)
+                    bytes[fineAt + at] = value;
+            }
+        }
+    return bytes.buffer;
+}
+
+// ---------------------------------------------------------------------------
 // Game.N — начальное состояние новой игры (docs/k1/formats/game-state.md),
 // эталон — konung/k1/game_state.py. Запись копирует исходный файл и меняет
 // только то, что правится в Tiled: места, направления, прямоугольники,

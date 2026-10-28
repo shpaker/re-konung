@@ -13,7 +13,7 @@
 | `konung.res` | 1586688 | — |  | PE-файл (MZ) — вероятно, `konung.exe`, переименованный установщиком; те же таблицы, что в `KONUNG.EXE` ENG — [executable](formats/executable.md) |
 | `LAN_KONG.EXE` | — | 4118147 |  | сетевая игра |
 | `Lanusers.dat` | — | 1288192 |  | ? |
-| `LIGHTS.RES` | 145472 | 145472 | = | маски света (по Slavik) |
+| `LIGHTS.RES` | 145472 | 145472 | = | маски света — [lights-res](formats/lights-res.md) |
 | `ListFile.ini` | 1337 | — |  | список файлов установки |
 | `Maps.res` | 3856000 | 3856000 | ≠ | ? Гипотеза: 20 записей по 192800 байт = `Konung.N` + `LIGHTS.N`; ни с одной картой дистрибутива не совпадают; Slavik файл не читает |
 | `Objects.res` | 52522058 | 52522058 | = | объекты карты (деревья, дома) — [objects-res](formats/objects-res.md) |
@@ -47,7 +47,7 @@
 
 Группы:
 - `Konung.N` — карты, [formats/map.md](formats/map.md). Номера 1–50 с пропусками: 9, 13, 18, 26, 31, 34, 41.
-- `LIGHTS.N` — освещение карт, [formats/map.md](formats/map.md). Нет для карт 6, 8, 46.
+- `LIGHTS.N` — освещение карт, [formats/map.md](formats/map.md). Нет для карт 6, 8, 46. Маски — `LIGHTS.RES`, [formats/lights-res.md](formats/lights-res.md).
 - `Game.N` — начальное состояние новой игры за героя N (0 — Волк, 1 — Драгомир, 2 — Михаил), [formats/game-state.md](formats/game-state.md). `TGame.1` — то же для обучения.
 - `<экран><разрешение><язык>.RES` — экраны интерфейса: `MENU` (меню), `INTR`/`INTO` (вступление?), `NEW`/`NEWH` (новая игра, выбор героя), `PLAY` (игровой экран), `SAVE` (сохранение), `ME` (?). Разрешение 640 или 800, язык `R`/`E`/`T`. По Slavik: в начале — таблица картинок RLE с палитрами из `GRAPH.RES`.
 - `QUEST*.RES` — 337800 байт во всех языках, вероятно, тексты квестов фиксированной длины.

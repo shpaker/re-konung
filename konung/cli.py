@@ -14,6 +14,7 @@ from konung.k1 import (
     flames_res,
     game_state,
     graph_res,
+    lights_res,
     map_file,
     objects_res,
     render,
@@ -44,6 +45,7 @@ def cmd_k1_map(args: argparse.Namespace) -> None:
     flames = None
     if objects is not None:
         flames = (flames_res.load(_find_name(args.game, "flames.res")), tables.flame_animations)
+    masks = lights_res.load(_find_name(args.game, "lights.res")) if args.lights else None
     numbers = map_file.map_numbers(args.game) if args.number is None else [args.number]
     args.out.mkdir(parents=True, exist_ok=True)
     for number in numbers:
@@ -57,12 +59,15 @@ def cmd_k1_map(args: argparse.Namespace) -> None:
                     sprites.append(sprite)
         konung_map = map_file.load(args.game, number)
         image = render.render(konung_map, graph, objects, sprites, flames)
+        if masks is not None and (path := map_file.lights_path(args.game, number)):
+            render.draw_lights(image, map_file.parse_lights(path.read_bytes()), masks)
         if args.foot:
             render.draw_foot(image, konung_map)
         if entities is not None:
             # Персонажей видно спрайтами; маркеры — только когда спрайтов нет
             render.draw_game(image, entities, characters=objects is None)
-        suffix = ("" if state is None else f"-game{args.state}") + ("-foot" if args.foot else "")
+        suffix = "" if state is None else f"-game{args.state}"
+        suffix += "-lights" * args.lights + "-foot" * args.foot
         path = args.out / f"konung{number:02d}{suffix}.png"
         image.save(path)
         print(path)
@@ -164,6 +169,7 @@ def main() -> None:
     p.add_argument(
         "--foot", action="store_true", help="проходимость поверх карты: красное — непроходимо"
     )
+    p.add_argument("--lights", action="store_true", help="свет LIGHTS.N поверх карты")
     p.set_defaults(func=cmd_k1_map)
 
     p = k1.add_parser("sprites", help="спрайты персонажей, снаряжения и монстров в PNG")
