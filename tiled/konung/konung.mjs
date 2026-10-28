@@ -1,7 +1,8 @@
 // Расширение Tiled: открывает оригинальные карты «Князя» (Konung.N) как обычные
-// карты Tiled и сохраняет их обратно. Меняются тайлы, декорации и объекты карты,
-// а в Game.N рядом с картой — персонажи, отряды, клады и переходы этой карты;
-// GRAPH.RES, Objects.res и exe лишь читаются. Слои — docs/k1/tiled.md.
+// карты Tiled и сохраняет их обратно. Меняются тайлы, декорации, объекты и
+// проходимость карты, её свет в LIGHTS.N, а в Game.N рядом с картой — персонажи,
+// отряды, клады и переходы этой карты; GRAPH.RES, Objects.res, LIGHTS.RES и exe
+// лишь читаются. Слои — docs/k1/tiled.md.
 
 import * as k1 from "./lib/k1.mjs";
 
@@ -19,6 +20,9 @@ const FOOT_LAYERS = [
     { name: "foot-arrows", flag: k1.FOOT_FLAGS.arrows, color: 0x6e2878ff },
 ];
 const FOOT_MASKS = 16;
+
+// Свет — тот же цвет, что в `konung k1 map --lights`
+const LIGHT_COLOR = 0xffd278;
 
 // Значения полей для декораций и объектов, поставленных в Tiled: самые частые
 // в картах дистрибутива (docs/k1/formats/map.md)
@@ -102,6 +106,30 @@ function loadFlames(directory) {
     if (!flamesCache.has(path))
         flamesCache.set(path, k1.parseFlames(readBuffer(path)));
     return flamesCache.get(path);
+}
+
+const lightMasksCache = new Map();
+
+// Маски LIGHTS.RES; без файла света нет
+function loadLightMasks(directory) {
+    let path;
+    try {
+        path = findFile(directory, "lights.res");
+    } catch (error) {
+        return null;
+    }
+    if (!lightMasksCache.has(path))
+        lightMasksCache.set(path, k1.parseLightsRes(readBuffer(path)));
+    return lightMasksCache.get(path);
+}
+
+// LIGHTS.N карты: у карт 6, 8 и 46 его нет
+function findLights(directory, number) {
+    try {
+        return findFile(directory, `lights.${number}`);
+    } catch (error) {
+        return null;
+    }
 }
 
 function loadTables(directory) {
@@ -315,8 +343,59 @@ function buildMap(fileName) {
     addObjects(map, objects, shadowsTileset, objectsTileset, data.objects);
     addFlames(map, directory, objects, data.objects);
     addGameStates(map, directory, number, graph);
+    addLights(map, directory, number);
     addFoot(map, data.foot);
     return map;
+}
+
+// Свет LIGHTS.N — тайловый слой поверх карты, скрыт. Номер тайла — номер маски
+// LIGHTS.RES (в файле он на 1 больше). Без LIGHTS.N или LIGHTS.RES слоя нет
+function addLights(map, directory, number) {
+    const masks = loadLightMasks(directory);
+    const path = findLights(directory, number);
+    if (!masks || !path)
+        return;
+    const tiles = k1.parseLights(readBuffer(path));
+    const tileset = buildTileset("lights", masks.length, index => k1.lightImage(masks[index], LIGHT_COLOR));
+    map.addTileset(tileset);
+    const layer = new TileLayer("lights");
+    layer.resize(Qt.size(k1.MAP_WIDTH, k1.MAP_HEIGHT));
+    const edit = layer.edit();
+    tiles.forEach((row, y) => row.forEach((value, x) => {
+        if (value)
+            edit.setTile(x, y, tileset.tile(value - 1));
+    }));
+    edit.apply();
+    layer.visible = false;
+    map.addLayer(layer);
+}
+
+// LIGHTS.N из слоя lights — рядом с сохраняемой картой и под её номером.
+// Имя (регистр) берётся у файла рядом с ней или у исходного
+function collectLights(map, fileName) {
+    let layer = null;
+    for (let i = 0; i < map.layerCount; ++i)
+        if (map.layerAt(i).name === "lights" && map.layerAt(i).isTileLayer)
+            layer = map.layerAt(i);
+    if (!layer)
+        return null;
+    const tiles = [];
+    for (let y = 0; y < k1.MAP_HEIGHT; ++y) {
+        const row = [];
+        for (let x = 0; x < k1.MAP_WIDTH; ++x) {
+            const tile = layer.tileAt(x, y);
+            if (tile && (!tile.tileset || tile.tileset.name !== "lights"))
+                throw new Error(`lights (${x}, ${y}): тайл не из тайлсета lights`);
+            row.push(tile ? tile.id + 1 : 0);
+        }
+        tiles.push(row);
+    }
+    const target = FileInfo.path(fileName);
+    const number = Number(FileInfo.suffix(fileName));
+    const existing = findLights(target, number) ||
+        (map.fileName && findLights(FileInfo.path(map.fileName), number));
+    const name = existing ? FileInfo.fileName(existing) : `LIGHTS.${number}`;
+    return { path: `${target}/${name}`, buffer: k1.serializeLights(tiles) };
 }
 
 // Проходимость — над всеми слоями, скрыта: включить, когда нужна
@@ -863,12 +942,15 @@ function writeBuffer(path, buffer) {
 }
 
 // Сначала собирается всё, потом пишется: ошибка в правках не оставит
-// Konung.N и Game.N рассогласованными
+// Konung.N, LIGHTS.N и Game.N рассогласованными
 function writeMap(map, fileName) {
     try {
         const buffer = k1.serializeMap(collectMap(map));
         const states = collectGameStates(map, fileName);
+        const lights = collectLights(map, fileName);
         writeBuffer(fileName, buffer);
+        if (lights)
+            writeBuffer(lights.path, lights.buffer);
         for (const { key, path, buffer: state } of states) {
             writeBuffer(path, state);
             savedChecksums.set(key, checksum(state));

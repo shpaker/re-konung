@@ -1,4 +1,4 @@
-from konung.k1 import graph_res, map_file, objects_res
+from konung.k1 import graph_res, lights_res, map_file, objects_res
 
 
 def test_every_map_references_existing_resources(k1_game, k1_file):
@@ -68,3 +68,24 @@ def test_lights_files_match_their_size(k1_game):
             lights = map_file.parse_lights(path.read_bytes())
             assert len(lights.tiles) == map_file.HEIGHT
             assert len(lights.fine) == map_file.FINE_HEIGHT
+
+
+def test_lights_fine_block_follows_tiles(k1_game, k1_file):
+    # Мелкий блок — номер маски тайла на 4 его клетки: запись его пересчитывает
+    numbers = map_file.map_numbers(k1_game)
+    found = [p for n in numbers if (p := map_file.lights_path(k1_game, n))]
+    assert len(found) == 40
+    assert {n for n in numbers if not map_file.lights_path(k1_game, n)} == {6, 8, 46}
+    masks = len(lights_res.load(k1_file("lights.res")).tiles)
+    for path in found:
+        data = path.read_bytes()
+        lights = map_file.parse_lights(data)
+        assert lights.fine == map_file.lights_fine(lights.tiles), path.name
+        assert map_file.serialize_lights(lights) == data, path.name
+        assert all(v <= masks for row in lights.tiles for v in row), path.name
+
+
+def test_lights_res_has_nineteen_tile_masks(k1_file):
+    res = lights_res.load(k1_file("lights.res"))
+    assert len(res.tiles) == lights_res.TILE_MASKS
+    assert max(max(mask) for mask in res.tiles) < lights_res.BRIGHTNESS_SCALE

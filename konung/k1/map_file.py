@@ -77,7 +77,9 @@ class KonungMap:
 
 @dataclass
 class Lights:
+    # Номер маски LIGHTS.RES + 1 на клетку тайловой сетки, 0 — света нет [строка][столбец]
     tiles: list[bytes]
+    # Тот же номер на 4 клетки мелкой сетки в ромбе тайла (fine_cells), у края — 0
     fine: list[bytes]
 
 
@@ -182,6 +184,33 @@ def parse_lights(data: bytes) -> Lights:
     tiles = [reader.bytes(WIDTH) for _ in range(HEIGHT)]
     fine = [reader.bytes(FINE_WIDTH) for _ in range(FINE_HEIGHT)]
     return Lights(tiles, fine)
+
+
+def lights_fine(tiles: list[bytes]) -> list[bytes]:
+    """Мелкий блок LIGHTS.N из тайлового: так он устроен во всех файлах дистрибутива."""
+    fine = [bytearray(FINE_WIDTH) for _ in range(FINE_HEIGHT)]
+    for row, values in enumerate(tiles):
+        for column, value in enumerate(values):
+            for x, y in fine_cells(column, row):
+                if x < FINE_WIDTH and y < FINE_HEIGHT:
+                    fine[y][x] = value
+    return [bytes(row) for row in fine]
+
+
+def serialize_lights(lights: Lights) -> bytes:
+    """Свет обратно в LIGHTS.N; мелкий блок пересчитывается из тайлового."""
+    out = b"".join(lights.tiles) + b"".join(lights_fine(lights.tiles))
+    if len(out) != LIGHTS_SIZE:
+        raise ValueError(f"получилось {len(out)} байт вместо {LIGHTS_SIZE}")
+    return out
+
+
+def lights_path(game_dir: Path, number: int) -> Path | None:
+    """LIGHTS.N карты; у карт 6, 8 и 46 его нет."""
+    try:
+        return find(game_dir, "lights", number)
+    except FileNotFoundError:
+        return None
 
 
 def find(game_dir: Path, prefix: str, number: int) -> Path:

@@ -6,10 +6,11 @@ from functools import cache
 from PIL import Image, ImageDraw
 
 from konung import images, rle
-from konung.k1 import flames_res, game_state, map_file
+from konung.k1 import flames_res, game_state, lights_res, map_file
 from konung.k1.characters import CharacterSprite
 from konung.k1.flames_res import FlamesRes
 from konung.k1.graph_res import GraphRes, Sprites
+from konung.k1.lights_res import LightsRes
 from konung.k1.objects_res import ObjectsRes
 
 # Тени — чёрная маска с прозрачностью 0.4 (как слой shadows в Tiled)
@@ -204,6 +205,23 @@ def draw_foot(canvas: Image.Image, konung_map: map_file.KonungMap) -> None:
                     top, bottom = (cx, cy - half_y), (cx, cy + half_y)
                     draw.polygon((top, (cx + half_x, cy), bottom, (cx - half_x, cy)), fill=color)
         canvas.alpha_composite(overlay)
+
+
+# Свет — тот же цвет, что у тайлсета lights в Tiled
+LIGHT_COLOR = (255, 210, 120)
+
+
+def draw_lights(canvas: Image.Image, lights: map_file.Lights, masks: LightsRes) -> None:
+    """Поверх карты — маски света тайлов из LIGHTS.N: яркость маски — прозрачность.
+
+    Это подсказка, где свет: в игре он ложится только на тайлы земли и верхнего
+    слоя, а декорации и объекты рисуются поверх (Slavik `game.cpp:996-1003`).
+    """
+    images = [lights_res.to_rgba(mask, LIGHT_COLOR) for mask in masks.tiles]
+    for row, values in enumerate(lights.tiles):
+        for column, value in enumerate(values):
+            if value:
+                canvas.alpha_composite(images[value - 1], map_file.tile_position(column, row))
 
 
 def draw_game(
