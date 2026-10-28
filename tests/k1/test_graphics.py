@@ -1,6 +1,14 @@
 from konung import rle
 from konung.binary import Reader
-from konung.k1 import characters, executable, game_state, graph_res, map_file, objects_res
+from konung.k1 import (
+    characters,
+    executable,
+    flames_res,
+    game_state,
+    graph_res,
+    map_file,
+    objects_res,
+)
 
 
 def test_graph_res_is_parsed_to_the_last_byte(k1_file):
@@ -78,6 +86,20 @@ def test_executable_tables_are_found(k1_game):
     assert all(-1 <= info.sprite_set < 24 for info in tables.equipment)
     assert len(tables.draw_order) == 8
     assert all(sorted(row) == list(range(6)) for row in tables.draw_order)
+    assert len(tables.flame_animations) == executable.FLAME_KINDS
+
+
+def test_flames_res_is_parsed_to_the_last_byte(k1_file, k1_game):
+    data = k1_file("flames.res").read_bytes()
+    flames = flames_res.parse(data)
+    assert len(flames.frames) == executable.FLAME_FRAMES
+    assert set(flames.tags) == {0x05000000}
+    objects = objects_res.load(k1_file("objects.res"))
+    kinds = {flame.flame_id for simple in objects.simple.values() for flame in simple.flames}
+    assert kinds <= set(range(executable.FLAME_KINDS))
+    tables = executable.load(k1_game)
+    last = tables.flame_animations[-1][1]
+    assert last == len(flames.frames) - 1
 
 
 def test_every_character_on_every_map_is_drawn(k1_game, k1_file):

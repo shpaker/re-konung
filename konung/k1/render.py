@@ -6,8 +6,9 @@ from functools import cache
 from PIL import Image, ImageDraw
 
 from konung import images, rle
-from konung.k1 import game_state, map_file
+from konung.k1 import flames_res, game_state, map_file
 from konung.k1.characters import CharacterSprite
+from konung.k1.flames_res import FlamesRes
 from konung.k1.graph_res import GraphRes, Sprites
 from konung.k1.objects_res import ObjectsRes
 
@@ -31,7 +32,10 @@ def render(
     graph: GraphRes,
     objects: ObjectsRes | None = None,
     characters: Sequence[CharacterSprite] = (),
+    flames: tuple[FlamesRes, list[tuple[int, int]]] | None = None,
 ) -> Image.Image:
+    """Карта целиком; flames — кадры огней и их анимации из exe: огни объектов поверх них."""
+
     @cache
     def tile_image(index: int) -> Image.Image:
         tile = graph.tiles[index]
@@ -52,7 +56,7 @@ def render(
             blit(canvas, tile_image(decoration.tile), decoration.x, decoration.y)
 
     if objects is not None:
-        _draw_objects(canvas, konung_map, graph, objects, characters)
+        _draw_objects(canvas, konung_map, graph, objects, characters, flames)
     return canvas
 
 
@@ -92,8 +96,9 @@ def blit(canvas: Image.Image, sprite: Image.Image, x: int, y: int) -> None:
     canvas.alpha_composite(sprite, (x + left, y + top))
 
 
-# Кусок картинки: картинка, начало палитры, левый верхний угол на карте
-Piece = tuple[rle.IndexedImage, int, int, int]
+# Кусок картинки: картинка (с палитрой — индексы и начало палитры, иначе готовая
+# RGBA), левый верхний угол на карте
+Piece = tuple[rle.IndexedImage | Image.Image, int, int, int]
 
 
 def _draw_objects(
@@ -102,7 +107,12 @@ def _draw_objects(
     graph: GraphRes,
     objects: ObjectsRes,
     characters: Sequence[CharacterSprite],
+    flames: tuple[FlamesRes, list[tuple[int, int]]] | None = None,
 ) -> None:
+    @cache
+    def flame_image(index: int) -> Image.Image:
+        return flames_res.to_rgba(flames[0].frames[index])
+
     # (ключ сортировки, картинки по порядку, тень)
     drawn: list[tuple[tuple[int, int, int], list[Piece], Piece | None]] = []
     for placed in konung_map.objects:
@@ -120,7 +130,14 @@ def _draw_objects(
         if frame.shadow is not None:
             shadow = (frame.shadow, 0, x + frame.shadow_offset[0], y + frame.shadow_offset[1])
         key = (image_y + frame.image.height, 0, placed.slot)
-        drawn.append((key, [(frame.image, simple.palette_offset, image_x, image_y)], shadow))
+        pieces: list[Piece] = [(frame.image, simple.palette_offset, image_x, image_y)]
+        # Огни объекта — сразу поверх него, первый кадр анимации своего вида,
+        # от позиции объекта (Slavik game.cpp:1587-1597)
+        if flames is not None:
+            for flame in simple.flames:
+                first, _ = flames[1][flame.flame_id]
+                pieces.append((flame_image(first), 0, x + flame.x, y + flame.y))
+        drawn.append((key, pieces, shadow))
     for sprite in characters:
         pieces = [(layer.image, layer.palette_offset, layer.x, layer.y) for layer in sprite.layers]
         shadow = None
@@ -145,7 +162,9 @@ def _draw_objects(
     drawn.sort(key=lambda item: item[0])
     for _, pieces, _ in drawn:
         for image, palette_offset, x, y in pieces:
-            blit(canvas, images.indexed_to_rgba(image, graph.palette(palette_offset)), x, y)
+            if isinstance(image, rle.IndexedImage):
+                image = images.indexed_to_rgba(image, graph.palette(palette_offset))
+            blit(canvas, image, x, y)
 
 
 # Маркеры Game.N: цвет на каждый вид, чтобы проверить места картинкой
