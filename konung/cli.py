@@ -8,7 +8,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 from konung import disc, images
-from konung.k1 import game_state, graph_res, map_file, objects_res, render
+from konung.k1 import characters, executable, game_state, graph_res, map_file, objects_res, render
 
 
 def cmd_disc(args: argparse.Namespace) -> None:
@@ -31,16 +31,53 @@ def cmd_k1_map(args: argparse.Namespace) -> None:
     graph = graph_res.load(_find_name(args.game, "graph.res"))
     objects = None if args.no_objects else objects_res.load(_find_name(args.game, "objects.res"))
     state = None if args.state is None else game_state.load(args.game, args.state)
+    tables = None if state is None or objects is None else executable.load(args.game)
     numbers = map_file.map_numbers(args.game) if args.number is None else [args.number]
     args.out.mkdir(parents=True, exist_ok=True)
     for number in numbers:
-        image = render.render(map_file.load(args.game, number), graph, objects)
-        if state is not None:
-            render.draw_game(image, game_state.on_map(state, number, args.state))
+        entities = None if state is None else game_state.on_map(state, number, args.state)
+        sprites = []
+        if tables is not None:
+            for character, x, y in characters.placed(entities, state):
+                px, py = game_state.character_position(x, y)
+                sprite = characters.compose(character, px, py, state, graph, objects, tables)
+                if sprite is not None:
+                    sprites.append(sprite)
+        image = render.render(map_file.load(args.game, number), graph, objects, sprites)
+        if entities is not None:
+            # Персонажей видно спрайтами; маркеры — только когда спрайтов нет
+            render.draw_game(image, entities, characters=tables is None)
         suffix = "" if state is None else f"-game{args.state}"
         path = args.out / f"konung{number:02d}{suffix}.png"
         image.save(path)
         print(path)
+
+
+def cmd_k1_sprites(args: argparse.Namespace) -> None:
+    graph = graph_res.load(_find_name(args.game, "graph.res"))
+    objects = objects_res.load(_find_name(args.game, "objects.res"))
+    # Палитра модели или динамического объекта — у персонажей Game.0, которые им рисуются
+    state = game_state.load(args.game, 0)
+    palettes: dict[tuple[bool, int], int] = {}
+    for character in state.characters:
+        if character is not None:
+            key = (character.has_dynamic_sprite, character.sprite_set)
+            palettes.setdefault(key, character.palette_offset // 2)
+    sheets = [(f"model{i}", s, palettes.get((False, i), 0)) for i, s in enumerate(graph.models)]
+    sheets += [
+        (f"equipment{i:02d}", s, executable.EQUIPMENT_PALETTES[i] * characters.COLORS_PER_PALETTE)
+        for i, s in enumerate(graph.equipment)
+    ]
+    sheets += [
+        (f"dynamic{i:02d}", s, palettes.get((True, i), 0))
+        for i, s in sorted(objects.dynamic.items())
+    ]
+    args.out.mkdir(parents=True, exist_ok=True)
+    for name, sprites, palette in sheets:
+        sheet = render.sprite_sheet(sprites, graph, palette)
+        if sheet is not None:
+            sheet.save(args.out / f"{name}.png")
+    print(f"{len(sheets)} спрайтов → {args.out}")
 
 
 def cmd_k1_game(args: argparse.Namespace) -> None:
@@ -99,6 +136,11 @@ def main() -> None:
         "--game", dest="state", type=int, help="номер Game.N: маркеры персонажей и переходов"
     )
     p.set_defaults(func=cmd_k1_map)
+
+    p = k1.add_parser("sprites", help="спрайты персонажей, снаряжения и монстров в PNG")
+    p.add_argument("game", type=Path, help="папка установленной игры")
+    p.add_argument("out", type=Path)
+    p.set_defaults(func=cmd_k1_sprites)
 
     p = k1.add_parser("game", help="начальное состояние Game.N в JSON")
     p.add_argument("game", type=Path, help="папка установленной игры")

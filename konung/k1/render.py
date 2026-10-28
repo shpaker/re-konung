@@ -1,12 +1,14 @@
 """Карта целиком в одну картинку — эталон для сверки с Tiled и с игрой."""
 
+from collections.abc import Sequence
 from functools import cache
 
 from PIL import Image, ImageDraw
 
-from konung import images
+from konung import images, rle
 from konung.k1 import game_state, map_file
-from konung.k1.graph_res import GraphRes
+from konung.k1.characters import CharacterSprite
+from konung.k1.graph_res import GraphRes, Sprites
 from konung.k1.objects_res import ObjectsRes
 
 # Тени — чёрная маска с прозрачностью 0.4 (как слой shadows в Tiled)
@@ -28,6 +30,7 @@ def render(
     konung_map: map_file.KonungMap,
     graph: GraphRes,
     objects: ObjectsRes | None = None,
+    characters: Sequence[CharacterSprite] = (),
 ) -> Image.Image:
     @cache
     def tile_image(index: int) -> Image.Image:
@@ -49,8 +52,34 @@ def render(
             blit(canvas, tile_image(decoration.tile), decoration.x, decoration.y)
 
     if objects is not None:
-        _draw_objects(canvas, konung_map, graph, objects)
+        _draw_objects(canvas, konung_map, graph, objects, characters)
     return canvas
+
+
+def sprite_sheet(sprites: Sprites, graph: GraphRes, palette_offset: int) -> Image.Image | None:
+    """Первый кадр каждой анимации по 8 направлениям: строка — анимация, столбец — направление."""
+    cells: list[list[Image.Image | None]] = []
+    for animation in sprites.sequences:
+        row = []
+        for sequence in animation:
+            image = sprites.image(sequence[0].image_id) if sequence else None
+            row.append(
+                None
+                if image is None
+                else images.indexed_to_rgba(image, graph.palette(palette_offset))
+            )
+        cells.append(row)
+    drawn = [cell for row in cells for cell in row if cell is not None]
+    if not drawn:
+        return None
+    width = max(cell.width for cell in drawn)
+    height = max(cell.height for cell in drawn)
+    sheet = Image.new("RGBA", (width * len(cells[0]), height * len(cells)))
+    for y, row in enumerate(cells):
+        for x, cell in enumerate(row):
+            if cell is not None:
+                sheet.alpha_composite(cell, (x * width, y * height + height - cell.height))
+    return sheet
 
 
 def blit(canvas: Image.Image, sprite: Image.Image, x: int, y: int) -> None:
@@ -63,13 +92,19 @@ def blit(canvas: Image.Image, sprite: Image.Image, x: int, y: int) -> None:
     canvas.alpha_composite(sprite, (x + left, y + top))
 
 
+# Кусок картинки: картинка, начало палитры, левый верхний угол на карте
+Piece = tuple[rle.IndexedImage, int, int, int]
+
+
 def _draw_objects(
     canvas: Image.Image,
     konung_map: map_file.KonungMap,
     graph: GraphRes,
     objects: ObjectsRes,
+    characters: Sequence[CharacterSprite],
 ) -> None:
-    drawn = []
+    # (ключ сортировки, картинки по порядку, тень)
+    drawn: list[tuple[tuple[int, int, int], list[Piece], Piece | None]] = []
     for placed in konung_map.objects:
         simple = objects.simple.get(placed.object_id)
         if simple is None:
@@ -80,27 +115,37 @@ def _draw_objects(
         if frame.image is None:
             continue
         x, y = object_position(placed.x, placed.y)
-        drawn.append((x, y, simple, frame, placed.slot))
+        image_x, image_y = x + frame.offset[0], y + frame.offset[1]
+        shadow = None
+        if frame.shadow is not None:
+            shadow = (frame.shadow, 0, x + frame.shadow_offset[0], y + frame.shadow_offset[1])
+        key = (image_y + frame.image.height, 0, placed.slot)
+        drawn.append((key, [(frame.image, simple.palette_offset, image_x, image_y)], shadow))
+    for sprite in characters:
+        pieces = [(layer.image, layer.palette_offset, layer.x, layer.y) for layer in sprite.layers]
+        shadow = None
+        if sprite.shadow is not None:
+            shadow = (sprite.shadow.image, 0, sprite.shadow.x, sprite.shadow.y)
+        drawn.append(((sprite.bottom, 1, sprite.character.slot), pieces, shadow))
 
     shadow_layer = Image.new("RGBA", canvas.size)
-    for x, y, _, frame, _ in drawn:
-        if frame.shadow is None:
+    for _, _, shadow in drawn:
+        if shadow is None:
             continue
-        mask = Image.frombytes(
-            "L", (frame.shadow.width, frame.shadow.height), bytes(frame.shadow.alpha)
-        )
+        mask_image, _, x, y = shadow
+        mask = Image.frombytes("L", (mask_image.width, mask_image.height), bytes(mask_image.alpha))
         black = Image.new("RGBA", mask.size, (0, 0, 0, SHADOW_ALPHA))
-        shadow = Image.new("RGBA", mask.size)
-        shadow.paste(black, (0, 0), mask)
-        blit(shadow_layer, shadow, x + frame.shadow_offset[0], y + frame.shadow_offset[1])
+        layer = Image.new("RGBA", mask.size)
+        layer.paste(black, (0, 0), mask)
+        blit(shadow_layer, layer, x, y)
     canvas.alpha_composite(shadow_layer)
 
     # Ближе к зрителю то, что ниже на экране: сортировка по нижнему краю, как в игре;
-    # при равенстве — по слоту в файле карты
-    drawn.sort(key=lambda item: (item[1] + item[3].offset[1] + item[3].image.height, item[4]))
-    for x, y, simple, frame, _ in drawn:
-        sprite = images.indexed_to_rgba(frame.image, graph.palette(simple.palette_offset))
-        blit(canvas, sprite, x + frame.offset[0], y + frame.offset[1])
+    # при равенстве — объекты раньше персонажей, дальше по слоту
+    drawn.sort(key=lambda item: item[0])
+    for _, pieces, _ in drawn:
+        for image, palette_offset, x, y in pieces:
+            blit(canvas, images.indexed_to_rgba(image, graph.palette(palette_offset)), x, y)
 
 
 # Маркеры Game.N: цвет на каждый вид, чтобы проверить места картинкой
@@ -117,8 +162,10 @@ MARKER_COLORS = {
 MARKER_RADIUS = 8
 
 
-def draw_game(canvas: Image.Image, entities: game_state.MapEntities) -> None:
-    """Поверх карты — маркеры персонажей, отрядов, кладов и переходов."""
+def draw_game(
+    canvas: Image.Image, entities: game_state.MapEntities, characters: bool = True
+) -> None:
+    """Поверх карты — маркеры отрядов, кладов и переходов; characters — и персонажей."""
     draw = ImageDraw.Draw(canvas)
 
     def point(kind: str, x: int, y: int, label: str) -> None:
@@ -139,7 +186,7 @@ def draw_game(canvas: Image.Image, entities: game_state.MapEntities) -> None:
         if group.is_roaming:
             rect("leash", group.leash, "")
             rect("spawn", group.spawn, f"g{group.slot} {group.kind:#x} ×{group.size}")
-    for character in entities.characters:
+    for character in entities.characters if characters else ():
         point("character", character.x, character.y, f"c{character.slot}")
     for _, job in entities.jobs:
         point("job", job.x, job.y, job.role)

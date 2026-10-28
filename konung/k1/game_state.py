@@ -180,7 +180,11 @@ class Character:
     runtime: bytes
 
     @property
-    def is_monster(self) -> bool:
+    def has_dynamic_sprite(self) -> bool:
+        """Бит 0x40 класса: спрайт — динамический объект OBJECTS.RES, а не модель GRAPH.RES.
+
+        Так рисуются монстры, а ещё женщины и дети в деревнях.
+        """
         return bool(self.class_id & 0x40)
 
 
