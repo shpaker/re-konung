@@ -19,6 +19,8 @@
 
 | Файл | Что внутри | Статус | Код | Описание |
 |---|---|---|---|---|
+| `Konung.N` | карта локации N | разобран, кроме карты проходимости и части полей объектов | `konung/k1/map_file.py` | [map.md](k1/formats/map.md) |
+| `LIGHTS.N` | освещение карты | разобрана структура, смысл значений — нет | `konung/k1/map_file.py` | [map.md](k1/formats/map.md) |
 | `GRAPH.RES` | палитры, курсоры, тайлы, спрайты персонажей | разобран до последнего байта; спрайты персонажей — только границы блоков | `konung/k1/graph_res.py` | [graph-res.md](k1/formats/graph-res.md) |
 | `OBJECTS.RES` | объекты карты | простые объекты разобраны, динамические (30) — нет | `konung/k1/objects_res.py` | [objects-res.md](k1/formats/objects-res.md) |
 | RLE-картинки | сжатие всех спрайтов | разобрано | `konung/rle.py` | [rle.md](k1/formats/rle.md) |
