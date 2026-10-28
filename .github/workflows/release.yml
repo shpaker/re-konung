@@ -1,4 +1,4 @@
-# GitHub Release для тега: текст — git-cliff, файлы — с этапом расширения Tiled.
+# GitHub Release для тега: текст — git-cliff, файлы — расширение Tiled.
 # Вызывается из version.yml
 name: release
 
@@ -30,10 +30,14 @@ jobs:
       - name: Release notes
         run: just changelog > release_body.md
 
+      - name: Tiled extension
+        run: just tiled-package "$VERSION"
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.VERSION }}
           name: ${{ env.VERSION }}
           body_path: release_body.md
+          files: out/konung-tiled-${{ env.VERSION }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
