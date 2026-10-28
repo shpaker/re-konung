@@ -21,6 +21,17 @@ hooks = [
     { id = "check-illegal-windows-names" },
     # Оригиналы игры и их производные в git не попадают
     { id = "check-added-large-files", args = ["--maxkb=512"] },
+    # Где скачать игру, проект не подсказывает (AGENTS.md, «Авторский контент»)
+    { id = "deny-pattern", alias = "no-download-links", name = "no download links", exclude = '^prek\.toml$', args = [
+        "-i",
+        'archive\.org/(details|download)',
+        "torrent",
+        'magnet:\?',
+        "rutracker",
+        'rutor\.',
+        "nnmclub",
+        "abandon(ware|ia)",
+    ] },
     { id = "detect-private-key" },
     # Коммиты — только от лица автора, без упоминаний ИИ (AGENTS.md, «Git»)
     { id = "check-commit-trailers", stages = ["commit-msg", "pre-push"], args = [
@@ -71,3 +82,11 @@ entry = "just test"
 stages = ["pre-push", "manual"]
 pass_filenames = false
 always_run = true
+
+# Файлы игры по именам — на случай `git add -f` мимо .gitignore (AGENTS.md, «Авторский контент»)
+[[repos.hooks]]
+id = "no-game-files"
+name = "no game files"
+language = "fail"
+entry = "файлы игры в git не попадают, их место — original/"
+files = '(?i)(\.(res|mds|mdf|iso|rar|flm|wav|ogg|exe|dll|dat)$|(^|/)(konung|lights|tlights|tutorial|game)\.\d+$|(^|/)konung\.sa\d$)'
