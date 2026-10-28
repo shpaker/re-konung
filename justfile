@@ -23,6 +23,14 @@ fmt:
     uv run ruff format
     uv run ruff check --fix
 
+# Образ диска «Князя» (RAR с MDS/MDF из original/k1/rar) → original/k1/<издание>/{image,disc,files,game}
+[windows]
+k1-unpack edition archive:
+    & 'C:/Program Files/7-Zip/7z.exe' x -y -o'original/k1/{{edition}}/image' '{{archive}}' | Out-Null
+    uv run konung disc (Get-ChildItem 'original/k1/{{edition}}/image/*.mds').FullName 'original/k1/{{edition}}/disc'
+    & 'C:/Program Files/7-Zip/7z.exe' x -y -o'original/k1/{{edition}}/files' 'original/k1/{{edition}}/disc/track01.iso' | Out-Null
+    & 'C:/Program Files/7-Zip/7z.exe' x -y -o'original/k1/{{edition}}/game' 'original/k1/{{edition}}/files/inst/setup.dat' | Out-Null; if ($LASTEXITCODE -gt 2) { exit $LASTEXITCODE }
+
 # Следующая версия по коммитам с последнего тега (git-cliff, cliff.toml);
 # пусто — с последнего тега нет коммитов, которые попадают в релиз
 [unix]

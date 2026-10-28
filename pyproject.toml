@@ -9,6 +9,9 @@ dependencies = [
     "pillow>=11",
 ]
 
+[project.scripts]
+konung = "konung.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8",
