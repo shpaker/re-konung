@@ -1,0 +1,44 @@
+# Форма PR по CONTRIBUTING.md: заголовок, разделы описания, без упоминаний ИИ
+name: pr
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  form:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            refactor
+            perf
+            docs
+            test
+            build
+            ci
+            chore
+            style
+            revert
+
+      - uses: actions/github-script@v9.0.0
+        with:
+          script: |
+            const { title, body } = context.payload.pull_request
+            const text = body ?? ''
+            const problems = []
+            for (const section of ['## Что', '## Зачем', '## Имеет отношение к', '## Как проверить', '## Как делать ревью', '## Риски', '## Окружение']) {
+              if (!text.includes(section)) problems.push(`в описании нет раздела «${section}»`)
+            }
+            // Пути вроде .claude/skills — не упоминание: перед именем точка или слэш
+            const ai = /(?<![.\/\w])(claude|qwen)|co-authored-by|generated with|(^|[^\p{L}])ИИ([^\p{L}]|$)|нейросет|\bai\//iu
+            if (ai.test(`${title}\n${text}`)) problems.push('в заголовке или описании упоминается ИИ')
+            if (problems.length > 0) core.setFailed(`PR не по CONTRIBUTING.md:\n${problems.join('\n')}`)
