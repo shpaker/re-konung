@@ -4,7 +4,12 @@
 
 ## Навыки
 
-`.claude/skills/<навык>/SKILL.md`, плоско:
+Навыки двух видов, оба — `<навык>/SKILL.md`, плоско.
+
+**Для людей** — `skills/` в корне. Репозиторий — плагин, как tiled-mcp: манифесты `.claude-plugin/` (Claude Code), `plugin.json` и `.agents/plugins/marketplace.json` (Codex), `qwen-extension.json` (Qwen Code). Пользователь ставит плагин в своего агента без клона (команды — в [README.md](../README.md)), поэтому навык не опирается на `just`, `uv` и `original/`, а пути берёт от своей папки (корень плагина — два уровня вверх).
+- `konung-tiled-install` — поставить расширение `tiled/konung/` в Tiled и проверить, что оно загрузилось и открывает `Konung.N`.
+
+**Для разработки** — `.claude/skills/`, только в клоне:
 - `konung-reverse-format` — цикл разбора формата: гипотеза → проверка на всех файлах → парсер и тест → документ → Tiled.
 - `tiled` — из плагина tiled-mcp: работа с открытыми в Tiled картами.
 

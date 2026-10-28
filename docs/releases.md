@@ -37,6 +37,7 @@ uvx git-cliff --unreleased
 
 - Python-пакет: версию из тега берёт `hatch-vcs` (`pyproject.toml`), между тегами получается `X.Y.Z.devN+g<sha>`. Показывает её `uv run konung --version`.
 - Расширение Tiled: в zip релиза лежит файл `konung/VERSION` с тегом.
+- Плагин для агентов (`.claude-plugin/`, `plugin.json`, `qwen-extension.json`): версия с тегами не связана. В манифестах Claude Code и Codex её нет, и плагин обновляется по коммитам `main`. В `qwen-extension.json` стоит заглушка `0.0.0`.
 
 ## Установка расширения из релиза
 

@@ -32,4 +32,25 @@ just tiled-install
 
 После этого в Tiled: «Файл → Открыть» → `original/k1/rus/game/Konung.1`.
 
+## Через агента
+
+Репозиторий — плагин для Claude Code, Codex и Qwen Code с навыком `konung-tiled-install`: агент ставит расширение в Tiled и проверяет, что карта открывается. Клон и `just` для этого не нужны, только Tiled 1.12 и своя копия игры.
+
+Claude Code:
+
+```
+/plugin marketplace add shpaker/re-konung
+/plugin install konung@re-konung
+```
+
+Codex: `codex plugin marketplace add shpaker/re-konung`, затем `konung` в `/plugins`.
+
+Qwen Code:
+
+```bash
+qwen extensions install https://github.com/shpaker/re-konung
+```
+
+Потом попросить агента поставить расширение «Князя» для Tiled и открыть карту.
+
 Как вносить изменения — [CONTRIBUTING.md](CONTRIBUTING.md); правила для агентов — [AGENTS.md](AGENTS.md).

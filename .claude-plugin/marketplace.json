@@ -1,0 +1,14 @@
+{
+  "name": "re-konung",
+  "description": "Tools for the maps of the Konung game series.",
+  "owner": {
+    "name": "A.Shpak"
+  },
+  "plugins": [
+    {
+      "name": "konung",
+      "source": "./",
+      "description": "Install the Tiled extension that opens and saves the original maps of Konung: Legends of the North (Konung.N)."
+    }
+  ]
+}
