@@ -8,7 +8,16 @@ from importlib.metadata import version
 from pathlib import Path
 
 from konung import disc, images
-from konung.k1 import characters, executable, game_state, graph_res, map_file, objects_res, render
+from konung.k1 import (
+    characters,
+    executable,
+    flames_res,
+    game_state,
+    graph_res,
+    map_file,
+    objects_res,
+    render,
+)
 
 
 def cmd_disc(args: argparse.Namespace) -> None:
@@ -31,22 +40,25 @@ def cmd_k1_map(args: argparse.Namespace) -> None:
     graph = graph_res.load(_find_name(args.game, "graph.res"))
     objects = None if args.no_objects else objects_res.load(_find_name(args.game, "objects.res"))
     state = None if args.state is None else game_state.load(args.game, args.state)
-    tables = None if state is None or objects is None else executable.load(args.game)
+    tables = None if objects is None else executable.load(args.game)
+    flames = None
+    if objects is not None:
+        flames = (flames_res.load(_find_name(args.game, "flames.res")), tables.flame_animations)
     numbers = map_file.map_numbers(args.game) if args.number is None else [args.number]
     args.out.mkdir(parents=True, exist_ok=True)
     for number in numbers:
         entities = None if state is None else game_state.on_map(state, number, args.state)
         sprites = []
-        if tables is not None:
+        if entities is not None:
             for character, x, y in characters.placed(entities, state):
                 px, py = game_state.character_position(x, y)
                 sprite = characters.compose(character, px, py, state, graph, objects, tables)
                 if sprite is not None:
                     sprites.append(sprite)
-        image = render.render(map_file.load(args.game, number), graph, objects, sprites)
+        image = render.render(map_file.load(args.game, number), graph, objects, sprites, flames)
         if entities is not None:
             # Персонажей видно спрайтами; маркеры — только когда спрайтов нет
-            render.draw_game(image, entities, characters=tables is None)
+            render.draw_game(image, entities, characters=objects is None)
         suffix = "" if state is None else f"-game{args.state}"
         path = args.out / f"konung{number:02d}{suffix}.png"
         image.save(path)
@@ -78,6 +90,17 @@ def cmd_k1_sprites(args: argparse.Namespace) -> None:
         if sheet is not None:
             sheet.save(args.out / f"{name}.png")
     print(f"{len(sheets)} спрайтов → {args.out}")
+
+
+def cmd_k1_flames(args: argparse.Namespace) -> None:
+    flames = flames_res.load(_find_name(args.game, "flames.res"))
+    tables = executable.load(args.game)
+    args.out.mkdir(parents=True, exist_ok=True)
+    for kind, (first, last) in enumerate(tables.flame_animations):
+        for index in range(first, last + 1):
+            image = flames_res.to_rgba(flames.frames[index])
+            image.save(args.out / f"flame{kind}-{index:02d}.png")
+    print(f"{len(flames.frames)} кадров огней → {args.out}")
 
 
 def cmd_k1_game(args: argparse.Namespace) -> None:
@@ -141,6 +164,11 @@ def main() -> None:
     p.add_argument("game", type=Path, help="папка установленной игры")
     p.add_argument("out", type=Path)
     p.set_defaults(func=cmd_k1_sprites)
+
+    p = k1.add_parser("flames", help="кадры огней FLAMES.RES в PNG по видам")
+    p.add_argument("game", type=Path, help="папка установленной игры")
+    p.add_argument("out", type=Path)
+    p.set_defaults(func=cmd_k1_flames)
 
     p = k1.add_parser("game", help="начальное состояние Game.N в JSON")
     p.add_argument("game", type=Path, help="папка установленной игры")

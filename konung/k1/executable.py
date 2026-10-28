@@ -23,6 +23,12 @@ DRAW_ORDER_ROW = struct.Struct(f"<{SLOTS}i")
 DRAW_ORDER_ROWS = 72
 DIRECTIONS = 8
 
+# Анимации огней: 7 пар (первый, последний кадр FLAMES.RES) по 2 × s32,
+# подряд от 0 до последнего кадра; номер пары — вид огня у простого объекта
+FLAME_ANIMATION = struct.Struct("<2i")
+FLAME_KINDS = 7
+FLAME_FRAMES = 74
+
 # Палитра каждого набора снаряжения (номер палитры в банке цветов GRAPH.RES).
 # В данных exe её нет — по Slavik resources.cpp:15 (CharEquipPal)
 EQUIPMENT_PALETTES = (2, 2, 2, 2, 4, 4, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 5, 5, 5, 5)
@@ -44,6 +50,8 @@ class Executable:
     equipment: list[EquipmentInfo]
     # [направление] → слоты Character.equipment в порядке отрисовки
     draw_order: list[tuple[int, ...]]
+    # [вид огня] → (первый, последний) кадр FLAMES.RES, оба включены
+    flame_animations: list[tuple[int, int]]
 
 
 def _is_equipment_table(data: bytes, start: int) -> bool:
@@ -86,6 +94,35 @@ def _find_draw_order(data: bytes) -> int:
     return found[0]
 
 
+def _flame_animations_at(data: bytes, start: int) -> list[tuple[int, int]] | None:
+    pairs = [
+        FLAME_ANIMATION.unpack_from(data, start + kind * FLAME_ANIMATION.size)
+        for kind in range(FLAME_KINDS)
+    ]
+    if pairs[0][0] != 0 or pairs[-1][1] != FLAME_FRAMES - 1:
+        return None
+    if any(first > last for first, last in pairs):
+        return None
+    if any(pairs[kind + 1][0] != pairs[kind][1] + 1 for kind in range(FLAME_KINDS - 1)):
+        return None
+    return pairs
+
+
+def _find_flame_animations(data: bytes) -> list[tuple[int, int]]:
+    """7 пар подряд, без пропусков, от кадра 0 до последнего кадра FLAMES.RES."""
+    end = len(data) - FLAME_KINDS * FLAME_ANIMATION.size
+    found = []
+    for start in range(0, end, 4):
+        if data[start : start + 4] != b"\0\0\0\0":
+            continue
+        pairs = _flame_animations_at(data, start)
+        if pairs is not None:
+            found.append(pairs)
+    if len(found) != 1:
+        raise ValueError(f"таблица огней не найдена однозначно: {len(found)}")
+    return found[0]
+
+
 def parse(data: bytes) -> Executable:
     start = _find_equipment(data)
     equipment = []
@@ -98,7 +135,7 @@ def parse(data: bytes) -> Executable:
         DRAW_ORDER_ROW.unpack_from(data, first + direction * DRAW_ORDER_ROW.size)
         for direction in range(DIRECTIONS)
     ]
-    return Executable(equipment, draw_order)
+    return Executable(equipment, draw_order, _find_flame_animations(data))
 
 
 def find(game_dir: Path) -> Path:
