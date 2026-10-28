@@ -92,6 +92,31 @@ def test_serialize_keeps_edits():
     assert (edited.exits[0].arrival_x, edited.exits[0].arrival_y) == (8, 164)
 
 
+def test_character_field_edits_touch_only_their_bytes(k1_game):
+    # Поля, которые правятся в Tiled: класс, уровень, имя, прозвище, набор спрайтов,
+    # золото, очки, опыт, навыки, характеристики (смещения — docs/k1/formats/game-state.md)
+    data = next(p for p in _state_files(k1_game) if p.name.lower() == "game.0").read_bytes()
+    state = game_state.parse(data)
+    character = next(c for c in state.characters if c and not c.has_dynamic_sprite)
+    character.class_id ^= 1
+    character.level += 1
+    character.name_id, character.nick_id = 7, 3
+    character.sprite_set = (character.sprite_set + 1) % 3
+    character.gold, character.free_points, character.experience = 12345, 6, -7
+    character.skills = tuple(range(100, 100 + len(game_state.SKILL_NAMES)))
+    character.attributes = tuple(range(-4, -4 + len(game_state.ATTRIBUTE_NAMES)))
+    edited = game_state.serialize(state)
+    # Блок персонажей — с 0x2A69A, записи по 256 байт
+    at = 0x2A69A + character.slot * game_state.CHARACTER.size
+    changed = {i - at for i, (a, b) in enumerate(zip(data, edited, strict=True)) if a != b}
+    allowed = {0x04, 0x33, 0xD4, 0xD5, 0xD6} | set(range(0x34, 0x40))
+    allowed |= set(range(0x40, 0x40 + 18)) | set(range(0x54, 0x54 + 18))
+    assert changed and changed <= allowed
+    again = game_state.parse(edited).characters[character.slot]
+    assert again.skills == character.skills and again.attributes == character.attributes
+    assert (again.gold, again.free_points, again.experience) == (12345, 6, -7)
+
+
 def test_character_position_round_trips():
     for x, y in [(0, 0), (33, 86), (17, 219), (159, 319)]:
         assert game_state.character_cell(*game_state.character_position(x, y)) == (x, y)

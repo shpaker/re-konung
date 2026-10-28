@@ -495,6 +495,17 @@ const VILLAGES_AT = CHARACTERS_AT + CHARACTER_SLOTS * CHARACTER_SIZE;
 export const GAME_STATE_SIZE = VILLAGES_AT + VILLAGE_SLOTS * VILLAGE_SIZE;
 const JOBS_AT = 0x3d0, JOB_SIZE = 8;
 export const JOB_ROLES = ["elder", "healer", "merchant", "smith", "voevoda"];
+// Навыки (9 × s16 с 0x40) и характеристики (9 × s16 с 0x54) персонажа по порядку,
+// как game_state.SKILL_NAMES и ATTRIBUTE_NAMES; имена — свойства персонажа в Tiled
+const SKILLS_AT = 0x40, ATTRIBUTES_AT = 0x54;
+export const SKILL_NAMES = [
+    "fencing", "trading", "accuracy", "carpentry", "medicine", "identification", "smithing", "armor", "poison",
+];
+export const ATTRIBUTE_NAMES = [
+    "agility", "agilityBase", "charisma", "charismaBase", "health", "strength", "strengthBase", "stamina", "staminaBase",
+];
+// Наборы спрайтов: у людей — модели GRAPH.RES, у динамических — объекты Objects.res
+export const HUMAN_SPRITE_SETS = 3, DYNAMIC_SPRITE_SETS = 30;
 // В кладе предметы — 22 × s16 с 0x14
 const LOOT_ITEMS_AT = 0x14, LOOT_ITEMS_SIZE = 44;
 export const NEW_LOOT_ITEMS = "00".repeat(LOOT_ITEMS_SIZE);
@@ -572,6 +583,11 @@ export function parseGameState(buffer) {
             x: s16(at + 0x0a),
             frame: bytes[at + 0x10],
             level: bytes[at + 0x33],
+            gold: view.getInt32(at + 0x34, true),
+            freePoints: view.getInt32(at + 0x38, true),
+            experience: view.getInt32(at + 0x3c, true),
+            skills: SKILL_NAMES.map((name, i) => s16(at + SKILLS_AT + i * 2)),
+            attributes: ATTRIBUTE_NAMES.map((name, i) => s16(at + ATTRIBUTES_AT + i * 2)),
             equipment,
             nameId: bytes[at + 0xd4],
             nickId: bytes[at + 0xd5],
@@ -684,8 +700,18 @@ export function serializeGameState(state) {
             continue;
         const at = CHARACTERS_AT + character.slot * CHARACTER_SIZE;
         bytes[at + 1] = character.direction;
+        bytes[at + 4] = character.classId;
         setS16(at + 8, character.y);
         setS16(at + 0x0a, character.x);
+        bytes[at + 0x33] = character.level;
+        view.setInt32(at + 0x34, character.gold, true);
+        view.setInt32(at + 0x38, character.freePoints, true);
+        view.setInt32(at + 0x3c, character.experience, true);
+        character.skills.forEach((value, i) => setS16(at + SKILLS_AT + i * 2, value));
+        character.attributes.forEach((value, i) => setS16(at + ATTRIBUTES_AT + i * 2, value));
+        bytes[at + 0xd4] = character.nameId;
+        bytes[at + 0xd5] = character.nickId;
+        bytes[at + 0xd6] = character.spriteSet;
     }
     for (const village of state.villages) {
         for (const job of village.jobs) {
