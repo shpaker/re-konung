@@ -40,13 +40,14 @@ def cmd_k1_tiles(args: argparse.Namespace) -> None:
 def cmd_k1_map(args: argparse.Namespace) -> None:
     graph = graph_res.load(_find_name(args.game, "graph.res"))
     objects = None if args.no_objects else objects_res.load(_find_name(args.game, "objects.res"))
-    state = None if args.state is None else game_state.load(args.game, args.state)
+    files = map_file.TUTORIAL_FILES if args.tutorial else map_file.GAME_FILES
+    state = None if args.state is None else game_state.load(args.game, args.state, files)
     tables = None if objects is None else executable.load(args.game)
     flames = None
     if objects is not None:
         flames = (flames_res.load(_find_name(args.game, "flames.res")), tables.flame_animations)
     masks = lights_res.load(_find_name(args.game, "lights.res")) if args.lights else None
-    numbers = map_file.map_numbers(args.game) if args.number is None else [args.number]
+    numbers = map_file.map_numbers(args.game, files) if args.number is None else [args.number]
     args.out.mkdir(parents=True, exist_ok=True)
     for number in numbers:
         entities = None if state is None else game_state.on_map(state, number, args.state)
@@ -57,9 +58,9 @@ def cmd_k1_map(args: argparse.Namespace) -> None:
                 sprite = characters.compose(character, px, py, state, graph, objects, tables)
                 if sprite is not None:
                     sprites.append(sprite)
-        konung_map = map_file.load(args.game, number)
+        konung_map = map_file.load(args.game, number, files)
         image = render.render(konung_map, graph, objects, sprites, flames)
-        if masks is not None and (path := map_file.lights_path(args.game, number)):
+        if masks is not None and (path := map_file.lights_path(args.game, number, files)):
             render.draw_lights(image, map_file.parse_lights(path.read_bytes()), masks)
         if args.foot:
             render.draw_foot(image, konung_map)
@@ -68,7 +69,7 @@ def cmd_k1_map(args: argparse.Namespace) -> None:
             render.draw_game(image, entities, characters=objects is None)
         suffix = "" if state is None else f"-game{args.state}"
         suffix += "-lights" * args.lights + "-foot" * args.foot
-        path = args.out / f"konung{number:02d}{suffix}.png"
+        path = args.out / f"{files.map}{number:02d}{suffix}.png"
         image.save(path)
         print(path)
 
@@ -170,6 +171,11 @@ def main() -> None:
         "--foot", action="store_true", help="проходимость поверх карты: красное — непроходимо"
     )
     p.add_argument("--lights", action="store_true", help="свет LIGHTS.N поверх карты")
+    p.add_argument(
+        "--tutorial",
+        action="store_true",
+        help="карты обучения Tutorial.N (только ENG): свет TLights.N, --game — номер TGame.N",
+    )
     p.set_defaults(func=cmd_k1_map)
 
     p = k1.add_parser("sprites", help="спрайты персонажей, снаряжения и монстров в PNG")

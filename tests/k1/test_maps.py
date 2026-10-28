@@ -1,3 +1,5 @@
+import pytest
+
 from konung.k1 import graph_res, lights_res, map_file, objects_res
 
 
@@ -89,3 +91,64 @@ def test_lights_res_has_nineteen_tile_masks(k1_file):
     res = lights_res.load(k1_file("lights.res"))
     assert len(res.tiles) == lights_res.TILE_MASKS
     assert max(max(mask) for mask in res.tiles) < lights_res.BRIGHTNESS_SCALE
+
+
+def _tutorial_numbers(k1_game):
+    # Обучение есть только в ENG: Tutorial.4 и Tutorial.5
+    numbers = map_file.map_numbers(k1_game, map_file.TUTORIAL_FILES)
+    assert numbers == ([4, 5] if k1_game.parent.name == "eng" else [])
+    return numbers
+
+
+def test_tutorial_maps_return_byte_for_byte(k1_game, k1_file):
+    graph = graph_res.load(k1_file("graph.res"))
+    for number in _tutorial_numbers(k1_game):
+        data = map_file.find(k1_game, "tutorial", number).read_bytes()
+        konung_map = map_file.parse(data)
+        assert map_file.serialize(konung_map) == data, number
+        # Единственная запись не из GRAPH.RES — сырая, в слоте 994
+        assert [
+            (d.slot, d.is_raw) for d in konung_map.decorations if d.tile not in graph.tiles
+        ] == [(994, True)]
+        lights = map_file.lights_path(k1_game, number, map_file.TUTORIAL_FILES)
+        assert lights is not None and lights.name.lower() == f"tlights.{number}"
+        assert map_file.serialize_lights(map_file.parse_lights(lights.read_bytes())) == (
+            lights.read_bytes()
+        )
+
+
+def test_file_set_follows_map_name():
+    assert map_file.file_set("Tutorial.4") is map_file.TUTORIAL_FILES
+    assert map_file.file_set("TUTORIAL.5") is map_file.TUTORIAL_FILES
+    for name in ("Konung.4", "KONUNG.12", "konung.1"):
+        assert map_file.file_set(name) is map_file.GAME_FILES
+
+
+def _decoration(slot: int, tile: int, x: int = 0) -> map_file.Decoration:
+    return map_file.Decoration(slot, tile, x, -1, bytes(8))
+
+
+def test_raw_decoration_keeps_its_slot():
+    raw = _decoration(994, 0x00FFFFFF)
+    decorations = [_decoration(0, 5, 10), raw, _decoration(1, 7, 20)]
+    slots = map_file.decoration_slots(decorations)
+    assert slots[:2] == [decorations[0], decorations[2]] and slots[994] is raw
+    assert sum(placed is not None for placed in slots) == 3
+
+    # Удаление, добавление и перестановка обычных декораций сырую не сдвигают
+    empty = bytes(map_file.MAP_SIZE - 16000 - 36000) + b"\xff" * (16000 + 36000)
+    konung_map = map_file.parse(empty)
+    konung_map.decorations = [_decoration(0, 3, 1), raw, _decoration(0, 4, 2)]
+    edited = map_file.parse(map_file.serialize(konung_map))
+    assert [(d.slot, d.tile) for d in edited.decorations] == [(0, 3), (1, 4), (994, 0x00FFFFFF)]
+    konung_map.decorations = [_decoration(0, 4, 2), raw]
+    edited = map_file.parse(map_file.serialize(konung_map))
+    assert [(d.slot, d.tile) for d in edited.decorations] == [(0, 4), (994, 0x00FFFFFF)]
+
+    # Обычные обходят занятый слот, а два сырых в одном слоте — ошибка
+    many = [_decoration(0, 1) for _ in range(map_file.MAX_DECORATIONS - 1)] + [raw]
+    assert map_file.decoration_slots(many)[995].tile == 1
+    with pytest.raises(ValueError):
+        map_file.decoration_slots([raw, _decoration(994, 0x01000000)])
+    with pytest.raises(ValueError):
+        map_file.decoration_slots(many + [_decoration(0, 1)])

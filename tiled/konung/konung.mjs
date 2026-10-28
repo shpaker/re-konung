@@ -2,7 +2,8 @@
 // карты Tiled и сохраняет их обратно. Меняются тайлы, декорации, объекты и
 // проходимость карты, её свет в LIGHTS.N, а в Game.N рядом с картой — персонажи,
 // отряды, клады и переходы этой карты; GRAPH.RES, Objects.res, LIGHTS.RES и exe
-// лишь читаются. Слои — docs/k1/tiled.md.
+// лишь читаются. Карты обучения Tutorial.N берут свет из TLights.N и состояние
+// из TGame.N (k1.fileSet). Слои — docs/k1/tiled.md.
 
 import * as k1 from "./lib/k1.mjs";
 
@@ -123,10 +124,10 @@ function loadLightMasks(directory) {
     return lightMasksCache.get(path);
 }
 
-// LIGHTS.N карты: у карт 6, 8 и 46 его нет
-function findLights(directory, number) {
+// LIGHTS.N карты (TLights.N у обучения): у карт 6, 8 и 46 его нет
+function findLights(directory, number, files) {
     try {
-        return findFile(directory, `lights.${number}`);
+        return findFile(directory, `${files.lights}.${number}`);
     } catch (error) {
         return null;
     }
@@ -271,9 +272,14 @@ function buildMap(fileName) {
     map.setTileSize(k1.TILE_STEP_X, k1.GROUND_TILE_HEIGHT);
     map.backgroundColor = "#000000";
     // foot — исходные байты проходимости: правки слоёв проходимости ложатся
-    // поверх них, а клетки у края карты без тайла пишутся отсюда. mapNumber — номер карты, чьи объекты Game.N показаны и пишутся при сохранении
+    // поверх них, а клетки у края карты без тайла пишутся отсюда. mapNumber — номер карты, чьи объекты Game.N показаны и пишутся при сохранении.
+    // tutorial — карта обучения: её свет и объекты — из TLights.N и TGame.N, а не LIGHTS.N и Game.N
     const number = Number(FileInfo.suffix(fileName));
-    setProperties(map, { source: FileInfo.fileName(fileName), mapNumber: number, foot: k1.toHex(data.foot) });
+    const files = k1.fileSet(FileInfo.fileName(fileName));
+    setProperties(map, {
+        source: FileInfo.fileName(fileName), mapNumber: number, tutorial: files === k1.TUTORIAL_FILES,
+        foot: k1.toHex(data.foot),
+    });
 
     const graphTileset = buildTileset("graph", graph.tiles.length, index => graph.tiles[index]);
     const shadowsTileset = buildTileset("shadows", objects.length,
@@ -332,27 +338,36 @@ function buildMap(fileName) {
         addTileObject(decorations, graphTileset.tile(cell.index), x, y,
             { cellLayer: cell.layer, cellX: cell.x, cellY: cell.y });
     }
+    // Сырые декорации (тайл за пределами GRAPH.RES) не нарисовать: они живут
+    // в свойстве карты rawDecorations и пишутся обратно в свой слот
+    const raw = [];
     for (const decoration of data.decorations) {
+        if (k1.isRawDecoration(decoration)) {
+            raw.push(`${decoration.slot}:${k1.decorationToHex(decoration)}`);
+            continue;
+        }
         const tile = graphTileset.tile(decoration.tile);
-        if (tile)
-            addTileObject(decorations, tile, decoration.x, decoration.y,
-                { slot: decoration.slot, unknown: decoration.unknown });
+        if (!tile)
+            throw new Error(`декорация (слот ${decoration.slot}): тайла ${decoration.tile} нет в GRAPH.RES`);
+        addTileObject(decorations, tile, decoration.x, decoration.y,
+            { slot: decoration.slot, unknown: decoration.unknown });
     }
+    map.setProperty("rawDecorations", raw.join(" "));
     map.addLayer(decorations);
 
     addObjects(map, objects, shadowsTileset, objectsTileset, data.objects);
     addFlames(map, directory, objects, data.objects);
-    addGameStates(map, directory, number, graph);
-    addLights(map, directory, number);
+    addGameStates(map, directory, number, graph, files);
+    addLights(map, directory, number, files);
     addFoot(map, data.foot);
     return map;
 }
 
 // Свет LIGHTS.N — тайловый слой поверх карты, скрыт. Номер тайла — номер маски
 // LIGHTS.RES (в файле он на 1 больше). Без LIGHTS.N или LIGHTS.RES слоя нет
-function addLights(map, directory, number) {
+function addLights(map, directory, number, files) {
     const masks = loadLightMasks(directory);
-    const path = findLights(directory, number);
+    const path = findLights(directory, number, files);
     if (!masks || !path)
         return;
     const tiles = k1.parseLights(readBuffer(path));
@@ -370,9 +385,9 @@ function addLights(map, directory, number) {
     map.addLayer(layer);
 }
 
-// LIGHTS.N из слоя lights — рядом с сохраняемой картой и под её номером.
-// Имя (регистр) берётся у файла рядом с ней или у исходного
-function collectLights(map, fileName) {
+// LIGHTS.N (TLights.N у обучения) из слоя lights — рядом с сохраняемой картой
+// и под её номером. Имя (регистр) берётся у файла рядом с ней или у исходного
+function collectLights(map, fileName, files) {
     let layer = null;
     for (let i = 0; i < map.layerCount; ++i)
         if (map.layerAt(i).name === "lights" && map.layerAt(i).isTileLayer)
@@ -392,9 +407,11 @@ function collectLights(map, fileName) {
     }
     const target = FileInfo.path(fileName);
     const number = Number(FileInfo.suffix(fileName));
-    const existing = findLights(target, number) ||
-        (map.fileName && findLights(FileInfo.path(map.fileName), number));
-    const name = existing ? FileInfo.fileName(existing) : `LIGHTS.${number}`;
+    const existing = findLights(target, number, files) ||
+        (map.fileName && findLights(FileInfo.path(map.fileName), number, files));
+    // Регистр нового файла — как в дистрибутиве: LIGHTS.N в игре, Tlights.N в обучении
+    const fallback = files === k1.TUTORIAL_FILES ? "Tlights" : "LIGHTS";
+    const name = existing ? FileInfo.fileName(existing) : `${fallback}.${number}`;
     return { path: `${target}/${name}`, buffer: k1.serializeLights(tiles) };
 }
 
@@ -418,11 +435,13 @@ function addFoot(map, foot) {
     }
 }
 
-// Game.N рядом с картой: начальные состояния за героев 0–2 (TGame.N обучения — нет)
-function gameFiles(directory) {
+// Game.N рядом с картой: начальные состояния за героев 0–2. У карты обучения —
+// только TGame.N (в ENG — TGame.1), у карты игры TGame.N не берётся
+function gameFiles(directory, files) {
     const found = [];
+    const pattern = new RegExp(`^${files.state}\\.(\\d+)$`, "i");
     for (const entry of File.directoryEntries(directory, File.Files)) {
-        const match = /^game\.(\d+)$/i.exec(entry);
+        const match = pattern.exec(entry);
         if (match)
             found.push({ hero: Number(match[1]), path: `${directory}/${entry}` });
     }
@@ -438,10 +457,10 @@ function checksum(buffer) {
     return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-// Каждый Game.N — группа слоёв game.K; видна первая. docs/k1/tiled.md
-function addGameStates(map, directory, number, graph) {
-    const files = gameFiles(directory);
-    if (!files.length)
+// Каждый Game.N (TGame.N у обучения) — группа слоёв game.K; видна первая. docs/k1/tiled.md
+function addGameStates(map, directory, number, graph, files) {
+    const states = gameFiles(directory, files);
+    if (!states.length)
         return;
     const catalog = loadCatalog(directory);
     const dynamic = new Map();
@@ -451,7 +470,7 @@ function addGameStates(map, directory, number, graph) {
         return dynamic.get(slot);
     };
     const tables = loadTables(directory);
-    files.forEach(({ hero, path }, index) => {
+    states.forEach(({ hero, path }, index) => {
         const buffer = readBuffer(path);
         const state = k1.parseGameState(buffer);
         const group = buildGameGroup(map, state, hero, number, graph, dynamicSprites, tables);
@@ -706,6 +725,21 @@ function graphTileId(tile, where) {
     return tile.id;
 }
 
+// rawDecorations — «слот:запись» через пробел, запись — 16 байт hex
+function parseRawDecorations(text) {
+    const decorations = [];
+    for (const entry of String(text).split(/\s+/).filter(Boolean)) {
+        const match = /^(\d+):([0-9a-f]{32})$/i.exec(entry);
+        if (!match)
+            throw new Error(`rawDecorations: «${entry}» — нужно «слот:32 hex-цифры»`);
+        const decoration = k1.decorationFromHex(Number(match[1]), match[2]);
+        if (!k1.isRawDecoration(decoration))
+            throw new Error(`rawDecorations: в слоте ${decoration.slot} тайл ${decoration.tile} есть в GRAPH.RES — такую декорацию ставят в слой decorations`);
+        decorations.push(decoration);
+    }
+    return decorations;
+}
+
 function collectMap(map) {
     if (map.width !== k1.MAP_WIDTH || map.height !== k1.MAP_HEIGHT)
         throw new Error(`карта должна быть ${k1.MAP_WIDTH}×${k1.MAP_HEIGHT}, а она ${map.width}×${map.height}`);
@@ -739,8 +773,9 @@ function collectMap(map) {
         }
     }
 
-    // Порядок слоя декораций — порядок отрисовки в игре и порядок слотов
-    const decorations = [];
+    // Порядок слоя декораций — порядок отрисовки в игре и порядок слотов;
+    // сырые декорации из свойства rawDecorations встают в свои слоты
+    const decorations = parseRawDecorations(propertyOr(map, "rawDecorations", ""));
     for (const object of layerByName(map, "decorations", false).objects) {
         const id = graphTileId(object.tile, `декорация «${object.name || object.id}»`);
         const cellLayer = object.property("cellLayer");
@@ -903,9 +938,10 @@ function applyGameEdits(state, group, number, hero) {
 // ни с открытым, ни с записанным этой картой. Ключ — путь карты и имя группы
 const savedChecksums = new Map();
 
-// Game.K для каждой группы game.K: берётся с диска рядом с сохраняемой картой
-// (иначе — рядом с открытой), получает правки этой карты и пишется рядом с сохраняемой
-function collectGameStates(map, fileName) {
+// Game.K (TGame.K у обучения) для каждой группы game.K: берётся с диска рядом с
+// сохраняемой картой (иначе — рядом с открытой), получает правки этой карты и
+// пишется рядом с сохраняемой
+function collectGameStates(map, fileName, files) {
     const number = map.property("mapNumber");
     const target = FileInfo.path(fileName);
     const source = map.fileName ? FileInfo.path(map.fileName) : target;
@@ -918,9 +954,9 @@ function collectGameStates(map, fileName) {
         const hero = Number(match[1]);
         let path;
         try {
-            path = findFile(target, `game.${hero}`);
+            path = findFile(target, `${files.state}.${hero}`);
         } catch (error) {
-            path = findFile(source, `game.${hero}`);
+            path = findFile(source, `${files.state}.${hero}`);
         }
         const buffer = readBuffer(path);
         const key = `${fileName}|${group.name}`;
@@ -945,9 +981,17 @@ function writeBuffer(path, buffer) {
 // Konung.N, LIGHTS.N и Game.N рассогласованными
 function writeMap(map, fileName) {
     try {
+        // Свет и объекты карты обучения пишутся только в TLights.N и TGame.N,
+        // карты игры — только в LIGHTS.N и Game.N: менять набор через «Сохранить как» нельзя
+        const files = k1.fileSet(FileInfo.fileName(fileName));
+        const tutorial = Boolean(map.property("tutorial"));
+        if ((files === k1.TUTORIAL_FILES) !== tutorial)
+            throw new Error(tutorial
+                ? "карта обучения сохраняется только в Tutorial.N"
+                : "карта игры не сохраняется в Tutorial.N");
         const buffer = k1.serializeMap(collectMap(map));
-        const states = collectGameStates(map, fileName);
-        const lights = collectLights(map, fileName);
+        const states = collectGameStates(map, fileName, files);
+        const lights = collectLights(map, fileName, files);
         writeBuffer(fileName, buffer);
         if (lights)
             writeBuffer(lights.path, lights.buffer);

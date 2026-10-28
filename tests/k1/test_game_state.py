@@ -17,8 +17,12 @@ def test_serialize_returns_every_state_byte_for_byte(k1_game):
 
 
 def test_references_between_blocks_match(k1_game):
-    maps = set(map_file.map_numbers(k1_game))
     for path in _state_files(k1_game):
+        # TGame.N ссылается только на карты обучения, Game.N — только на карты игры
+        tutorial = path.name.lower().startswith(map_file.TUTORIAL_FILES.state)
+        files = map_file.TUTORIAL_FILES if tutorial else map_file.GAME_FILES
+        maps = set(map_file.map_numbers(k1_game, files))
+        assert maps, path.name
         state = game_state.parse(path.read_bytes())
         owners = {}
         for group in state.groups:
@@ -44,16 +48,30 @@ def test_references_between_blocks_match(k1_game):
 
 
 def test_player_starts_on_walkable_cell_of_hero_map(k1_game):
-    for number in game_state.numbers(k1_game):
-        state = game_state.load(k1_game, number)
-        player = state.groups[0]
-        assert player.kind == game_state.PLAYER_GROUP
-        # Карту в отряде игрока игра не читает: она считается по номеру героя
-        assert player.map_id == 1
-        start = game_state.on_map(state, game_state.start_map(number), number).start
-        assert start is player
-        foot = map_file.load(k1_game, game_state.start_map(number)).foot
-        assert foot[player.spawn.top][player.spawn.left] == 0, number
+    for files in (map_file.GAME_FILES, map_file.TUTORIAL_FILES):
+        for number in game_state.numbers(k1_game, files):
+            state = game_state.load(k1_game, number, files)
+            player = state.groups[0]
+            assert player.kind == game_state.PLAYER_GROUP
+            # Карту в отряде игрока игра не читает: она считается по номеру героя.
+            # В Game.N там 1, в TGame.1 — сама стартовая карта 4
+            assert player.map_id == (1 if files is map_file.GAME_FILES else 4)
+            start = game_state.on_map(state, game_state.start_map(number), number).start
+            assert start is player
+            foot = map_file.load(k1_game, game_state.start_map(number), files).foot
+            assert foot[player.spawn.top][player.spawn.left] == 0, (files.state, number)
+
+
+def test_tutorial_has_its_own_state(k1_game):
+    # Обучение (только ENG) — TGame.1 за героя 1; Game.N его не видит, и наоборот
+    tutorial = game_state.numbers(k1_game, map_file.TUTORIAL_FILES)
+    assert tutorial == ([1] if k1_game.parent.name == "eng" else [])
+    assert game_state.numbers(k1_game) == [0, 1, 2]
+    for number in tutorial:
+        state = game_state.load(k1_game, number, map_file.TUTORIAL_FILES)
+        assert state != game_state.load(k1_game, number)
+        tutorial_maps = map_file.map_numbers(k1_game, map_file.TUTORIAL_FILES)
+        assert game_state.start_map(number) in tutorial_maps
 
 
 def _empty_state() -> game_state.GameState:

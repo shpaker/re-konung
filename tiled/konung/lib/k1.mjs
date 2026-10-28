@@ -24,7 +24,7 @@ export const GROUND_TILE_HEIGHT = 64;
 
 const PALETTE_BANK_COLORS = 256 * 256;
 const CURSOR_COUNT = 11;
-const TILE_SLOTS = 512;
+export const TILE_SLOTS = 512;
 const OBJECT_SLOTS = 512;
 const DYNAMIC_OBJECTS = 30;
 export const SIMPLE_OBJECT_SLOTS = OBJECT_SLOTS - DYNAMIC_OBJECTS;
@@ -235,11 +235,71 @@ export function fromHex(text, length) {
     return bytes;
 }
 
-// Карта обратно в Konung.N. Декорации и объекты — подряд с нулевого слота,
-// остальные слоты — байты 0xFF, как во всех картах дистрибутива
+// Наборы файлов (map_file.FileSet): карта, её свет и начальные состояния.
+// Обучение ENG — Tutorial.N, TLights.N, TGame.N; остальные карты — игра
+export const GAME_FILES = { map: "konung", lights: "lights", state: "game" };
+export const TUTORIAL_FILES = { map: "tutorial", lights: "tlights", state: "tgame" };
+
+export function fileSet(mapName) {
+    const stem = mapName.split(".")[0].toLowerCase();
+    return stem === TUTORIAL_FILES.map ? TUTORIAL_FILES : GAME_FILES;
+}
+
+// Сырая декорация — тайл за пределами GRAPH.RES (в Tutorial.4/5 — слот 994):
+// её не нарисовать, она пишется как есть в свой слот (Decoration.is_raw)
+export function isRawDecoration(decoration) {
+    return decoration.tile >= TILE_SLOTS;
+}
+
+// Вся запись декорации (16 байт) в hex и обратно — для сырых декораций
+export function decorationToHex(decoration) {
+    const bytes = new Uint8Array(DECORATION_SIZE);
+    const view = new DataView(bytes.buffer);
+    view.setInt32(0, decoration.tile, true);
+    bytes.set(fromHex(decoration.unknown, 8), 4);
+    view.setInt16(12, decoration.x, true);
+    view.setInt16(14, decoration.y, true);
+    return toHex(bytes);
+}
+
+export function decorationFromHex(slot, text) {
+    const reader = new Reader(fromHex(text, DECORATION_SIZE).buffer);
+    const tile = reader.s32();
+    const unknown = reader.hex(8);
+    const x = reader.s16(), y = reader.s16();
+    return { slot, tile, x, y, unknown };
+}
+
+// Декорации по слотам файла (map_file.decoration_slots): сырые — в свой slot,
+// обычные — по порядку в свободные слоты с нулевого; null — пустой слот
+export function decorationSlots(decorations) {
+    if (decorations.length > MAX_DECORATIONS)
+        throw new Error(`декораций ${decorations.length}, максимум ${MAX_DECORATIONS}`);
+    const slots = new Array(MAX_DECORATIONS).fill(null);
+    for (const decoration of decorations) {
+        if (!isRawDecoration(decoration))
+            continue;
+        const slot = decoration.slot;
+        if (!Number.isInteger(slot) || slot < 0 || slot >= MAX_DECORATIONS || slots[slot])
+            throw new Error(`сырая декорация: слот ${slot} занят или вне 0–${MAX_DECORATIONS - 1}`);
+        slots[slot] = decoration;
+    }
+    let free = 0;
+    for (const decoration of decorations) {
+        if (isRawDecoration(decoration))
+            continue;
+        while (slots[free])
+            ++free;
+        slots[free] = decoration;
+    }
+    return slots;
+}
+
+// Карта обратно в Konung.N. Объекты и обычные декорации — подряд с нулевого
+// слота, сырые декорации — в свой слот, остальные слоты — байты 0xFF, как во
+// всех картах дистрибутива и обучения
 export function serializeMap(data) {
-    if (data.decorations.length > MAX_DECORATIONS)
-        throw new Error(`декораций ${data.decorations.length}, максимум ${MAX_DECORATIONS}`);
+    const decorations = decorationSlots(data.decorations);
     if (data.objects.length > MAX_OBJECTS)
         throw new Error(`объектов ${data.objects.length}, максимум ${MAX_OBJECTS}`);
 
@@ -256,7 +316,9 @@ export function serializeMap(data) {
     pos += FOOT_SIZE;
 
     const decorationsStart = pos;
-    data.decorations.forEach((decoration, slot) => {
+    decorations.forEach((decoration, slot) => {
+        if (!decoration)
+            return;
         const at = decorationsStart + slot * DECORATION_SIZE;
         view.setInt32(at, decoration.tile, true);
         bytes.set(fromHex(decoration.unknown, 8), at + 4);

@@ -567,15 +567,13 @@ def rect_cells(left: float, top: float, right: float, bottom: float) -> Rect:
     )
 
 
-def numbers(game_dir: Path) -> list[int]:
-    """Номера Game.N в папке (без TGame.N обучения)."""
-    found = []
-    for path in game_dir.iterdir():
-        stem, _, suffix = path.name.partition(".")
-        if stem.lower() == "game" and suffix.isdigit():
-            found.append(int(suffix))
-    return sorted(found)
+def numbers(game_dir: Path, files: map_file.FileSet = map_file.GAME_FILES) -> list[int]:
+    """Номера Game.N в папке — героев (без TGame.N обучения; с ним — files=TUTORIAL_FILES).
+
+    Номер у TGame.N — тоже номер героя: TGame.1 начинается на Tutorial.4 = start_map(1).
+    """
+    return map_file.numbered(game_dir, files.state)
 
 
-def load(game_dir: Path, number: int) -> GameState:
-    return parse(map_file.find(game_dir, "game", number).read_bytes())
+def load(game_dir: Path, number: int, files: map_file.FileSet = map_file.GAME_FILES) -> GameState:
+    return parse(map_file.find(game_dir, files.state, number).read_bytes())
