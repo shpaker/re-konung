@@ -41,6 +41,10 @@ def cmd_k1_map(args: argparse.Namespace) -> None:
     graph = graph_res.load(_find_name(args.game, "graph.res"))
     objects = None if args.no_objects else objects_res.load(_find_name(args.game, "objects.res"))
     files = map_file.TUTORIAL_FILES if args.tutorial else map_file.GAME_FILES
+    if args.tutorial and not map_file.map_numbers(args.game, files):
+        sys.exit("карт обучения нет (они есть только в ENG)")
+    if args.state is not None and args.state not in game_state.numbers(args.game, files):
+        sys.exit(f"нет {files.state}.{args.state}")
     state = None if args.state is None else game_state.load(args.game, args.state, files)
     tables = None if objects is None else executable.load(args.game)
     flames = None

@@ -734,7 +734,7 @@ function parseRawDecorations(text) {
             throw new Error(`rawDecorations: «${entry}» — нужно «слот:32 hex-цифры»`);
         const decoration = k1.decorationFromHex(Number(match[1]), match[2]);
         if (!k1.isRawDecoration(decoration))
-            throw new Error(`rawDecorations: в слоте ${decoration.slot} тайл ${decoration.tile} есть в GRAPH.RES — такую декорацию ставят в слой decorations`);
+            throw new Error(`rawDecorations: в слоте ${decoration.slot} тайл ${decoration.tile} меньше ${k1.TILE_SLOTS} — это не сырая декорация, её место в слое decorations`);
         decorations.push(decoration);
     }
     return decorations;

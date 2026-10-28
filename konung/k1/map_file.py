@@ -53,7 +53,8 @@ class FileSet:
 
 GAME_FILES = FileSet("konung", "lights", "game")
 # Обучение, только в ENG: TUTORIAL.EXE собирает имена TUTORIAL.N, TLIGHTS.N
-# и TGAME.N, а GRAPH.RES, Objects.res, LIGHTS.RES и FLAMES.RES у него общие с игрой
+# и TGAME.N, а GRAPH.RES, Objects.res, LIGHTS.RES и FLAMES.RES у него общие с игрой.
+# Источник — строки имён файлов в TUTORIAL.EXE (наш эксперимент)
 TUTORIAL_FILES = FileSet("tutorial", "tlights", "tgame")
 
 
