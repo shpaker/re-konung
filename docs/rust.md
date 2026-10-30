@@ -6,7 +6,7 @@ Cargo-workspace в `crates/` (edition 2024). Повторяет Python-паке�
 
 | Крейт | Что внутри | Статус |
 |---|---|---|
-| `k1-data` | данные игры K1: репозиторий (`repo`), формат карты (`map`) и начальное состояние (`game_state`) | `Konung.N`, `LIGHTS.N` и `Game.N`: разбор и побайтно точная запись, тесты на `original/` |
+| `k1-data` | данные игры K1: репозиторий (`repo`), форматы (`map`, `game_state`) и правки состава (`game_edit`) | `Konung.N`, `LIGHTS.N`, `Game.N`: разбор и побайтно точная запись; добавление/удаление персонажей сохраняют укладку; тесты на `original/` |
 
 Будущие крейты: `k2-data`, `engine` (игровая логика), `cli`. Общее ядро выделяется, только когда появится второй конкретный потребитель, — та же логика, что в [games.md](games.md) про проверку общности движка на K2.
 
@@ -17,6 +17,7 @@ Cargo-workspace в `crates/` (edition 2024). Повторяет Python-паке�
   → repo: GameDir — поиск файлов без учёта регистра, номера карт и состояний, чтение байтов; FileSet (игра/обучение)
     → map: чистые parse(&[u8]) / serialize — KonungMap, Lights; ФС не трогают
     → game_state: чистые parse(&[u8]) / serialize — GameState (предметы, отряды, клады, переходы, персонажи, деревни), on_map и геометрия мелкой сетки
+    → game_edit: add_character / remove_character на GameState — правки держат плотную укладку отрядов и переписывают все ссылки; API принимает номера записей, а не объекты (в Rust нельзя занять запись и одновременно править состояние)
       → {игровые данные, Tiled} — слои выше появятся позже
 ```
 
@@ -33,7 +34,7 @@ just cargo-lint   # cargo fmt --check + clippy -D warnings
 
 Запись (`serialize`, `serialize_lights`) проверяет точную геометрию сеток до записи, а не только итоговый размер: строки 81 и 79 клеток дают верное число байтов, но сместили бы границы строк. Та же проверка добавлена в Python-эталон (PR #18) — на валидных картах реализации идентичны побайтно.
 
-Тесты на данных (`crates/k1-data/tests/original.rs` и `original_game_state.rs`) повторяют `tests/k1/test_maps.py` и `tests/k1/test_game_state.py`: parse → serialize побайтно для всех `Konung.N`, `Game.N`/`TGame.N` и `LIGHTS.N`/`TLIGHTS.N` обоих изданий, `Tutorial.4/5` (ENG); ссылки между блоками состояния, стартовая клетка героя и независимая сверка смещений полей персонажа (`0x2A69A`). Без `original/` они пропускаются (ранний return с сообщением); как его получить — [k1/editions.md](k1/editions.md).
+Тесты на данных (`crates/k1-data/tests/original.rs`, `original_game_state.rs` и `original_game_edit.rs`) повторяют `tests/k1/test_maps.py`, `test_game_state.py` и `test_game_edit.py`: parse → serialize побайтно для всех `Konung.N`, `Game.N`/`TGame.N` и `LIGHTS.N`/`TLIGHTS.N` обоих изданий, `Tutorial.4/5` (ENG); ссылки между блоками состояния, стартовая клетка героя и независимая сверка смещений полей персонажа (`0x2A69A`); плотная укладка до и после правок состава, рост резерва, копия NPC со своим отрядом и своими предметами, атомарность правки без места. Без `original/` они пропускаются (ранний return с сообщением); как его получить — [k1/editions.md](k1/editions.md).
 
 Округление половинок в `character_cell`/`rect_cells` — к чётному (`round_ties_even`), как `round()` в Python: обычный Rust-`round` расходился бы на `.5`.
 
