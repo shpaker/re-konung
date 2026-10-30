@@ -1,5 +1,5 @@
-# Те же проверки, что перед push. Тесты на данных игры в CI пропускаются:
-# оригиналов в репозитории нет
+# Те же проверки, что перед push (Python и Rust). Тесты на данных игры в CI
+# пропускаются: оригиналов в репозитории нет
 name: ci
 
 on:
@@ -23,3 +23,12 @@ jobs:
       - run: uv run ruff check
       - run: uv run ruff format --check
       - run: uv run pytest
+
+  # stable Rust на GitHub-раннерах уже есть, ставить не нужно
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: cargo fmt --manifest-path crates/Cargo.toml --all --check
+      - run: cargo clippy --manifest-path crates/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path crates/Cargo.toml
