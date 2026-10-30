@@ -106,7 +106,7 @@ pub enum StateError {
 }
 
 /// Прямоугольник в мелкой сетке; обе границы входят.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Rect {
     pub left: i16,
     pub top: i16,
@@ -114,7 +114,7 @@ pub struct Rect {
     pub bottom: i16,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Item {
     pub slot: usize,
     pub type_id: i8,
@@ -147,7 +147,7 @@ impl Item {
 }
 
 /// Отряд: персонажи first_character … first_character + size − 1 на карте map_id.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Group {
     pub slot: usize,
     pub first_character: i16,
@@ -250,6 +250,49 @@ impl Character {
     /// Так рисуются монстры, а ещё женщины и дети в деревнях.
     pub fn has_dynamic_sprite(&self) -> bool {
         self.class_id & 0x40 != 0
+    }
+}
+
+// Default — все поля нулевые; массивы длиннее 32 не выводят Default из derive
+impl Default for Character {
+    fn default() -> Self {
+        Self {
+            slot: 0,
+            state: 0,
+            direction: 0,
+            animation_flags: [0; 2],
+            class_id: 0,
+            group: 0,
+            enemy: 0,
+            x: 0,
+            y: 0,
+            move_x: 0,
+            move_y: 0,
+            frame: 0,
+            unknown_11: 0,
+            weapon_slot: 0,
+            path: [0; 32],
+            level: 0,
+            gold: 0,
+            free_points: 0,
+            experience: 0,
+            skills: [0; 9],
+            unknown_52: [0; 2],
+            attributes: [0; 9],
+            equipment: [0; 6],
+            inventory: [0; 32],
+            accessories: [0; 5],
+            misc: [0; 10],
+            unknown_d0: 0,
+            flags: 0,
+            unknown_d2: [0; 2],
+            name_id: 0,
+            nick_id: 0,
+            sprite_set: 0,
+            frame_count: 0,
+            palette_offset: 0,
+            runtime: [0; 36],
+        }
     }
 }
 
