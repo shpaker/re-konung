@@ -71,6 +71,10 @@ impl<'a> Reader<'a> {
         Ok(i32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
 
+    pub fn f32(&mut self) -> Result<f32> {
+        Ok(f32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+
     pub fn bytes(&mut self, count: usize) -> Result<&'a [u8]> {
         self.take(count)
     }
