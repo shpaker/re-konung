@@ -23,6 +23,14 @@ fmt:
     uv run ruff format
     uv run ruff check --fix
 
+# Rust-крейты в crates/: тесты и линты (cargo fmt, clippy)
+cargo-test:
+    cargo test --manifest-path crates/Cargo.toml
+
+cargo-lint:
+    cargo fmt --manifest-path crates/Cargo.toml --all --check
+    cargo clippy --manifest-path crates/Cargo.toml --all-targets -- -D warnings
+
 # Расширение Tiled «konung» — в папку расширений Tiled; запущенный Tiled подхватит его сам
 [windows]
 tiled-install:

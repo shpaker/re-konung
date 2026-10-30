@@ -1,0 +1,3 @@
+[workspace]
+members = ["k1-data"]
+resolver = "3"
