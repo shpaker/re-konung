@@ -23,10 +23,14 @@ Cargo-workspace в `crates/` (edition 2024). Повторяет Python-паке�
 
 ## Проверки
 
+`crates/` проверяются и локально, и в CI (job `rust` в `.github/workflows/ci.yml`: fmt, clippy, тесты).
+
 ```bash
 just cargo-test   # тесты: синтетические всегда, на данных — если есть original/
 just cargo-lint   # cargo fmt --check + clippy -D warnings
 ```
+
+Запись (`serialize`, `serialize_lights`) проверяет точную геометрию сеток до записи, а не только итоговый размер: строки 81 и 79 клеток дают верное число байтов, но сместили бы границы строк. Та же проверка добавляется в Python-эталон отдельным PR — реализации расходятся только в строгости проверки некорректных входных данных, на валидных картах они идентичны побайтно.
 
 Тесты на данных (`crates/k1-data/tests/original.rs`) повторяют `tests/k1/test_maps.py` в части карты: parse → serialize побайтно для всех `Konung.N` обоих изданий, `Tutorial.4/5` (ENG), всех `LIGHTS.N`/`TLIGHTS.N`. Без `original/` они пропускаются (ранний return с сообщением); как его получить — [k1/editions.md](k1/editions.md).
 

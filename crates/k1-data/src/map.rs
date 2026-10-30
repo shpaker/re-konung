@@ -47,8 +47,8 @@ pub enum MapError {
     WrongMapSize { actual: usize },
     #[error("свет {actual} байт, ожидалось {LIGHTS_SIZE}")]
     WrongLightsSize { actual: usize },
-    #[error("строки земли и верхнего слоя не совпадают по размеру")]
-    LayerMismatch,
+    #[error("слой {layer}: {detail}")]
+    Geometry { layer: &'static str, detail: String },
     #[error("декораций {count}, максимум {MAX_DECORATIONS}")]
     TooManyDecorations { count: usize },
     #[error("объектов {count}, максимум {MAX_OBJECTS}")]
@@ -244,6 +244,27 @@ pub fn decoration_slots(decorations: &[Decoration]) -> Result<Vec<Option<Decorat
     Ok(slots)
 }
 
+/// Точная геометрия сетки перед записью: `rows` строк по `width` клеток.
+/// Размер байтов в файле сам по себе её не гарантирует: строки 81 и 79
+/// дают верный суммарный размер, но границы строк были бы смещены.
+fn check_grid(layer: &'static str, grid: &[Vec<u8>], rows: usize, width: usize) -> Result<()> {
+    if grid.len() != rows {
+        return Err(MapError::Geometry {
+            layer,
+            detail: format!("ожидалось {rows} строк, а {}", grid.len()),
+        });
+    }
+    for (row, cells) in grid.iter().enumerate() {
+        if cells.len() != width {
+            return Err(MapError::Geometry {
+                layer,
+                detail: format!("в строке {row} ожидалось {width} клеток, а {}", cells.len()),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Карта обратно в формат `Konung.N`.
 ///
 /// Объекты и обычные декорации пишутся подряд с нулевого слота в порядке
@@ -257,15 +278,12 @@ pub fn serialize(konung_map: &KonungMap) -> Result<Vec<u8>> {
             count: konung_map.objects.len(),
         });
     }
-    if konung_map.ground.len() != konung_map.overlay.len() {
-        return Err(MapError::LayerMismatch);
-    }
+    check_grid("ground", &konung_map.ground, HEIGHT, WIDTH)?;
+    check_grid("overlay", &konung_map.overlay, HEIGHT, WIDTH)?;
+    check_grid("foot", &konung_map.foot, FINE_HEIGHT, FINE_WIDTH)?;
 
     let mut out: Vec<u8> = Vec::with_capacity(MAP_SIZE);
     for (ground_row, overlay_row) in konung_map.ground.iter().zip(&konung_map.overlay) {
-        if ground_row.len() != overlay_row.len() {
-            return Err(MapError::LayerMismatch);
-        }
         for (&ground, &overlay) in ground_row.iter().zip(overlay_row) {
             out.push(ground);
             out.push(overlay);
@@ -344,6 +362,7 @@ pub fn lights_fine(tiles: &[Vec<u8>]) -> Vec<Vec<u8>> {
 
 /// Свет обратно в `LIGHTS.N`; мелкий блок пересчитывается из тайлового.
 pub fn serialize_lights(lights: &Lights) -> Result<Vec<u8>> {
+    check_grid("tiles", &lights.tiles, HEIGHT, WIDTH)?;
     let mut out: Vec<u8> = Vec::with_capacity(LIGHTS_SIZE);
     for row in &lights.tiles {
         out.extend_from_slice(row);
@@ -445,6 +464,58 @@ mod tests {
             .map(|o| (o.object_id, o.x, o.y))
             .collect();
         assert_eq!(objects, [(117, 27, 33)]);
+    }
+
+    #[test]
+    fn serialize_checks_grid_geometry() {
+        // 81 клетка в строке 0 ground и 79 в строке 1 overlay: суммарный
+        // размер верный, но границы строк были бы смещены
+        let mut konung_map = parse(&empty_map_bytes()).unwrap();
+        konung_map.ground[0].push(0);
+        konung_map.overlay[1].pop();
+        assert!(matches!(
+            serialize(&konung_map),
+            Err(MapError::Geometry {
+                layer: "ground",
+                ..
+            })
+        ));
+
+        // число строк и ширина строки foot
+        let mut konung_map = parse(&empty_map_bytes()).unwrap();
+        konung_map.foot.remove(7);
+        assert!(matches!(
+            serialize(&konung_map),
+            Err(MapError::Geometry { layer: "foot", .. })
+        ));
+        let mut konung_map = parse(&empty_map_bytes()).unwrap();
+        konung_map.foot[10].push(0);
+        assert!(matches!(
+            serialize(&konung_map),
+            Err(MapError::Geometry { layer: "foot", .. })
+        ));
+
+        // обе сетки тайлов короткие на строку, ground и overlay поровну —
+        // парность не спасает, нужна точная высота
+        let mut konung_map = parse(&empty_map_bytes()).unwrap();
+        konung_map.ground.pop();
+        konung_map.overlay.pop();
+        assert!(matches!(
+            serialize(&konung_map),
+            Err(MapError::Geometry {
+                layer: "ground",
+                ..
+            })
+        ));
+
+        let lights = Lights {
+            tiles: vec![vec![0u8; WIDTH - 1]; HEIGHT],
+            fine: vec![],
+        };
+        assert!(matches!(
+            serialize_lights(&lights),
+            Err(MapError::Geometry { layer: "tiles", .. })
+        ));
     }
 
     #[test]

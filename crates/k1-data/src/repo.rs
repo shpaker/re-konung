@@ -124,8 +124,16 @@ impl GameDir {
     }
 
     /// `LIGHTS.N` карты (`TLights.N` у обучения); у карт 6, 8 и 46 его нет.
-    pub fn lights_path(&self, number: u32, files: FileSet) -> Option<PathBuf> {
-        self.find(files.lights, number).ok()
+    ///
+    /// Ошибки, кроме «нет такого файла», наружу: сбой чтения каталога не надо
+    /// путать с отсутствием света (в Python `lights_path` ловит только
+    /// `FileNotFoundError`).
+    pub fn lights_path(&self, number: u32, files: FileSet) -> Result<Option<PathBuf>> {
+        match self.find(files.lights, number) {
+            Ok(path) => Ok(Some(path)),
+            Err(RepoError::NotFound { .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     /// Байты карты из набора файлов.
@@ -135,7 +143,7 @@ impl GameDir {
 
     /// Байты света карты; `None` — у карты нет `LIGHTS.N`.
     pub fn lights_bytes(&self, number: u32, files: FileSet) -> Result<Option<Vec<u8>>> {
-        match self.lights_path(number, files) {
+        match self.lights_path(number, files)? {
             Some(path) => Ok(Some(std::fs::read(path)?)),
             None => Ok(None),
         }
@@ -201,15 +209,28 @@ mod tests {
     #[test]
     fn lights_path_is_none_when_missing() {
         let (_dir, game) = game_dir();
-        assert!(game.lights_path(1, GAME_FILES).is_some());
-        assert!(game.lights_path(10, GAME_FILES).is_none());
+        assert!(game.lights_path(1, GAME_FILES).unwrap().is_some());
+        assert!(game.lights_path(10, GAME_FILES).unwrap().is_none());
         assert_eq!(
             game.lights_path(4, TUTORIAL_FILES)
+                .unwrap()
                 .unwrap()
                 .file_name()
                 .unwrap(),
             "TLIGHTS.4"
         );
+    }
+
+    #[test]
+    fn lights_path_propagates_errors_other_than_not_found() {
+        // Нет самой папки игры: find даёт ошибку чтения каталога,
+        // lights_path не должен превращать её в «света нет»
+        let missing = TempDir::new().unwrap();
+        let game = GameDir::new(missing.path().join("no-such-dir"));
+        assert!(matches!(
+            game.lights_path(1, GAME_FILES),
+            Err(RepoError::Io(_))
+        ));
     }
 
     #[test]

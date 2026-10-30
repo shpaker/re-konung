@@ -98,7 +98,7 @@ fn lights_files_match_their_size_and_fine_follows_tiles() {
         let without_lights: Vec<u32> = numbers
             .iter()
             .copied()
-            .filter(|&number| game.lights_path(number, GAME_FILES).is_none())
+            .filter(|&number| game.lights_path(number, GAME_FILES).unwrap().is_none())
             .collect();
         assert_eq!(without_lights, [6, 8, 46], "{edition}: карты без света");
     }
