@@ -256,10 +256,18 @@ mod tests {
     #[test]
     fn state_files_follow_hero_number() {
         let dir = TempDir::new().unwrap();
-        for name in ["Game.0", "game.1", "GAME.2", "TGame.1", "Konung.1"] {
-            fs::write(dir.path().join(name), b"").unwrap();
+        // Имена в разном регистре, как в дистрибутиве, но каждое своё:
+        // тест не должен зависеть от регистра файловой системы — на macOS
+        // «Game.0» и «game.0» один файл, на Linux (CI) — два разных
+        for (name, content) in [
+            ("Game.0", &b"state"[..]),
+            ("game.1", b""),
+            ("GAME.2", b""),
+            ("TGame.1", b""),
+            ("Konung.1", b""),
+        ] {
+            fs::write(dir.path().join(name), content).unwrap();
         }
-        fs::write(dir.path().join("game.0"), b"state").unwrap();
         let game = GameDir::new(dir.path());
         assert_eq!(game.state_numbers(GAME_FILES).unwrap(), [0, 1, 2]);
         assert_eq!(game.state_numbers(TUTORIAL_FILES).unwrap(), [1]);
