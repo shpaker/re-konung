@@ -73,12 +73,36 @@ language = "system"
 entry = "uv run ruff check --fix"
 types = ["python"]
 
+[[repos.hooks]]
+id = "rust-fmt"
+name = "rustfmt"
+language = "system"
+entry = "rustfmt --edition 2024"
+types = ["rust"]
+
+[[repos.hooks]]
+id = "rust-clippy"
+name = "cargo clippy"
+language = "system"
+entry = "cargo clippy --manifest-path crates/Cargo.toml --all-targets -- -D warnings"
+types = ["rust"]
+pass_filenames = false
+
 # Тесты — перед push и в `just check`
 [[repos.hooks]]
 id = "test"
 name = "just test"
 language = "system"
 entry = "just test"
+stages = ["pre-push", "manual"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "cargo-test"
+name = "just cargo-test"
+language = "system"
+entry = "just cargo-test"
 stages = ["pre-push", "manual"]
 pass_filenames = false
 always_run = true

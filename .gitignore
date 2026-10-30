@@ -13,6 +13,9 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
+# Rust
+/crates/target/
+
 # Сессия Tiled: открытые карты и вид редактора
 *.tiled-session
 
