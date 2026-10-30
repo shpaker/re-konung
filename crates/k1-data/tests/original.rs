@@ -1,31 +1,15 @@
 //! Тесты на реальных файлах игры из `original/` (в git их нет).
 //!
-//! Без распакованного издания тест пропускается: ранний return с сообщением,
-//! аналог pytest.skip в tests/conftest.py. Как получить original/ —
-//! docs/k1/editions.md.
+//! Без распакованного издания тест пропускается: общий хелпер — в common.
 
-use std::path::PathBuf;
+mod common;
+
+use common::game_dirs;
 
 use k1_data::{
     map,
-    repo::{GAME_FILES, GameDir, TUTORIAL_FILES},
+    repo::{GAME_FILES, TUTORIAL_FILES},
 };
-
-fn game_dirs() -> Vec<(&'static str, GameDir)> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../original/k1");
-    ["rus", "eng"]
-        .into_iter()
-        .filter_map(|edition| {
-            let game = GameDir::new(root.join(edition).join("game"));
-            if game.root().is_dir() {
-                Some((edition, game))
-            } else {
-                eprintln!("пропуск: нет original/k1/{edition}/game (docs/k1/editions.md)");
-                None
-            }
-        })
-        .collect()
-}
 
 #[test]
 fn serialize_returns_every_map_byte_for_byte() {

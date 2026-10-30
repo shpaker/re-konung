@@ -148,6 +148,17 @@ impl GameDir {
             None => Ok(None),
         }
     }
+
+    /// Номера `Game.N` в папке — героев (без `TGame.N` обучения; с ним —
+    /// `files = TUTORIAL_FILES`).
+    pub fn state_numbers(&self, files: FileSet) -> Result<Vec<u32>> {
+        self.numbered(files.state)
+    }
+
+    /// Байты начального состояния `Game.<hero>` (или `TGame.<hero>` обучения).
+    pub fn state_bytes(&self, number: u32, files: FileSet) -> Result<Vec<u8>> {
+        Ok(std::fs::read(self.find(files.state, number)?)?)
+    }
 }
 
 #[cfg(test)]
@@ -240,6 +251,19 @@ mod tests {
         let game = GameDir::new(dir.path());
         assert_eq!(game.map_bytes(7, GAME_FILES).unwrap(), b"map data");
         assert_eq!(game.lights_bytes(7, GAME_FILES).unwrap(), None);
+    }
+
+    #[test]
+    fn state_files_follow_hero_number() {
+        let dir = TempDir::new().unwrap();
+        for name in ["Game.0", "game.1", "GAME.2", "TGame.1", "Konung.1"] {
+            fs::write(dir.path().join(name), b"").unwrap();
+        }
+        fs::write(dir.path().join("game.0"), b"state").unwrap();
+        let game = GameDir::new(dir.path());
+        assert_eq!(game.state_numbers(GAME_FILES).unwrap(), [0, 1, 2]);
+        assert_eq!(game.state_numbers(TUTORIAL_FILES).unwrap(), [1]);
+        assert_eq!(game.state_bytes(0, GAME_FILES).unwrap(), b"state");
     }
 
     #[test]
