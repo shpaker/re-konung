@@ -195,6 +195,19 @@ def decoration_slots(decorations: list[Decoration]) -> list[Decoration | None]:
     return slots
 
 
+def _check_grid(name: str, grid: list[list[int]] | list[bytes], rows: int, width: int) -> None:
+    """Точная геометрия сетки перед записью: `rows` строк по `width` клеток.
+
+    Размер байтов в файле сам по себе её не гарантирует: строки 81 и 79 клеток
+    дают верный суммарный размер, но границы строк были бы смещены.
+    """
+    if len(grid) != rows:
+        raise ValueError(f"слой {name}: ожидалось {rows} строк, а {len(grid)}")
+    for row, cells in enumerate(grid):
+        if len(cells) != width:
+            raise ValueError(f"слой {name}, строка {row}: ожидалось {width} клеток, а {len(cells)}")
+
+
 def serialize(konung_map: KonungMap) -> bytes:
     """Карта обратно в формат Konung.N.
 
@@ -206,6 +219,9 @@ def serialize(konung_map: KonungMap) -> bytes:
     decorations = decoration_slots(konung_map.decorations)
     if len(konung_map.objects) > MAX_OBJECTS:
         raise ValueError(f"объектов {len(konung_map.objects)}, максимум {MAX_OBJECTS}")
+    _check_grid("ground", konung_map.ground, HEIGHT, WIDTH)
+    _check_grid("overlay", konung_map.overlay, HEIGHT, WIDTH)
+    _check_grid("foot", konung_map.foot, FINE_HEIGHT, FINE_WIDTH)
 
     out = bytearray()
     for ground_row, overlay_row in zip(konung_map.ground, konung_map.overlay, strict=True):
@@ -255,6 +271,7 @@ def lights_fine(tiles: list[bytes]) -> list[bytes]:
 
 def serialize_lights(lights: Lights) -> bytes:
     """Свет обратно в LIGHTS.N; мелкий блок пересчитывается из тайлового."""
+    _check_grid("tiles", lights.tiles, HEIGHT, WIDTH)
     out = b"".join(lights.tiles) + b"".join(lights_fine(lights.tiles))
     if len(out) != LIGHTS_SIZE:
         raise ValueError(f"получилось {len(out)} байт вместо {LIGHTS_SIZE}")

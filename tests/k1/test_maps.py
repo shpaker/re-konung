@@ -34,6 +34,39 @@ def test_serialize_keeps_edits():
     assert [(o.object_id, o.x, o.y) for o in edited.objects] == [(117, 27, 33)]
 
 
+def test_serialize_checks_grid_geometry():
+    empty = bytes(map_file.MAP_SIZE - 16000 - 36000) + b"\xff" * (16000 + 36000)
+
+    # 81 клетка в строке 0 ground и 79 в строке 1 overlay: суммарный размер
+    # верный, но границы строк были бы смещены
+    konung_map = map_file.parse(empty)
+    konung_map.ground[0].append(0)
+    konung_map.overlay[1].pop()
+    with pytest.raises(ValueError, match="ground"):
+        map_file.serialize(konung_map)
+
+    # число строк и ширина строки foot
+    konung_map = map_file.parse(empty)
+    konung_map.foot.pop(7)
+    with pytest.raises(ValueError, match="foot"):
+        map_file.serialize(konung_map)
+    konung_map = map_file.parse(empty)
+    konung_map.foot[10] += b"\x00"
+    with pytest.raises(ValueError, match="foot"):
+        map_file.serialize(konung_map)
+
+    # обе сетки тайлов короткие на строку — парности строк мало, нужна точная высота
+    konung_map = map_file.parse(empty)
+    konung_map.ground.pop()
+    konung_map.overlay.pop()
+    with pytest.raises(ValueError, match="ground"):
+        map_file.serialize(konung_map)
+
+    lights = map_file.Lights([b"\x00" * (map_file.WIDTH - 1)] * map_file.HEIGHT, [])
+    with pytest.raises(ValueError, match="tiles"):
+        map_file.serialize_lights(lights)
+
+
 def test_foot_has_only_four_values(k1_game):
     # Правило Slavik «младшие 4 бита = 0xF» и его версия с ошибкой приоритета
     # («младший бит», docs/k1/formats/map.md) на этих значениях совпадают
