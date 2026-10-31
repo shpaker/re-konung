@@ -77,7 +77,7 @@ Headless-диагностика — без окна, GPU и рендерера; 
 
 ## Проверки
 
-`crates/` проверяются и локально, и в CI (job `rust` в `.github/workflows/ci.yml`: fmt, clippy, тесты). С появлением Bevy job `rust` компилирует его дерево зависимостей — это минуты, кэш в CI не настроен.
+`crates/` проверяются и локально, и в CI (job `rust` в `.github/workflows/ci.yml`: fmt, clippy, тесты). С появлением Bevy job `rust` компилирует его дерево зависимостей — это минуты, кэш в CI не настроен. На Linux сборке Bevy нужны системные `-dev` пакеты (wayland, x11, ALSA, udev) — в CI их ставит отдельный шаг, список взят из `docs/linux_dependencies.md` в крейте `bevy`; на macOS они не нужны.
 
 ```bash
 just cargo-test   # тесты: синтетические всегда, на данных — если есть original/
