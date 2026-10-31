@@ -14,6 +14,8 @@ pub type Result<T> = std::result::Result<T, ObjectsError>;
 
 #[derive(Debug, Error)]
 pub enum ObjectsError {
+    #[error("объект {object_id}: огней {count}, слотов {FLAME_SLOTS}")]
+    FlameCount { object_id: usize, count: i32 },
     #[error(transparent)]
     Graph(#[from] crate::graph_res::GraphError),
     #[error(transparent)]
@@ -81,7 +83,16 @@ pub struct ObjectsRes<'a> {
 fn simple_object(reader: &mut Reader<'_>, object_id: usize) -> Result<SimpleObject> {
     let flags = reader.u32()?;
     reader.skip(4); // размер блока
-    let flame_count = reader.s32()? as usize;
+    let flame_count = reader.s32()?;
+    if !(0..=FLAME_SLOTS as i32).contains(&flame_count) {
+        // Число огней задаёт и длину хвоста (FLAME_SLOTS − count)·5: вне слотов
+        // она стала бы отрицательной, а reserve — гигантским
+        return Err(ObjectsError::FlameCount {
+            object_id,
+            count: flame_count,
+        });
+    }
+    let flame_count = flame_count as usize;
     let frame_count = reader.u32()?;
     let unknown = reader.u32()?;
     let palette_offset = reader.u32()? as usize / 2;

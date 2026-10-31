@@ -1,3 +1,5 @@
+import pytest
+
 from konung import rle
 from konung.binary import Reader
 
@@ -36,3 +38,17 @@ def test_reader_stops_after_image():
     reader = Reader(data)
     rle.decode_indexed(reader)
     assert data[reader.pos :] == b"tail"
+
+
+def test_skip_past_row_width_is_an_error():
+    # Ширина 2, пропуск на 3 пикселя
+    data = _encode(2, 1, [bytes([0x83, 0])])
+    with pytest.raises(ValueError, match="пропуск"):
+        rle.decode_indexed(Reader(data))
+
+
+def test_skip_exactly_to_row_width_is_allowed():
+    # Пропуск ровно до конца строки, затем terminator
+    data = _encode(2, 1, [bytes([0x82, 0])])
+    image = rle.decode_indexed(Reader(data))
+    assert list(image.alpha) == [0, 0]

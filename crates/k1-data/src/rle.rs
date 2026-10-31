@@ -13,14 +13,31 @@ use crate::reader::{ReadError, Reader};
 
 pub type Result<T> = std::result::Result<T, RleError>;
 
+/// Предел размера картинки: в данных игры тайлы 114×64, спрайты до ~110×90,
+/// так что запас многократный. Ограждение от битого файла: без него заголовок
+/// s16×s16 позволил бы выделить до гигабайта на буфер до чтения первых данных.
+pub const MAX_DIMENSION: usize = 4096;
+
 #[derive(Debug, Error)]
 pub enum RleError {
     #[error("размер {width}×{height} по смещению {pos}")]
     NegativeSize { width: i16, height: i16, pos: usize },
+    #[error("размер {width}×{height} по смещению {pos} больше {MAX_DIMENSION} по стороне")]
+    TooLarge {
+        width: usize,
+        height: usize,
+        pos: usize,
+    },
     #[error("строка {row}: {x}+{count} пикселей больше ширины {width}")]
     RowOverflow {
         row: usize,
         x: usize,
+        count: usize,
+        width: usize,
+    },
+    #[error("строка {row}: пропуск {count} прозрачных пикселей выводит за ширину {width}")]
+    SkipOverflow {
+        row: usize,
         count: usize,
         width: usize,
     },
@@ -58,6 +75,13 @@ fn header(reader: &mut Reader<'_>) -> Result<(usize, usize)> {
         });
     }
     let (width, height) = (width as usize, height as usize);
+    if width > MAX_DIMENSION || height > MAX_DIMENSION {
+        return Err(RleError::TooLarge {
+            width,
+            height,
+            pos: header_pos,
+        });
+    }
     reader.skip(height * 2); // длины строк
     Ok((width, height))
 }
@@ -79,6 +103,13 @@ fn rows(
             }
             if n & 0x80 != 0 {
                 x += n & 0x7F;
+                if x > width {
+                    return Err(RleError::SkipOverflow {
+                        row: y,
+                        count: n & 0x7F,
+                        width,
+                    });
+                }
                 continue;
             }
             if x + n > width {
@@ -256,6 +287,40 @@ mod tests {
         assert!(matches!(
             decode_indexed(&mut Reader::new(&data)),
             Err(RleError::RowOverflow { .. })
+        ));
+    }
+
+    #[test]
+    fn skip_past_row_width_is_an_error() {
+        // Ширина 2, пропуск на 3 пикселя
+        let data = encode(2, 1, &[vec![0x83, 0]]);
+        assert!(matches!(
+            decode_indexed(&mut Reader::new(&data)),
+            Err(RleError::SkipOverflow {
+                row: 0,
+                count: 3,
+                width: 2
+            })
+        ));
+    }
+
+    #[test]
+    fn skip_exactly_to_row_width_is_allowed() {
+        // Пропуск ровно до конца строки, затем terminator
+        let data = encode(2, 1, &[vec![0x82, 0]]);
+        let image = decode_indexed(&mut Reader::new(&data)).unwrap();
+        assert_eq!(image.alpha, [0, 0]);
+    }
+
+    #[test]
+    fn oversized_image_is_rejected_before_allocating() {
+        // Заголовок 30000×30000 в коротком буфере: аллокации быть не должно
+        let mut data = Vec::new();
+        data.extend_from_slice(&(30000u16).to_le_bytes());
+        data.extend_from_slice(&(30000u16).to_le_bytes());
+        assert!(matches!(
+            decode_indexed(&mut Reader::new(&data)),
+            Err(RleError::TooLarge { .. })
         ));
     }
 
