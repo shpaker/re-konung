@@ -32,6 +32,49 @@ just tiled-install
 
 После этого в Tiled: «Файл → Открыть» → `original/k1/rus/game/Konung.1`.
 
+## Устройство
+
+Рядом живут две реализации. Python-пакет `konung/` и расширение `tiled/konung/` — эталон разбора форматов: при расхождении прав Python. Rust в `crates/` — будущий движок на [Bevy](https://bevyengine.org):
+
+```text
+   re-konung            re-konung-viewer
+   (kn-exec: игра)      (kn-viewer: окно, UI, headless-диагностика)
+         \                    /
+          ▼                  ▼
+              kn-io — Bevy: рендер сцены, камера, ввод, кэш текстур
+                     │
+                     ▼
+              kn-game — общий фасад серии: Game, Scene, check;
+                        скрывает специфику частей
+                     │
+                     ▼
+              k1-game — «Князь 1»: ресурсы, текстуры, список отрисовки
+                     │
+                     ▼
+              k1-data — форматы: Konung.N, Game.N, GRAPH.RES,
+                        Objects.res, LIGHTS.RES, FLAMES.RES, EXE
+```
+
+Зависимости идут только вниз: `kn-io` и бинарники не знают о K1, `kn-game` не знает о Bevy, `k1-data` — ни о том ни о другом. Пока часть серии одна, в `kn-game` нет «общих игровых правил», только фасад и модель сцены: общее выделяется, когда появится второй потребитель. Форматы описаны в [docs/k1/formats/](docs/k1/formats/), Rust-стороны — в [docs/rust.md](docs/rust.md).
+
+## Просмотр карты в Bevy
+
+```bash
+cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- \
+    --game-dir original/k1/rus/game
+```
+
+Панель слева: выбор карты и отладочные оверлеи — проходимость, свет, маркеры `Game.N` и персонажи (включены по умолчанию). При открытии карта целиком вписывается в окно; камера: WASD и стрелки или перетаскивание левой кнопкой, колесо — масштаб ступенями, на целых ступенях картинка пиксель-в-пиксель. Переключение оверлея кадр не сбрасывает.
+
+Проверка без окна и GPU — для CI и агентов:
+
+```bash
+cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- \
+    --game-dir original/k1/rus/game check --all --format json
+```
+
+Ненулевой код возврата, если карта не собралась или её текстура не декодировалась.
+
 ## Через агента
 
 Репозиторий — плагин для Claude Code, Codex и Qwen Code с навыком `konung-tiled-install`: агент ставит расширение в Tiled и проверяет, что карта открывается. Клон и `just` для этого не нужны, только Tiled 1.12 и своя копия игры.

@@ -87,6 +87,15 @@ impl MapSource {
     }
 }
 
+impl std::fmt::Display for MapSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            MapSource::Game => "game",
+            MapSource::Tutorial => "tutorial",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MapRef {
     pub source: MapSource,
@@ -199,6 +208,14 @@ impl Game {
         Ok(Scene {
             pieces: pieces.into_iter().map(piece).collect(),
         })
+    }
+
+    /// Карта, на которой начинается новая игра героя.
+    pub fn start_map(&self, hero: u32) -> MapRef {
+        MapRef {
+            source: MapSource::Game,
+            number: game_state::start_map(hero as usize) as u32,
+        }
     }
 
     /// RGBA-картинки ключей (параллельно списку); None — данных нет.

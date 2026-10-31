@@ -1,0 +1,16 @@
+[package]
+name = "kn-exec"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Исполняемый файл игры «Князь»: запуск новой игры"
+
+[[bin]]
+name = "re-konung"
+path = "src/main.rs"
+
+[dependencies]
+kn-game = { path = "../kn-game" }
+kn-io = { path = "../kn-io" }
+bevy = "0.20"
+clap = { version = "4", features = ["derive"] }

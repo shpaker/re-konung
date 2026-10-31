@@ -1,3 +1,3 @@
 [workspace]
-members = ["k1-data", "k1-game", "kn-game"]
+members = ["k1-data", "k1-game", "kn-game", "kn-io", "kn-viewer", "kn-exec"]
 resolver = "3"
