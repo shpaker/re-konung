@@ -10,7 +10,7 @@ re-konung — изучение и воссоздание движка игр с�
 
 - `konung/` — Python-пакет, CLI `konung` (`uv run konung --help`). Общее для частей — в корне пакета (`binary`, `rle`, `palette`, `disc`), своё у каждой части — в `konung/k1/`, позже `konung/k2/`.
 - `tiled/konung/` — расширение Tiled: `lib/k1.mjs` — разбор без Tiled API, `konung.mjs` — сборка карты Tiled. Логика повторяет Python, и при расхождении прав Python: у него тесты.
-- `crates/` — Rust-workspace: крейт `k1-data` — данные игры K1 (репозиторий `repo`, форматы `map` и `game_state`, правки состава `game_edit`, графика `graph_res`, `objects_res`, `lights_res`, `flames_res`, `rle` и таблицы из EXE), повторяет Python и пока ничего не заменяет; при расхождении прав Python. Трейты-абстракции объявляет потребитель, когда нужен мок. Подробности — [docs/rust.md](docs/rust.md).
+- `crates/` — Rust-workspace: крейт `k1-data` — данные игры K1 (репозиторий `repo`, форматы `map` и `game_state`, правки состава `game_edit`, графика `graph_res`, `objects_res`, `lights_res`, `flames_res`, `rle` и таблицы из EXE); `k1-game` — специфика K1 (ресурсы, текстуры, список отрисовки карты); `kn-game` — общий фасад и Bevy-независимая модель сцены. Rust повторяет Python и пока ничего не заменяет; при расхождении прав Python. Трейты-абстракции объявляет потребитель, когда нужен мок. Подробности — [docs/rust.md](docs/rust.md).
 - `tests/` — pytest. Тесты на данных берут файлы из `original/` и пропускаются, если их нет.
 - `original/` — файлы своей копии игры (образы дисков и распакованное), в git не попадают. Как подготовить — [docs/k1/editions.md](docs/k1/editions.md).
 - `out/` — всё, что сгенерировано (PNG, выгрузки), в git не попадает.

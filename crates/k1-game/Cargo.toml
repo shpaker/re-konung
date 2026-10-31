@@ -1,0 +1,13 @@
+[package]
+name = "k1-game"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "«Князь: Легенды Лесной страны» (1999): ресурсы и правила отображения первой части"
+
+[dependencies]
+k1-data = { path = "../k1-data" }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
