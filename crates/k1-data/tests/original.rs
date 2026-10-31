@@ -7,7 +7,7 @@ mod common;
 use common::game_dirs;
 
 use k1_data::{
-    map,
+    graph_res, map,
     repo::{GAME_FILES, TUTORIAL_FILES},
 };
 
@@ -94,16 +94,36 @@ fn lights_files_match_their_size_and_fine_follows_tiles() {
 #[test]
 fn tutorial_maps_return_byte_for_byte() {
     // Обучение есть только в ENG: Tutorial.4 и Tutorial.5.
-    // Проверка «единственная сырая декорация в слоте 994» — в Python-тесте:
-    // она требует GRAPH.RES, который в Rust ещё не перенесён.
     for (edition, game) in game_dirs() {
+        let graph_path = std::fs::read_dir(game.root())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.eq_ignore_ascii_case("graph.res"))
+            })
+            .unwrap_or_else(|| panic!("{edition}: нет GRAPH.RES"));
+        let graph_data = std::fs::read(graph_path).unwrap();
+        let graph = graph_res::parse(&graph_data).unwrap();
         for number in game.map_numbers(TUTORIAL_FILES).unwrap() {
             let data = game.map_bytes(number, TUTORIAL_FILES).unwrap();
+            let konung_map = map::parse(&data).unwrap();
             assert_eq!(
-                map::serialize(&map::parse(&data).unwrap()).unwrap(),
+                map::serialize(&konung_map).unwrap(),
                 data,
                 "{edition} tutorial.{number}"
             );
+            // Единственная запись не из GRAPH.RES — сырая, в слоте 994
+            let raw = konung_map
+                .decorations
+                .iter()
+                .filter(|decoration| {
+                    decoration.tile < 0 || graph.tile(decoration.tile as usize).is_none()
+                })
+                .map(|decoration| (decoration.slot, decoration.is_raw()))
+                .collect::<Vec<_>>();
+            assert_eq!(raw, [(994, true)], "{edition} tutorial.{number}");
             let lights = game
                 .lights_bytes(number, TUTORIAL_FILES)
                 .unwrap()

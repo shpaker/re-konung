@@ -3,6 +3,7 @@
 
 use thiserror::Error;
 
+use crate::graph_res::TILE_SLOTS;
 use crate::reader::Reader;
 
 pub const WIDTH: usize = 80;
@@ -33,11 +34,6 @@ pub const ODD_ROW_SHIFT: i32 = TILE_STEP_X / 2;
 /// флаг 0x40 — здесь застревают стрелы (гипотеза)
 pub const FOOT_BLOCKED: u8 = 0x0F;
 pub const FOOT_STOPS_ARROWS: u8 = 0x40;
-
-/// Число слотов тайлов GRAPH.RES: декорация с тайлом за их пределами — сырая
-/// ([Decoration::is_raw]). Временно здесь: переедет в модуль GRAPH.RES при его
-/// переносе (эталон — `konung/k1/graph_res.py`).
-pub const TILE_SLOTS: i32 = 512;
 
 pub type Result<T> = std::result::Result<T, MapError>;
 
@@ -76,7 +72,7 @@ impl Decoration {
     /// как есть и пишется обратно в свой слот, а не подряд с обычными
     /// (docs/k1/formats/map.md, «Запись»).
     pub fn is_raw(&self) -> bool {
-        self.tile >= TILE_SLOTS
+        self.tile >= TILE_SLOTS as i32
     }
 }
 
