@@ -186,16 +186,19 @@ fn drag_pan(
     transform.translation.y += motion.delta.y * scale;
 }
 
+/// Прокрутка над интерфейсом карту не масштабирует: иначе колесо, наведённое
+/// на список карт, ещё и меняло бы масштаб сцены.
 fn wheel_zoom(
     mut wheel: MessageReader<MouseWheel>,
     mut state: ResMut<CameraState>,
     mut scroll: Local<ZoomScroll>,
+    over_ui: Query<&Hovered, With<Node>>,
 ) {
     let mut steps = 0i32;
     for event in wheel.read() {
         steps += scroll.push(event.unit, event.y);
     }
-    if steps != 0 {
+    if steps != 0 && over_ui.is_empty() {
         state.step(steps);
     }
 }

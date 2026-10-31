@@ -27,34 +27,40 @@ pub struct TextureCache {
 }
 
 impl TextureCache {
-    /// Докачивает недостающие ключи; возвращает число новых текстур.
+    /// Докачивает недостающие ключи; возвращает текст проблем по тем, что не
+    /// собрались. Пустой список — все ключи дали картинку.
     ///
-    /// Ключи без данных (пустой слот, выход за границы) пропускаются —
-    /// `kn_game::Game::check` сообщает о них отдельно.
+    /// Кусок с несобравшейся текстурой не рисуется, но причина остаётся
+    /// видимой: молча потерять спрайт и показать аккуратную, но неполную карту
+    /// хуже, чем сказать, что данные битые.
     pub fn load(
         &mut self,
         game: &Game,
         ids: &[TextureId],
         images: &mut Assets<Image>,
-    ) -> kn_game::Result<usize> {
+    ) -> kn_game::Result<Vec<String>> {
         let missing: Vec<TextureId> = ids
             .iter()
             .copied()
             .filter(|id| !self.entries.contains_key(id))
             .collect();
         if missing.is_empty() {
-            return Ok(0);
+            return Ok(Vec::new());
         }
         let decoded = game.textures(&missing)?;
-        let mut added = 0;
-        for (id, rgba) in missing.into_iter().zip(decoded) {
-            let Some(rgba) = rgba else { continue };
-            let size = UVec2::new(rgba.width, rgba.height);
-            let handle = images.add(to_image(&rgba));
-            self.entries.insert(id, TextureEntry { handle, size });
-            added += 1;
+        let mut problems = Vec::new();
+        for (id, decoded) in missing.into_iter().zip(decoded) {
+            match decoded {
+                Ok(Some(rgba)) => {
+                    let size = UVec2::new(rgba.width, rgba.height);
+                    let handle = images.add(to_image(&rgba));
+                    self.entries.insert(id, TextureEntry { handle, size });
+                }
+                Ok(None) => problems.push(format!("{id:?}: пустой слот")),
+                Err(error) => problems.push(format!("{id:?}: {error}")),
+            }
         }
-        Ok(added)
+        Ok(problems)
     }
 
     pub fn get(&self, id: &TextureId) -> Option<&TextureEntry> {

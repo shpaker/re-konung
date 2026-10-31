@@ -76,8 +76,9 @@ fn load_start_map(
     mut pending: ResMut<PendingFrame>,
 ) {
     let map_ref: MapRef = game.0.start_map(new_game.hero);
-    // Чистая карта без отладочных оверлеев
+    // Карта так, как её видит игрок: отладочных слоёв нет, но отряд на месте
     let options = SceneOptions {
+        characters: true,
         hero: Some(new_game.hero),
         ..SceneOptions::default()
     };
@@ -89,9 +90,15 @@ fn load_start_map(
         }
     };
     let ids = scene.texture_ids();
-    if let Err(error) = cache.load(&game.0, &ids, &mut images) {
-        error!("не загрузились текстуры: {error}");
-        return;
+    let problems = match cache.load(&game.0, &ids, &mut images) {
+        Ok(problems) => problems,
+        Err(error) => {
+            error!("не загрузились текстуры: {error}");
+            return;
+        }
+    };
+    for problem in &problems {
+        warn!("карта {}: {problem}", map_ref.number);
     }
     spawn_scene(&mut commands, &scene, &cache);
     frame_scene(&scene, &cache, &mut pending);

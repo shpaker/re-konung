@@ -82,8 +82,6 @@ pub struct Viewer {
     pub selected: usize,
     /// Включённые оверлеи в порядке [Overlay]
     pub overlays: [bool; 4],
-    /// Номер `Game.N` для маркеров и персонажей; None — первый доступный
-    pub hero: Option<u32>,
 }
 
 impl Viewer {
@@ -101,7 +99,10 @@ impl Viewer {
             lights: self.is_on(Overlay::Lights),
             markers: self.is_on(Overlay::Markers),
             characters: self.is_on(Overlay::Characters),
-            hero: self.hero,
+            // Героя выбирает фасад по источнику карты: у обучения своё TGame.N,
+            // и один Game.N на все карты расставлял бы по tutorial-картам
+            // персонажей основной игры
+            hero: None,
         }
     }
 }
@@ -133,6 +134,8 @@ pub struct Stats {
     pub unique_textures: usize,
     pub cached_textures: usize,
     pub built_ms: u128,
+    /// Ключи, по которым картинка не собралась: карта показана, но не целиком
+    pub problems: Vec<String>,
     pub error: Option<String>,
 }
 
@@ -174,12 +177,20 @@ pub fn run_viewer(cli: Cli) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let selected = cli.initial_map(&maps).unwrap_or(0);
+    // Неверный номер карты — ошибка, а не тихий откат на первую
+    let selected = cli.initial_map(&maps);
+    if selected.is_none()
+        && let Some(number) = cli.map
+    {
+        eprintln!(
+            "{}: нет карты {number} источника {}",
+            cli.game_dir.display(),
+            MapSource::from(cli.source)
+        );
+        return ExitCode::FAILURE;
+    }
+    let selected = selected.unwrap_or(0);
     let labels = map_labels(&maps);
-    let hero = game
-        .heroes(MapSource::Game)
-        .ok()
-        .and_then(|heroes| heroes.first().copied());
 
     App::new()
         .add_plugins(
@@ -212,7 +223,6 @@ pub fn run_viewer(cli: Cli) -> ExitCode {
             maps: maps.clone(),
             selected,
             overlays: DEFAULT_OVERLAYS,
-            hero,
         })
         .add_systems(Startup, move |world: &mut World| {
             if let Err(error) = world.spawn_scene_list(panel_list(labels.clone(), selected)) {
@@ -353,9 +363,15 @@ fn rebuild_scene(
     };
     let ids = scene.texture_ids();
     let (pieces, unique) = (scene.pieces.len(), ids.len());
-    if let Err(error) = cache.load(&game.0, &ids, &mut images) {
-        *stats = failed(map_ref, cache.len(), error.to_string(), started.elapsed());
-        return;
+    let problems = match cache.load(&game.0, &ids, &mut images) {
+        Ok(problems) => problems,
+        Err(error) => {
+            *stats = failed(map_ref, cache.len(), error.to_string(), started.elapsed());
+            return;
+        }
+    };
+    for problem in &problems {
+        warn!("карта {map_ref:?}: {problem}");
     }
     if let Some(root) = active.0 {
         clear_scene(&mut commands, root);
@@ -373,6 +389,7 @@ fn rebuild_scene(
         unique_textures: unique,
         cached_textures: cache.len(),
         built_ms: started.elapsed().as_millis(),
+        problems,
         error: None,
     };
 }
@@ -384,6 +401,7 @@ fn failed(map: MapRef, cached: usize, error: String, elapsed: Duration) -> Stats
         unique_textures: 0,
         cached_textures: cached,
         built_ms: elapsed.as_millis(),
+        problems: Vec::new(),
         error: Some(error),
     }
 }
@@ -400,19 +418,26 @@ fn diagnostics(
         .map_or_else(|| "—".to_owned(), |fps| format!("{fps:.0}"));
     let next = match (&stats.map, &stats.error) {
         (_, Some(error)) => format!("error: {error}"),
-        (Some(map), None) => format!(
-            "{} {} · {} pieces · {} textures · {} ms\nzoom ×{} · {} fps",
-            match map.source {
-                MapSource::Game => "map",
-                MapSource::Tutorial => "tutorial",
-            },
-            map.number,
-            stats.pieces,
-            stats.unique_textures,
-            stats.built_ms,
-            zoom.scale(),
-            fps,
-        ),
+        (Some(map), None) => {
+            let problems = if stats.problems.is_empty() {
+                String::new()
+            } else {
+                format!(" · {} textures missing", stats.problems.len())
+            };
+            format!(
+                "{} {} · {} pieces · {} textures · {} ms{problems}\nzoom ×{} · {} fps",
+                match map.source {
+                    MapSource::Game => "map",
+                    MapSource::Tutorial => "tutorial",
+                },
+                map.number,
+                stats.pieces,
+                stats.unique_textures,
+                stats.built_ms,
+                zoom.scale(),
+                fps,
+            )
+        }
         (None, None) => String::new(),
     };
     if text.0 != next {
@@ -503,7 +528,6 @@ mod tests {
             maps: vec![],
             selected: 0,
             overlays: [false; 4],
-            hero: None,
         };
         assert!(!viewer.is_on(Overlay::Markers));
         viewer.set(Overlay::Markers, true);
@@ -519,7 +543,6 @@ mod tests {
             maps: vec![],
             selected: 0,
             overlays: DEFAULT_OVERLAYS,
-            hero: None,
         };
         assert!(viewer.is_on(Overlay::Characters));
         assert!(!viewer.is_on(Overlay::Foot));
@@ -527,6 +550,9 @@ mod tests {
         assert!(!viewer.is_on(Overlay::Markers));
         let options = viewer.options();
         assert!(options.characters && !options.foot && !options.lights && !options.markers);
+        // Просмотрщик героя не выбирает: фасад делает это по источнику карты,
+        // иначе tutorial-карты описывались бы состоянием основной игры
+        assert!(options.hero.is_none());
     }
 
     #[test]
