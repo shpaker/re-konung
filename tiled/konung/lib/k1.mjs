@@ -73,6 +73,8 @@ function decodeRle(reader, pixel) {
                 break;
             if (n & 0x80) {
                 x += n & 0x7f;
+                if (x > width)
+                    throw new Error(`RLE: строка ${y}: пропуск за шириной ${width}`);
                 continue;
             }
             if (x + n > width)

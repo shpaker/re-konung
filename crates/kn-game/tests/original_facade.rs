@@ -6,7 +6,7 @@ use kn_game::{Game, MapRef, MapSource, SceneOptions};
 
 fn game_roots() -> Vec<(&'static str, PathBuf)> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../original/k1");
-    ["rus", "eng"]
+    let dirs = ["rus", "eng"]
         .into_iter()
         .filter_map(|edition| {
             let game = root.join(edition).join("game");
@@ -17,7 +17,14 @@ fn game_roots() -> Vec<(&'static str, PathBuf)> {
                 None
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+    assert!(
+        !root.is_dir() || !dirs.is_empty(),
+        "{} существует, но ни одного издания с папкой game/ в нём нет: \
+         тесты на данных не выполнились бы. Как распаковать — docs/k1/editions.md",
+        root.display()
+    );
+    dirs
 }
 
 const FULL: SceneOptions = SceneOptions {
@@ -62,13 +69,19 @@ fn scene_of_first_map_is_full_and_deterministic() {
         );
         let ids = scene.texture_ids();
         let textures = game.textures(&ids).unwrap();
-        let missing = textures
+        let problems = textures
             .iter()
             .zip(&ids)
-            .filter(|(rgba, _)| rgba.is_none())
-            .map(|(_, id)| format!("{id:?}"))
+            .filter_map(|(decoded, id)| match decoded {
+                Ok(Some(_)) => None,
+                Ok(None) => Some(format!("{id:?}: пустой слот")),
+                Err(error) => Some(format!("{id:?}: {error}")),
+            })
             .collect::<Vec<_>>();
-        assert!(missing.is_empty(), "{edition}: не декодируются {missing:?}");
+        assert!(
+            problems.is_empty(),
+            "{edition}: не декодируются {problems:?}"
+        );
     }
 }
 
@@ -102,5 +115,50 @@ fn check_reports_no_errors() {
                 .collect::<Vec<_>>()
         };
         assert_eq!(counts(&report), counts(&again), "{edition}: статистика");
+    }
+}
+
+/// Tutorial-карты описывает `TGame.N`, а не `Game.N`.
+///
+/// До правки `check` брал первое состояние из `Game.N` для всех источников, и
+/// по картам обучения расставлялись персонажи и отряды основной игры.
+#[test]
+fn tutorial_maps_are_described_by_their_own_state() {
+    use k1_data::{characters, game_state, repo::GameDir};
+
+    for (edition, root) in game_roots() {
+        let game = Game::open(&root).unwrap();
+        let tutorial = game
+            .maps()
+            .unwrap()
+            .into_iter()
+            .filter(|map| map.source == MapSource::Tutorial)
+            .collect::<Vec<_>>();
+        if tutorial.is_empty() {
+            continue; // обучения нет в этом издании
+        }
+        let hero = game.heroes(MapSource::Tutorial).unwrap()[0];
+        let dir = GameDir::new(&root);
+        let state = game_state::parse(
+            &dir.state_bytes(hero, k1_data::repo::TUTORIAL_FILES)
+                .unwrap(),
+        )
+        .unwrap();
+        let report = game.check(Some(&tutorial)).unwrap();
+        for map_ref in &tutorial {
+            let entities = game_state::on_map(&state, map_ref.number as usize, Some(hero as usize));
+            let expected = characters::placed(&entities, &state).len();
+            let got = report
+                .maps
+                .iter()
+                .find(|check| check.number == map_ref.number)
+                .unwrap()
+                .characters;
+            assert_eq!(
+                got, expected,
+                "{edition}: tutorial {}: персонажи должны браться из TGame.{hero}",
+                map_ref.number
+            );
+        }
     }
 }

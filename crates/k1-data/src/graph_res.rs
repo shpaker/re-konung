@@ -11,6 +11,8 @@ pub type Result<T> = std::result::Result<T, GraphError>;
 
 #[derive(Debug, Error)]
 pub enum GraphError {
+    #[error("тайл {tile}: палитра {palette} не помещается в банк цветов")]
+    PaletteOutOfRange { tile: usize, palette: usize },
     #[error(transparent)]
     Rle(#[from] RleError),
     #[error(transparent)]
@@ -18,6 +20,8 @@ pub enum GraphError {
 }
 
 pub const PALETTE_BANK_COLORS: usize = 256 * 256;
+/// Цветов в одной палитре и максимальный допустимый offset палитры в банке.
+pub const PALETTE_BANK_SIZE: usize = 256;
 pub const CURSOR_COUNT: usize = 11;
 /// Число слотов тайлов: декорация с тайлом за их пределами — сырая
 /// ([crate::map::Decoration::is_raw]).
@@ -194,11 +198,21 @@ pub struct GraphRes<'a> {
 }
 
 impl GraphRes<'_> {
-    pub fn palette(&self, offset: usize) -> Vec<(u8, u8, u8)> {
-        self.colors[offset..offset + 256]
-            .iter()
-            .map(|&c| rgb555(c))
-            .collect()
+    /// 256 цветов из банка, начиная с `offset`; None — offset за банком.
+    ///
+    /// Смещения приходят из файлов (`u32/2` в тайлах и простых объектах),
+    /// поэтому доступ к банку проверяется, а не нарезается срезом вслепую.
+    pub fn palette(&self, offset: usize) -> Option<Vec<(u8, u8, u8)>> {
+        let end = offset.checked_add(PALETTE_BANK_SIZE)?;
+        if end > self.colors.len() {
+            return None;
+        }
+        Some(
+            self.colors[offset..end]
+                .iter()
+                .map(|&c| rgb555(c))
+                .collect(),
+        )
     }
 
     pub fn tile(&self, index: usize) -> Option<&Tile> {
@@ -248,10 +262,20 @@ pub fn parse(data: &[u8]) -> Result<GraphRes<'_>> {
         reader.seek(data_start + offset as usize);
         let image = rle::decode_indexed(&mut reader)?;
         // Смещение палитры записано в байтах от начала банка
+        let palette_offset = palette as usize / 2;
+        if palette_offset
+            .checked_add(PALETTE_BANK_SIZE)
+            .is_none_or(|end| end > PALETTE_BANK_COLORS)
+        {
+            return Err(GraphError::PaletteOutOfRange {
+                tile: index,
+                palette: palette_offset,
+            });
+        }
         tiles[index] = Some(Tile {
             index,
             image,
-            palette_offset: palette as usize / 2,
+            palette_offset,
         });
     }
 

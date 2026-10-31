@@ -8,11 +8,21 @@
 use k1_data::{
     characters::LayerSource,
     flames_res::{self, FlamesRes},
-    graph_res::GraphRes,
+    graph_res::{GraphError, GraphRes},
     lights_res::{self, LightsRes},
     objects_res::ObjectsRes,
     rle::{self, IndexedImage},
 };
+use thiserror::Error;
+
+/// Почему картинка ключа не собралась.
+#[derive(Debug, Error)]
+pub enum TextureError {
+    #[error("палитра {offset} не помещается в банк цветов GRAPH.RES")]
+    PaletteOutOfRange { offset: usize },
+    #[error(transparent)]
+    Graph(#[from] GraphError),
+}
 
 /// Тени — чёрная маска с прозрачностью 0.4 (как слой shadows в Tiled)
 pub const SHADOW_ALPHA: u8 = 102;
@@ -137,41 +147,67 @@ fn sprites_for<'a>(
     }
 }
 
-/// Картинка ключа; None — данных нет (пустой слот, выход за границы).
+/// Картинка ключа.
+///
+/// `Ok(None)` — слот пуст по данным (отрицательное смещение в таблице, пустой
+/// тайл); `Err` — данные битые, и причину возвращаем текстом ошибки, а не
+/// молчаливым «картинки нет».
 pub fn decode(
     key: &TextureKey,
     graph: &GraphRes<'_>,
     objects: &ObjectsRes<'_>,
     lights: &LightsRes,
     flames: &FlamesRes,
-) -> Option<Rgba> {
+) -> Result<Option<Rgba>, TextureError> {
     if let Some(rgba) = decode_overlay(key) {
-        return Some(rgba);
+        return Ok(Some(rgba));
     }
-    match *key {
+    // Палитры приходят из файлов и могут указывать за конец банка цветов
+    let palette = |offset: usize| -> Result<Vec<(u8, u8, u8)>, TextureError> {
+        graph
+            .palette(offset)
+            .ok_or(TextureError::PaletteOutOfRange { offset })
+    };
+    Ok(match *key {
         TextureKey::Tile { index } => {
-            let tile = graph.tile(index)?;
+            let Some(tile) = graph.tile(index) else {
+                return Ok(None);
+            };
             Some(Rgba::from_indexed(
                 &tile.image,
-                &graph.palette(tile.palette_offset),
+                &palette(tile.palette_offset)?,
             ))
         }
         TextureKey::ObjectFrame { object_id, frame } => {
-            let simple = objects.simple.get(object_id)?.as_ref()?;
-            let image = simple.frames.get(frame)?.image.as_ref()?;
-            Some(Rgba::from_indexed(
-                image,
-                &graph.palette(simple.palette_offset),
-            ))
+            let Some(simple) = objects.simple.get(object_id).and_then(Option::as_ref) else {
+                return Ok(None);
+            };
+            let Some(image) = simple
+                .frames
+                .get(frame)
+                .and_then(|frame| frame.image.as_ref())
+            else {
+                return Ok(None);
+            };
+            Some(Rgba::from_indexed(image, &palette(simple.palette_offset)?))
         }
         TextureKey::ObjectShadow { object_id, frame } => {
-            let simple = objects.simple.get(object_id)?.as_ref()?;
-            Some(Rgba::from_shadow(
-                simple.frames.get(frame)?.shadow.as_ref()?,
-            ))
+            let Some(simple) = objects.simple.get(object_id).and_then(Option::as_ref) else {
+                return Ok(None);
+            };
+            let Some(shadow) = simple
+                .frames
+                .get(frame)
+                .and_then(|frame| frame.shadow.as_ref())
+            else {
+                return Ok(None);
+            };
+            Some(Rgba::from_shadow(shadow))
         }
         TextureKey::FlameFrame { index } => {
-            let frame = flames.frames.get(index)?;
+            let Some(frame) = flames.frames.get(index) else {
+                return Ok(None);
+            };
             Some(Rgba {
                 width: frame.width as u32,
                 height: frame.height as u32,
@@ -181,18 +217,32 @@ pub fn decode(
         TextureKey::SpriteImage {
             source,
             image_id,
-            palette,
+            palette: palette_offset,
         } => {
-            let sprites = sprites_for(source, graph, objects)?;
-            let image = sprites.image(image_id as i16).ok()??;
-            Some(Rgba::from_indexed(&image, &graph.palette(palette as usize)))
+            let Some(sprites) = sprites_for(source, graph, objects) else {
+                return Ok(None);
+            };
+            let Some(image) = sprites.image(image_id as i16)? else {
+                return Ok(None);
+            };
+            Some(Rgba::from_indexed(
+                &image,
+                &palette(palette_offset as usize)?,
+            ))
         }
         TextureKey::SpriteShadow { source, image_id } => {
-            let sprites = sprites_for(source, graph, objects)?;
-            Some(Rgba::from_shadow(&sprites.shadow(image_id as i16).ok()??))
+            let Some(sprites) = sprites_for(source, graph, objects) else {
+                return Ok(None);
+            };
+            let Some(image) = sprites.shadow(image_id as i16)? else {
+                return Ok(None);
+            };
+            Some(Rgba::from_shadow(&image))
         }
         TextureKey::LightMask { index } => {
-            let mask = lights.tiles.get(index)?;
+            let Some(mask) = lights.tiles.get(index) else {
+                return Ok(None);
+            };
             Some(Rgba {
                 width: lights_res::TILE_MASK_WIDTH as u32,
                 height: lights_res::TILE_MASK_HEIGHT as u32,
@@ -202,7 +252,7 @@ pub fn decode(
         TextureKey::FootDiamond { .. }
         | TextureKey::MarkerRing { .. }
         | TextureKey::Solid { .. } => unreachable!("оверлеи декодируются выше"),
-    }
+    })
 }
 
 /// Ключи-оверлеи рисуются чистой растеризацией, ресурсы игры не нужны.

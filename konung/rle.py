@@ -51,6 +51,8 @@ def _rows(reader: Reader, width: int, height: int, pixel_size: int):
                 break
             if n & 0x80:
                 x += n & 0x7F
+                if x > width:
+                    raise ValueError(f"строка {y}: пропуск {n & 0x7F} выводит за ширину {width}")
                 continue
             if x + n > width:
                 raise ValueError(f"строка {y}: {x}+{n} пикселей больше ширины {width}")
