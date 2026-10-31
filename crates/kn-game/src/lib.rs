@@ -12,12 +12,13 @@ use serde::Serialize;
 use thiserror::Error;
 
 use k1_data::{
-    game_state, map,
+    game_state::{self, GameState},
+    map,
     repo::{FileSet, GAME_FILES, GameDir, TUTORIAL_FILES},
 };
 use k1_game::{resources::Resources, scene::SceneInput, textures::TextureKey};
 
-pub use k1_game::textures::Rgba;
+pub use k1_game::textures::{Rgba, TextureError};
 
 pub type Result<T> = std::result::Result<T, GameError>;
 
@@ -201,8 +202,12 @@ impl Game {
         })
     }
 
-    /// RGBA-картинки ключей (параллельно списку); None — данных нет.
-    pub fn textures(&self, ids: &[TextureId]) -> Result<Vec<Option<Rgba>>> {
+    /// RGBA-картинки ключей, позиционно параллельно `ids`.
+    ///
+    /// Наружу уходит и причина: потребитель решает, пропускать ли кусок, но
+    /// молча терять картинку из-за битых данных нельзя. Внешняя `Err` — не
+    /// разобрались ресурсы игры.
+    pub fn textures(&self, ids: &[TextureId]) -> Result<Vec<DecodedTexture>> {
         Ok(self.resources.with_graphics(|graph, objects| {
             ids.iter()
                 .map(|id| {
@@ -220,6 +225,8 @@ impl Game {
 
     /// Headless-проверка карт: сцена строится, все текстуры декодируются,
     /// статистика детерминирована. `None` — все карты.
+    ///
+    /// Ошибка одной карты попадает в отчёт и не прерывает проверку остальных.
     pub fn check(&self, maps: Option<&[MapRef]>) -> Result<CheckReport> {
         let owned;
         let maps = match maps {
@@ -229,27 +236,48 @@ impl Game {
                 &owned
             }
         };
+        // Начальное состояние своё у каждого источника: у игры Game.N, у
+        // обучения TGame.N. Брать Game.N для tutorial-карт значило бы расставлять
+        // по ним персонажей и отряды другой игры.
+        let states = self.states_for(maps)?;
         let mut report = CheckReport { maps: Vec::new() };
-        // Состояние героя одно на все карты; графика разбирается один раз
-        let hero = self.heroes(MapSource::Game)?.first().copied();
-        let state = hero
-            .map(|hero| self.dir.state_bytes(hero, GAME_FILES))
-            .transpose()?
-            .map(|bytes| game_state::parse(&bytes))
-            .transpose()?;
         self.resources.with_graphics(|graph, objects| {
             for &map_ref in maps {
+                let (hero, state) = states
+                    .iter()
+                    .find(|(source, ..)| *source == map_ref.source)
+                    .map(|(_, hero, state)| (hero.as_ref().copied(), state.as_ref()))
+                    .unwrap_or((None, None));
                 report.maps.push(self.check_map(
                     map_ref,
                     graph,
                     objects,
-                    state.as_ref(),
-                    hero.map(|h| h as usize),
-                )?);
+                    hero.map(|hero| hero as usize),
+                    state,
+                ));
             }
             Ok::<_, GameError>(())
         })??;
         Ok(report)
+    }
+
+    /// Герой и состояние по каждому источнику карт, который встречается в списке.
+    fn states_for(&self, maps: &[MapRef]) -> Result<Vec<SourceState>> {
+        let mut states: Vec<SourceState> = Vec::new();
+        for map in maps {
+            if states.iter().any(|(source, ..)| *source == map.source) {
+                continue;
+            }
+            let files = map.source.file_set();
+            let hero = self.heroes(map.source)?.first().copied();
+            let state = hero
+                .map(|hero| self.dir.state_bytes(hero, files))
+                .transpose()?
+                .map(|bytes| game_state::parse(&bytes))
+                .transpose()?;
+            states.push((map.source, hero, state));
+        }
+        Ok(states)
     }
 
     fn check_map(
@@ -257,30 +285,27 @@ impl Game {
         map_ref: MapRef,
         graph: &k1_data::graph_res::GraphRes<'_>,
         objects: &k1_data::objects_res::ObjectsRes<'_>,
-        state: Option<&game_state::GameState>,
         hero: Option<usize>,
-    ) -> Result<MapCheck> {
+        state: Option<&GameState>,
+    ) -> MapCheck {
+        let mut check = MapCheck::new(map_ref);
+        if let Err(error) = self.fill_map_check(map_ref, graph, objects, hero, state, &mut check) {
+            check.errors.push(error.to_string());
+        }
+        check
+    }
+
+    fn fill_map_check(
+        &self,
+        map_ref: MapRef,
+        graph: &k1_data::graph_res::GraphRes<'_>,
+        objects: &k1_data::objects_res::ObjectsRes<'_>,
+        hero: Option<usize>,
+        state: Option<&GameState>,
+        check: &mut MapCheck,
+    ) -> Result<()> {
         let files = map_ref.source.file_set();
-        let mut check = MapCheck {
-            source: map_ref.source,
-            number: map_ref.number,
-            pieces: 0,
-            unique_textures: 0,
-            missing_textures: 0,
-            objects: 0,
-            decorations: 0,
-            raw_decorations: 0,
-            characters: 0,
-            has_lights: false,
-            errors: Vec::new(),
-        };
-        let map_bytes = match self.dir.map_bytes(map_ref.number, files) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                check.errors.push(error.to_string());
-                return Ok(check);
-            }
-        };
+        let map_bytes = self.dir.map_bytes(map_ref.number, files)?;
         let konung_map = map::parse(&map_bytes)?;
         check.objects = konung_map.objects.len();
         check.decorations = konung_map.decorations.len();
@@ -317,24 +342,43 @@ impl Game {
         };
         let ids = scene.texture_ids();
         check.unique_textures = ids.len();
+        let mut missing = 0;
         for id in &ids {
-            let rgba = k1_game::textures::decode(
+            match k1_game::textures::decode(
                 &id.0,
                 graph,
                 objects,
                 &self.resources.lights,
                 &self.resources.flames,
-            );
-            if rgba.is_none() {
-                check
-                    .errors
-                    .push(format!("текстура не декодируется: {:?}", id.0));
+            ) {
+                Ok(Some(_)) => {}
+                // Пустой слот и битые данные — разные случаи: у второго есть
+                // причина, и её надо показать, а не молча не дорисовать кусок
+                Ok(None) => {
+                    missing += 1;
+                    check.errors.push(format!("нет картинки: {:?}", id.0));
+                }
+                Err(error) => {
+                    missing += 1;
+                    check.errors.push(format!("текстура {:?}: {error}", id.0));
+                }
             }
         }
-        check.missing_textures = check.errors.len();
-        Ok(check)
+        check.missing_textures = missing;
+        Ok(())
     }
 }
+
+/// Результат декодирования одного ключа текстуры.
+///
+/// `Ok(Some)` — картинка есть, `Ok(None)` — слот пуст по данным, `Err` — данные
+/// битые и известна причина.
+pub type DecodedTexture = std::result::Result<Option<Rgba>, TextureError>;
+
+/// Начальное состояние источника карт для проверки: номер `Game.N`/`TGame.N` и
+/// разобранный файл. `None` — у источника нет состояния (например, обучения в
+/// издании, где его нет).
+type SourceState = (MapSource, Option<u32>, Option<GameState>);
 
 fn piece(from: k1_game::scene::DrawPiece) -> Piece {
     Piece {
@@ -360,6 +404,24 @@ pub struct MapCheck {
     pub characters: usize,
     pub has_lights: bool,
     pub errors: Vec<String>,
+}
+
+impl MapCheck {
+    fn new(map_ref: MapRef) -> Self {
+        Self {
+            source: map_ref.source,
+            number: map_ref.number,
+            pieces: 0,
+            unique_textures: 0,
+            missing_textures: 0,
+            objects: 0,
+            decorations: 0,
+            raw_decorations: 0,
+            characters: 0,
+            has_lights: false,
+            errors: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
