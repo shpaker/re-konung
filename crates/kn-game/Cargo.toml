@@ -1,0 +1,15 @@
+[package]
+name = "kn-game"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Общий фасад игр серии «Князь»: модель сцены и подготовка данных для отображения"
+
+[dependencies]
+k1-data = { path = "../k1-data" }
+k1-game = { path = "../k1-game" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

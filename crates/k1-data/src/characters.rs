@@ -17,6 +17,13 @@ pub const COLORS_PER_PALETTE: usize = 256;
 /// (Slavik game_character.cpp:147)
 pub const DYNAMIC_ANIMATIONS: u8 = 6;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LayerSource {
+    Model(usize),
+    Equipment(usize),
+    Dynamic(usize),
+}
+
 #[derive(Debug, Clone)]
 pub struct Layer {
     pub image: IndexedImage,
@@ -25,6 +32,10 @@ pub struct Layer {
     /// Левый верхний угол на карте
     pub x: i32,
     pub y: i32,
+    /// Откуда картинка: нужно потребителям, которые кэшируют текстуры
+    /// по (источник, номер картинки) вместо декодирования каждый раз
+    pub source: LayerSource,
+    pub image_id: i16,
 }
 
 #[derive(Debug, Clone)]
@@ -118,17 +129,26 @@ pub fn compose(
     };
 
     let palette = usize::try_from(character.palette_offset.div_euclid(2)).unwrap_or(0);
+    let body_source = if character.has_dynamic_sprite() {
+        LayerSource::Dynamic(character.sprite_set as usize)
+    } else {
+        LayerSource::Model(character.sprite_set as usize)
+    };
     let mut layers = vec![Layer {
         image,
         palette_offset: palette,
         x: x + sprite_frame.image_offset.0 as i32,
         y: y + sprite_frame.image_offset.1 as i32,
+        source: body_source,
+        image_id: sprite_frame.image_id,
     }];
     let shadow = sprites.shadow(sprite_frame.image_id)?.map(|image| Layer {
         image,
         palette_offset: 0,
         x: x + sprite_frame.shadow_offset.0 as i32,
         y: y + sprite_frame.shadow_offset.1 as i32,
+        source: body_source,
+        image_id: sprite_frame.image_id,
     });
 
     if !character.has_dynamic_sprite() {
@@ -163,6 +183,8 @@ pub fn compose(
                 palette_offset: EQUIPMENT_PALETTES[info.sprite_set as usize] * COLORS_PER_PALETTE,
                 x: x + sprite_frame.weapon_offset.0 as i32 + gear_frame.image_offset.0 as i32,
                 y: y + sprite_frame.weapon_offset.1 as i32 + gear_frame.image_offset.1 as i32,
+                source: LayerSource::Equipment(info.sprite_set as usize),
+                image_id: gear_frame.image_id,
             });
         }
     }
