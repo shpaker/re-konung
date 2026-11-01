@@ -7,10 +7,13 @@
 //! FloatOrd(transform.z)`), поэтому каждый следующий кусок сцены выше
 //! предыдущего на [`Z_STEP`].
 
+use std::sync::Arc;
+
 use bevy::prelude::*;
 use kn_game::{Piece, Scene};
 
-use crate::textures::TextureCache;
+use crate::animation::{Animator, Frame, Sequence};
+use crate::textures::{TextureCache, TextureEntry};
 
 /// Шаг z между соседними кусками сцены.
 pub const Z_STEP: f32 = 0.01;
@@ -64,29 +67,88 @@ pub fn piece_size(piece: &Piece, size: UVec2) -> Vec2 {
     )
 }
 
-/// Спрайты сцены новым корнем; куски без загруженной текстуры пропускаются.
+/// Кадр модели сцены → кадр последовательности.
+///
+/// Размер берётся из загруженной картинки кадра, смещение — из данных. Без
+/// картинки кадр скрыт: причину уже вернул [`TextureCache::load`], и молча
+/// пустой спрайт вместо кадра был бы хуже пропуска.
+fn animation_frame(frame: &kn_game::AnimationFrame, entry: Option<&TextureEntry>) -> Frame {
+    Frame {
+        image: entry.map(|entry| entry.handle.clone()),
+        size: entry.map_or(Vec2::ZERO, |entry| {
+            Vec2::new(entry.size.x as f32, entry.size.y as f32)
+        }),
+        offset: Vec2::new(frame.dx as f32, frame.dy as f32),
+        ticks: frame.ticks,
+    }
+}
+
+/// Кадры из модели сцены → последовательность картинок.
+///
+/// Кадры берутся из кэша целиком: анимированный кусок без какого-то кадра
+/// показывал бы пустое место в середине цикла. `None` — показывать нечего ни в
+/// одном кадре.
+pub fn piece_sequence(
+    animation: &kn_game::Animation,
+    cache: &TextureCache,
+) -> Option<Arc<Sequence>> {
+    let frames = animation
+        .frames
+        .iter()
+        .map(|frame| animation_frame(frame, frame.texture.as_ref().and_then(|id| cache.get(id))))
+        .collect::<Vec<_>>();
+    frames
+        .iter()
+        .any(|frame| frame.image.is_some())
+        .then(|| Arc::new(Sequence::new(frames)))
+}
+
+/// Спрайты сцены новым корнем; куски без единой загруженной картинки пропускаются.
+///
+/// Кусок с анимацией получает [`Animator`]: часы у сцены одни, поэтому слои
+/// одного объекта или персонажа идут в такт, а базовый кадр (кадр из данных)
+/// показан при нуле часов — пока анимация не включена, картина совпадает со
+/// статичным рендером.
 pub fn spawn_scene(commands: &mut Commands, scene: &Scene, cache: &TextureCache) -> Entity {
     let root = commands
         .spawn((MapRoot, Transform::IDENTITY, Visibility::Visible))
         .id();
     let mut children = Vec::with_capacity(scene.pieces.len());
     for (order, piece) in scene.pieces.iter().enumerate() {
-        let Some(entry) = cache.get(&piece.texture) else {
+        let base = piece.texture.as_ref().and_then(|id| cache.get(id));
+        let sequence = piece
+            .animation
+            .as_ref()
+            .and_then(|animation| piece_sequence(animation, cache));
+        if base.is_none() && sequence.is_none() {
             continue;
-        };
-        children.push(
-            commands
-                .spawn((
-                    ScenePiece,
-                    Sprite {
-                        image: entry.handle.clone(),
-                        custom_size: Some(piece_size(piece, entry.size)),
-                        ..Default::default()
-                    },
-                    piece_transform(piece.x, piece.y, piece.w, piece.h, entry.size, order),
-                ))
-                .id(),
-        );
+        }
+        let size = base.map_or(UVec2::ZERO, |entry| entry.size);
+        let mut entity = commands.spawn((
+            ScenePiece,
+            Sprite {
+                image: base.map_or_else(Handle::default, |entry| entry.handle.clone()),
+                custom_size: Some(piece_size(piece, size)),
+                ..Default::default()
+            },
+            // Куску, у которого в базовом кадре картинки нет, показывать нечего
+            // до его кадра анимации
+            if base.is_some() {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            },
+            piece_transform(piece.x, piece.y, piece.w, piece.h, size, order),
+        ));
+        if let (Some(sequence), Some(animation)) = (sequence, piece.animation.as_ref()) {
+            entity.insert(Animator::with_base(
+                sequence,
+                piece.x,
+                piece.y,
+                animation.base,
+            ));
+        }
+        children.push(entity.id());
     }
     commands.entity(root).add_children(&children);
     root
@@ -108,7 +170,7 @@ pub fn scene_bounds(scene: &Scene, cache: &TextureCache) -> Option<(Vec2, Vec2)>
     let mut max = Vec2::splat(f32::MIN);
     let mut any = false;
     for piece in &scene.pieces {
-        let Some(entry) = cache.get(&piece.texture) else {
+        let Some(entry) = piece.texture.as_ref().and_then(|id| cache.get(id)) else {
             continue;
         };
         let size = piece_size(piece, entry.size);
@@ -159,5 +221,47 @@ mod tests {
         // центр куска 67×88 в (−30, −76) — это (3.5, 32) в мире Bevy
         let transform = piece_transform(-30, -76, Some(67), Some(88), UNIT, 0);
         assert_eq!(transform.translation, Vec3::new(3.5, 32.0, 0.0));
+    }
+
+    fn model_frame(dx: i32, dy: i32, ticks: u32) -> kn_game::AnimationFrame {
+        kn_game::AnimationFrame {
+            texture: None,
+            dx,
+            dy,
+            ticks,
+        }
+    }
+
+    #[test]
+    fn frame_without_texture_is_hidden() {
+        // Кадр, картинка которого не загружена, не должен становиться пустым
+        // спрайтом: он скрыт, а причину вернул загрузчик текстур
+        let frame = animation_frame(&model_frame(3, -2, 4), None);
+        assert!(frame.image.is_none());
+        assert_eq!(frame.size, Vec2::ZERO);
+        assert_eq!(frame.offset, Vec2::new(3.0, -2.0));
+        assert_eq!(frame.ticks, 4);
+    }
+
+    #[test]
+    fn frame_size_follows_its_texture() {
+        let entry = TextureEntry {
+            handle: Handle::default(),
+            size: UVec2::new(114, 64),
+        };
+        let frame = animation_frame(&model_frame(0, 0, 1), Some(&entry));
+        assert_eq!(frame.size, Vec2::new(114.0, 64.0));
+        assert!(frame.image.is_some());
+    }
+
+    #[test]
+    fn sequence_without_any_picture_is_not_built() {
+        // Кусок, у которого не загружен ни один кадр, не получает аниматора:
+        // спрайт и так скрыт
+        let animation = kn_game::Animation {
+            base: 0,
+            frames: vec![model_frame(0, 0, 1), model_frame(1, 0, 1)],
+        };
+        assert!(piece_sequence(&animation, &TextureCache::default()).is_none());
     }
 }

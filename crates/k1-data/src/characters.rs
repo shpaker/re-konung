@@ -36,6 +36,24 @@ pub struct Layer {
     /// по (источник, номер картинки) вместо декодирования каждый раз
     pub source: LayerSource,
     pub image_id: i16,
+    /// Чем этот слой является — чтобы сопоставлять слои разных кадров
+    pub key: LayerKey,
+}
+
+/// Устойчивый идентификатор части спрайта.
+///
+/// Позиция в `CharacterSprite::layers` для этого не годится: предмет без
+/// картинки в этом кадре пропускается (см. `compose`), и индексы следующих
+/// слоёв сдвигаются — слои разных кадров перестали бы соответствовать друг
+/// другу, а вместе с ними разъехалась бы и анимация снаряжения.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LayerKey {
+    /// Модель или монстр
+    Body,
+    /// Тень модели
+    Shadow,
+    /// Предмет в слоте `Executable::draw_order` этого направления
+    Gear { slot: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -141,6 +159,7 @@ pub fn compose(
         y: y + sprite_frame.image_offset.1 as i32,
         source: body_source,
         image_id: sprite_frame.image_id,
+        key: LayerKey::Body,
     }];
     let shadow = sprites.shadow(sprite_frame.image_id)?.map(|image| Layer {
         image,
@@ -149,6 +168,7 @@ pub fn compose(
         y: y + sprite_frame.shadow_offset.1 as i32,
         source: body_source,
         image_id: sprite_frame.image_id,
+        key: LayerKey::Shadow,
     });
 
     if !character.has_dynamic_sprite() {
@@ -185,6 +205,7 @@ pub fn compose(
                 y: y + sprite_frame.weapon_offset.1 as i32 + gear_frame.image_offset.1 as i32,
                 source: LayerSource::Equipment(info.sprite_set as usize),
                 image_id: gear_frame.image_id,
+                key: LayerKey::Gear { slot },
             });
         }
     }
