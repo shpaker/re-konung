@@ -168,6 +168,17 @@ fn keyboard_pan(
         direction.y * PAN_SPEED * time.delta_secs() * ortho_scale(projection);
 }
 
+/// Курсор над интерфейсом.
+///
+/// Значение, а не наличие компонента: `Hovered` в Bevy — булево-компонент, и
+/// плагин ховера только обновляет его у тех, у кого он уже есть. Bevy Feathers
+/// навешивает `Hovered` на каждый свой контрол при спавне, поэтому «на UI-ноде
+/// есть `Hovered`» означает «в панели есть виджет», а не «курсор над панелью» —
+/// по такому признаку карта не двигалась и не масштабировалась вовсе.
+fn pointer_over_ui(mut hovers: impl Iterator<Item = bool>) -> bool {
+    hovers.any(|hovered| hovered)
+}
+
 /// Панорамирование перетаскиванием левой кнопкой: мир следует за курсором.
 /// Над интерфейсом не работает — иначе список карт двигал бы карту.
 fn drag_pan(
@@ -176,7 +187,9 @@ fn drag_pan(
     over_ui: Query<&Hovered, With<Node>>,
     camera: Single<(&mut Transform, &Projection), With<MapCamera>>,
 ) {
-    if !buttons.pressed(MouseButton::Left) || !over_ui.is_empty() {
+    if !buttons.pressed(MouseButton::Left)
+        || pointer_over_ui(over_ui.iter().map(|hovered| hovered.0))
+    {
         return;
     }
     let (mut transform, projection) = camera.into_inner();
@@ -198,7 +211,7 @@ fn wheel_zoom(
     for event in wheel.read() {
         steps += scroll.push(event.unit, event.y);
     }
-    if steps != 0 && over_ui.is_empty() {
+    if steps != 0 && !pointer_over_ui(over_ui.iter().map(|hovered| hovered.0)) {
         state.step(steps);
     }
 }
@@ -318,6 +331,15 @@ mod tests {
         let mut scroll = ZoomScroll::default();
         assert_eq!(scroll.push(MouseScrollUnit::Line, 1.0), 1);
         assert_eq!(scroll.push(MouseScrollUnit::Line, -1.0), -1);
+    }
+
+    #[test]
+    fn widgets_without_the_cursor_are_not_the_ui_under_it() {
+        // Feathers носит Hovered на каждом контроле, и вне курсора он false:
+        // по наличию компонента карта лишалась и перетаскивания, и колеса
+        assert!(!pointer_over_ui([false, false, false].into_iter()));
+        assert!(!pointer_over_ui(std::iter::empty()));
+        assert!(pointer_over_ui([false, true, false].into_iter()));
     }
 
     #[test]
