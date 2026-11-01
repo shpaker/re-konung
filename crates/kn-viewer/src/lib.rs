@@ -650,7 +650,9 @@ fn playback_label(playback: PlayState) -> &'static str {
 /// Сколько спрайтов видно и сколько собрано.
 ///
 /// `InheritedVisibility` пишет Bevy, и в неё уже входит и скрытая группа, и кадр
-/// анимации без картинки — счёт по детям групп завышал бы первое.
+/// анимации без картинки — счёт по детям групп завышал бы первое. Это линейный
+/// обход, а не сумма по девяти узлам: он на три порядка дешевле переключения,
+/// которое за ним следует (замеры — «Цена переключения слоёв» в docs/rust.md).
 fn piece_counts(pieces: &Query<&InheritedVisibility, With<ScenePiece>>) -> (usize, usize) {
     pieces.iter().fold((0, 0), |(shown, total), visibility| {
         (shown + usize::from(visibility.get()), total + 1)
