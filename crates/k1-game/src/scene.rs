@@ -32,7 +32,8 @@ pub enum SceneError {
 /// Кусок сцены: картинка (ключ текстуры), левый верхний угол на карте.
 /// `w`/`h` — None: размер самой текстуры; Some: растянуть (квадраты маркеров).
 /// `texture` — None: в базовом кадре картинки нет, кусок скрыт до своего кадра
-/// анимации. `animation` — None: кусок статичен.
+/// анимации. `animation` — None: кусок статичен. `group` — узел, который
+/// скрывает и показывает кусок вместе с собой (оверлей, а не пересборка).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrawPiece {
     pub texture: Option<TextureKey>,
@@ -41,6 +42,7 @@ pub struct DrawPiece {
     pub w: Option<i32>,
     pub h: Option<i32>,
     pub animation: Option<DrawAnimation>,
+    pub group: PieceGroup,
 }
 
 /// Кадр анимированного куска: картинка (`None` — слоя в этом кадре не видно) и
@@ -59,6 +61,67 @@ pub struct DrawFrame {
 pub struct DrawAnimation {
     pub frames: Vec<DrawFrame>,
     pub base: usize,
+}
+
+/// Группа кусков: то, что скрывается и показывается вместе.
+///
+/// Порядок наложения задаёт позиция в списке отрисовки, а не принадлежность
+/// группе, поэтому разнос по группам ничего не переставляет: куски одной группы
+/// бывают перемешаны с чужими (персонажи идут вперемежку с объектами).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PieceGroup {
+    /// Земля и верхний слой тайлов
+    Terrain,
+    /// Декорации из GRAPH.RES
+    Decorations,
+    /// Общие тени карты — под спрайтами
+    Shadows,
+    /// Картинки объектов вместе с их огнями
+    Objects,
+    /// Персонажи из `Game.N`
+    Characters,
+    /// Тени персонажей: без персонажей их показывать нечего
+    CharacterShadows,
+    /// Маски света `LIGHTS.N`
+    Lights,
+    /// Проходимость мелкой сетки
+    Foot,
+    /// Маркеры `Game.N`: отряды, клады, переходы, точки
+    Markers,
+}
+
+impl PieceGroup {
+    /// Все группы в порядке наложения: слой отображения заводит по узлу на
+    /// каждую и в этом же порядке раскладывает по ним куски.
+    pub const ALL: [PieceGroup; 9] = [
+        PieceGroup::Terrain,
+        PieceGroup::Decorations,
+        PieceGroup::Shadows,
+        PieceGroup::Objects,
+        PieceGroup::Characters,
+        PieceGroup::CharacterShadows,
+        PieceGroup::Lights,
+        PieceGroup::Foot,
+        PieceGroup::Markers,
+    ];
+
+    /// Показываются ли куски группы при этих оверлеях.
+    ///
+    /// Карта и её тени скрыть нельзя; персонажи и их тени переключаются одним
+    /// слоем: при выключенных персонажах список отрисовки не содержит ни одной
+    /// тени персонажа, и показывать их было бы нечего.
+    pub fn is_shown_by(self, overlays: &Overlays) -> bool {
+        match self {
+            PieceGroup::Terrain
+            | PieceGroup::Decorations
+            | PieceGroup::Shadows
+            | PieceGroup::Objects => true,
+            PieceGroup::Characters | PieceGroup::CharacterShadows => overlays.characters,
+            PieceGroup::Lights => overlays.lights,
+            PieceGroup::Foot => overlays.foot,
+            PieceGroup::Markers => overlays.markers,
+        }
+    }
 }
 
 /// Один кадр слоя: картинка и её левый верхний угол на карте.
@@ -152,7 +215,7 @@ fn layer_track(frames: Vec<LayerFrame>, base: usize, ticks: u32) -> Option<Track
 }
 
 impl DrawPiece {
-    fn textured(texture: TextureKey, x: i32, y: i32) -> Self {
+    fn textured(group: PieceGroup, texture: TextureKey, x: i32, y: i32) -> Self {
         Self {
             texture: Some(texture),
             x,
@@ -160,11 +223,12 @@ impl DrawPiece {
             w: None,
             h: None,
             animation: None,
+            group,
         }
     }
 
     /// Кусок из слоя, у которого есть кадры (объект, персонаж, огонь).
-    fn track(track: Track) -> Self {
+    fn track(group: PieceGroup, track: Track) -> Self {
         Self {
             texture: track.texture,
             x: track.x,
@@ -172,10 +236,11 @@ impl DrawPiece {
             w: None,
             h: None,
             animation: track.animation,
+            group,
         }
     }
 
-    fn solid(color: [u8; 4], x: i32, y: i32, w: i32, h: i32) -> Self {
+    fn solid(group: PieceGroup, color: [u8; 4], x: i32, y: i32, w: i32, h: i32) -> Self {
         Self {
             texture: Some(TextureKey::Solid { color }),
             x,
@@ -183,6 +248,7 @@ impl DrawPiece {
             w: Some(w),
             h: Some(h),
             animation: None,
+            group,
         }
     }
 }
@@ -190,9 +256,12 @@ impl DrawPiece {
 /// Ключ сортировки объектов и персонажей: нижний край картинки, вид
 /// (0 — объекты раньше персонажей), слот — как ключ в `render.py`.
 type SortKey = (i32, i32, usize);
-/// Группа кусков одного объекта или персонажа: сортируется и рисуется целиком
-/// (огни объекта остаются сразу над его картинкой).
-type DrawGroup = (SortKey, Vec<DrawPiece>);
+/// Куски одного объекта или персонажа, которые сортируются и попадают в список
+/// целиком (огни объекта остаются сразу над его картинкой).
+///
+/// Не путать с [`PieceGroup`]: она про то, что переключается вместе, а это про
+/// то, что идёт в список отрисовки одним блоком.
+type Stack = (SortKey, Vec<DrawPiece>);
 
 /// Какие отладочные оверлеи добавить поверх карты.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -243,6 +312,7 @@ pub fn draw_list(
                 if value != 0 {
                     let (x, y) = map::tile_position(column, row);
                     pieces.push(DrawPiece::textured(
+                        PieceGroup::Terrain,
                         TextureKey::Tile {
                             index: (value - 1) as usize,
                         },
@@ -258,6 +328,7 @@ pub fn draw_list(
     for decoration in &input.map.decorations {
         if decoration.tile >= 0 && graph.tile(decoration.tile as usize).is_some() {
             pieces.push(DrawPiece::textured(
+                PieceGroup::Decorations,
                 TextureKey::Tile {
                     index: decoration.tile as usize,
                 },
@@ -267,9 +338,9 @@ pub fn draw_list(
         }
     }
 
-    // Объекты и персонажи: собираем группы с ключом сортировки и тени отдельно
+    // Объекты и персонажи: собираем стеки с ключом сортировки и тени отдельно
     let mut shadows = Vec::new();
-    let mut drawn: Vec<DrawGroup> = Vec::new();
+    let mut drawn: Vec<Stack> = Vec::new();
     if let Some(objects) = objects {
         let sheets = Sheets {
             graph,
@@ -294,8 +365,8 @@ pub fn draw_list(
 
     // Ближе к зрителю то, что ниже на экране; сортировка устойчивая: огни
     // объекта остаются сразу над его картинкой
-    drawn.sort_by_key(|group| group.0);
-    pieces.extend(drawn.into_iter().flat_map(|(_, group)| group));
+    drawn.sort_by_key(|stack| stack.0);
+    pieces.extend(drawn.into_iter().flat_map(|(_, stack)| stack));
 
     if input.overlays.lights {
         light_pieces(input, &mut pieces);
@@ -326,7 +397,7 @@ fn object_pieces(
     placed: &MapObject,
     sheets: &Sheets<'_>,
     shadows: &mut Vec<DrawPiece>,
-    drawn: &mut Vec<DrawGroup>,
+    drawn: &mut Vec<Stack>,
 ) {
     let Some(simple) = sheets
         .objects
@@ -390,12 +461,12 @@ fn object_pieces(
         })
     };
 
-    let mut group = layer_track(
+    let mut stack = layer_track(
         indices.iter().map(|&index| picture(index)).collect(),
         base_index,
         ticks,
     )
-    .map(DrawPiece::track)
+    .map(|track| DrawPiece::track(PieceGroup::Objects, track))
     .into_iter()
     .collect::<Vec<_>>();
     // Огни объекта — сразу поверх него: все кадры анимации своего вида, по тике
@@ -415,7 +486,7 @@ fn object_pieces(
             .map(|index| Some((TextureKey::FlameFrame { index }, left, top)))
             .collect();
         if let Some(track) = layer_track(flame_frames, 0, ONE_TICK) {
-            group.push(DrawPiece::track(track));
+            stack.push(DrawPiece::track(PieceGroup::Objects, track));
         }
     }
     if let Some(track) = layer_track(
@@ -423,9 +494,9 @@ fn object_pieces(
         base_index,
         ticks,
     ) {
-        shadows.push(DrawPiece::track(track));
+        shadows.push(DrawPiece::track(PieceGroup::Shadows, track));
     }
-    drawn.push((key, group));
+    drawn.push((key, stack));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -436,7 +507,7 @@ fn character_pieces(
     state: &GameState,
     sheets: &Sheets<'_>,
     shadows: &mut Vec<DrawPiece>,
-    drawn: &mut Vec<DrawGroup>,
+    drawn: &mut Vec<Stack>,
 ) -> Result<()> {
     let count = characters::frame_count(character, sheets.graph, sheets.objects);
     if count == 0 {
@@ -514,16 +585,16 @@ fn character_pieces(
     else {
         return Ok(());
     };
-    let mut group = Vec::new();
+    let mut stack = Vec::new();
     for (_, frames) in tracks {
         if let Some(track) = layer_track(frames, base, ONE_TICK) {
-            group.push(DrawPiece::track(track));
+            stack.push(DrawPiece::track(PieceGroup::Characters, track));
         }
     }
     if let Some(track) = layer_track(shadows_by_frame, base, ONE_TICK) {
-        shadows.push(DrawPiece::track(track));
+        shadows.push(DrawPiece::track(PieceGroup::CharacterShadows, track));
     }
-    drawn.push(((bottom, 1, character.slot), group));
+    drawn.push(((bottom, 1, character.slot), stack));
     Ok(())
 }
 
@@ -534,6 +605,7 @@ fn light_pieces(input: &SceneInput<'_>, pieces: &mut Vec<DrawPiece>) {
             if value != 0 {
                 let (x, y) = map::tile_position(column, row);
                 pieces.push(DrawPiece::textured(
+                    PieceGroup::Lights,
                     TextureKey::LightMask {
                         index: (value - 1) as usize,
                     },
@@ -560,6 +632,7 @@ fn foot_pieces(map: &KonungMap, pieces: &mut Vec<DrawPiece>) {
                 if marked(value) {
                     let (cx, cy) = game_state::character_position(x as i32, y as i32);
                     pieces.push(DrawPiece::textured(
+                        PieceGroup::Foot,
                         TextureKey::FootDiamond { color },
                         cx - half_x,
                         cy - half_y,
@@ -574,6 +647,7 @@ fn marker_pieces(entities: &MapEntities<'_>, pieces: &mut Vec<DrawPiece>) {
     fn point(pieces: &mut Vec<DrawPiece>, color: [u8; 4], x: i32, y: i32) {
         let (px, py) = game_state::character_position(x, y);
         pieces.push(DrawPiece::textured(
+            PieceGroup::Markers,
             TextureKey::MarkerRing { color },
             px - MARKER_RADIUS,
             py - MARKER_RADIUS,
@@ -585,10 +659,38 @@ fn marker_pieces(entities: &MapEntities<'_>, pieces: &mut Vec<DrawPiece>) {
         let (left, top, right, bottom) = game_state::rect_pixels(area);
         let width = right - left + 1;
         let height = bottom - top + 1;
-        pieces.push(DrawPiece::solid(color, left, top, width, 3));
-        pieces.push(DrawPiece::solid(color, left, bottom - 2, width, 3));
-        pieces.push(DrawPiece::solid(color, left, top, 3, height));
-        pieces.push(DrawPiece::solid(color, right - 2, top, 3, height));
+        pieces.push(DrawPiece::solid(
+            PieceGroup::Markers,
+            color,
+            left,
+            top,
+            width,
+            3,
+        ));
+        pieces.push(DrawPiece::solid(
+            PieceGroup::Markers,
+            color,
+            left,
+            bottom - 2,
+            width,
+            3,
+        ));
+        pieces.push(DrawPiece::solid(
+            PieceGroup::Markers,
+            color,
+            left,
+            top,
+            3,
+            height,
+        ));
+        pieces.push(DrawPiece::solid(
+            PieceGroup::Markers,
+            color,
+            right - 2,
+            top,
+            3,
+            height,
+        ));
     }
 
     if let Some(start) = entities.start {

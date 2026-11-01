@@ -19,6 +19,7 @@ use k1_data::{
 use k1_game::{resources::Resources, scene::SceneInput, textures::TextureKey};
 
 pub use k1_data::objects_res::TICK_MS;
+pub use k1_game::scene::PieceGroup;
 pub use k1_game::textures::{Rgba, TextureError};
 
 pub type Result<T> = std::result::Result<T, GameError>;
@@ -47,6 +48,8 @@ pub struct TextureId(TextureKey);
 /// `w`/`h` — None: размер текстуры; Some: растянуть.
 /// `texture` — None: в базовом кадре картинки нет (слой есть не во всех кадрах
 /// анимации); кусок скрыт, пока часы не придут к его кадру.
+/// `group` — что переключает видимость куска: слой отображения заводит на группу
+/// отдельный узел, и куски не пересобираются (см. [`group_is_shown`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Piece {
     pub texture: Option<TextureId>,
@@ -55,6 +58,18 @@ pub struct Piece {
     pub w: Option<i32>,
     pub h: Option<i32>,
     pub animation: Option<Animation>,
+    pub group: PieceGroup,
+}
+
+/// Показываются ли куски группы при этих опциях.
+///
+/// Порядок наложения задаёт позиция куска в [`Scene::pieces`], поэтому видимость
+/// группы ничего в ней не переставляет: фильтр по этой функции и сборка карты
+/// только с включёнными слоями дают одну и ту же картину — держит
+/// `k1-game/tests/original_scene.rs`, а что группа доходит до модели —
+/// `tests/original_facade.rs`.
+pub fn group_is_shown(group: PieceGroup, options: &SceneOptions) -> bool {
+    group.is_shown_by(&overlays(options))
 }
 
 /// Кадры одного слоя, которые показываются по очереди.
@@ -180,6 +195,31 @@ pub struct SceneOptions {
     pub hero: Option<u32>,
 }
 
+impl SceneOptions {
+    /// Все отладочные слои разом.
+    ///
+    /// С ними карта собирается один раз со всеми кусками, а переключение слоя
+    /// стоит одну запись видимости группы вместо пересборки тысяч спрайтов
+    /// (см. [`group_is_shown`]).
+    pub const ALL: SceneOptions = SceneOptions {
+        foot: true,
+        lights: true,
+        markers: true,
+        characters: true,
+        hero: None,
+    };
+}
+
+/// Флаги оверлеев для слоя K1: те же четыре переключателя без номера героя.
+fn overlays(options: &SceneOptions) -> k1_game::scene::Overlays {
+    k1_game::scene::Overlays {
+        foot: options.foot,
+        lights: options.lights,
+        markers: options.markers,
+        characters: options.characters,
+    }
+}
+
 /// Открытая игра: каталог и загруженные ресурсы.
 pub struct Game {
     dir: GameDir,
@@ -256,18 +296,12 @@ impl Game {
             .as_ref()
             .map(|state| game_state::on_map(state, map_ref.number as usize, hero));
 
-        let overlays = k1_game::scene::Overlays {
-            foot: options.foot,
-            lights: options.lights,
-            markers: options.markers,
-            characters: options.characters,
-        };
         let input = SceneInput {
             map: &konung_map,
             lights: lights.as_ref(),
             entities,
             state: state.as_ref(),
-            overlays,
+            overlays: overlays(options),
         };
         let pieces = self.resources.with_graphics(|graph, objects| {
             k1_game::scene::draw_list(&input, graph, Some(objects), &self.resources.tables)
@@ -487,6 +521,7 @@ fn piece(from: k1_game::scene::DrawPiece) -> Piece {
                 })
                 .collect(),
         }),
+        group: from.group,
     }
 }
 
@@ -593,6 +628,7 @@ mod tests {
             w: None,
             h: None,
             animation: None,
+            group: PieceGroup::Terrain,
         }
     }
 
@@ -695,6 +731,7 @@ mod tests {
                     base: 0,
                     frames: vec![frame(None), frame(Some(gear)), frame(Some(body))],
                 }),
+                group: PieceGroup::Characters,
             }],
         };
         assert_eq!(scene.texture_ids(), [TextureId(gear), TextureId(body)]);
@@ -720,6 +757,82 @@ mod tests {
                 frames: 0,
                 visible: 1,
             }
+        );
+    }
+
+    /// Группы, которые остаются видны при этих опциях.
+    fn shown(options: &SceneOptions) -> Vec<PieceGroup> {
+        PieceGroup::ALL
+            .into_iter()
+            .filter(|group| group_is_shown(*group, options))
+            .collect()
+    }
+
+    #[test]
+    fn each_overlay_switches_only_its_own_groups() {
+        use PieceGroup::*;
+        // Списки названы вручную: проверка на данных (`tests/original_scene.rs` в
+        // k1-game) сравнивает куски, а не группы, и группа, записанная под чужой
+        // переключатель, осталась бы незамеченной на карте без таких кусков
+        assert_eq!(
+            shown(&SceneOptions::default()),
+            [Terrain, Decorations, Shadows, Objects],
+            "чистая карта"
+        );
+        assert_eq!(
+            shown(&SceneOptions::ALL),
+            [
+                Terrain,
+                Decorations,
+                Shadows,
+                Objects,
+                Characters,
+                CharacterShadows,
+                Lights,
+                Foot,
+                Markers,
+            ],
+            "все слои"
+        );
+        assert_eq!(
+            shown(&SceneOptions {
+                foot: true,
+                ..SceneOptions::default()
+            }),
+            [Terrain, Decorations, Shadows, Objects, Foot],
+            "один слой проходимости"
+        );
+        // Тени персонажей переключаются вместе с самими персонажами
+        assert_eq!(
+            shown(&SceneOptions {
+                characters: true,
+                ..SceneOptions::default()
+            }),
+            [
+                Terrain,
+                Decorations,
+                Shadows,
+                Objects,
+                Characters,
+                CharacterShadows
+            ],
+            "один слой персонажей"
+        );
+        assert_eq!(
+            shown(&SceneOptions {
+                lights: true,
+                ..SceneOptions::default()
+            }),
+            [Terrain, Decorations, Shadows, Objects, Lights],
+            "один слой света"
+        );
+        assert_eq!(
+            shown(&SceneOptions {
+                markers: true,
+                ..SceneOptions::default()
+            }),
+            [Terrain, Decorations, Shadows, Objects, Markers],
+            "один слой маркеров"
         );
     }
 }

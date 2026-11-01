@@ -443,3 +443,102 @@ fn animated_objects_play_all_their_frames_at_their_frame_time() {
         );
     }
 }
+
+/// Все слои сразу.
+const EVERY_SWITCH: Overlays = Overlays {
+    foot: true,
+    lights: true,
+    markers: true,
+    characters: true,
+};
+
+/// По одному включённому слою: `foot`, `lights`, `markers`, `characters`.
+const ONE_SWITCH: [Overlays; 4] = [
+    Overlays {
+        foot: true,
+        lights: false,
+        markers: false,
+        characters: false,
+    },
+    Overlays {
+        foot: false,
+        lights: true,
+        markers: false,
+        characters: false,
+    },
+    Overlays {
+        foot: false,
+        lights: false,
+        markers: true,
+        characters: false,
+    },
+    Overlays {
+        foot: false,
+        lights: false,
+        markers: false,
+        characters: true,
+    },
+];
+
+/// Куски списка отрисовки, которые показываются при этом наборе слоёв.
+fn shown<'a>(pieces: &'a [scene::DrawPiece], overlays: &Overlays) -> Vec<&'a scene::DrawPiece> {
+    pieces
+        .iter()
+        .filter(|piece| piece.group.is_shown_by(overlays))
+        .collect()
+}
+
+/// Сколько кусков добавляет слой к чистой карте.
+fn layer_pieces(every: &[scene::DrawPiece], overlays: &Overlays) -> usize {
+    every
+        .iter()
+        .filter(|piece| {
+            piece.group.is_shown_by(overlays) && !piece.group.is_shown_by(&Overlays::default())
+        })
+        .count()
+}
+
+/// Группа переключается видимостью, а не составом списка отрисовки.
+///
+/// Карта со всеми слоями, отфильтрованная [`scene::PieceGroup::is_shown_by`],
+/// обязана совпасть со списком той же карты, собранной только с этими слоями:
+/// иначе чужой переключатель прятал бы кусок карты или оставлял скрытый поверх.
+/// Побайтные тесты записи этого не касаются, а на картинке регрессия выглядела
+/// бы как пропавший огонь или уехавшая тень.
+#[test]
+fn group_filter_matches_a_scene_without_the_layer() {
+    for (edition, game) in game_dirs() {
+        let resources = Resources::load(&game).unwrap();
+        let hero = game.state_numbers(GAME_FILES).unwrap()[0] as usize;
+        let state = game_state::parse(&game.state_bytes(hero as u32, GAME_FILES).unwrap()).unwrap();
+        // Каждый слой сверяем на карте, где он действительно что-то рисует:
+        // сверка пустого множества ничего не доказывает
+        let mut verified = [false; 4];
+        for number in game.map_numbers(GAME_FILES).unwrap() {
+            let every = draw_with_state(&game, &resources, number, EVERY_SWITCH, &state, hero);
+            let clean =
+                draw_with_state(&game, &resources, number, Overlays::default(), &state, hero);
+            assert_eq!(
+                shown(&every, &Overlays::default()),
+                clean.iter().collect::<Vec<_>>(),
+                "{edition}: konung.{number} без слоёв"
+            );
+            for (index, overlays) in ONE_SWITCH.iter().enumerate() {
+                if verified[index] || layer_pieces(&every, overlays) == 0 {
+                    continue;
+                }
+                let expected = draw_with_state(&game, &resources, number, *overlays, &state, hero);
+                assert_eq!(
+                    shown(&every, overlays),
+                    expected.iter().collect::<Vec<_>>(),
+                    "{edition}: konung.{number} со слоем {overlays:?}"
+                );
+                verified[index] = true;
+            }
+        }
+        assert!(
+            verified.iter().all(|done| *done),
+            "{edition}: не все слои нашлись на картах: {verified:?}"
+        );
+    }
+}

@@ -101,5 +101,7 @@ fn load_start_map(
         warn!("карта {}: {problem}", map_ref.number);
     }
     spawn_scene(&mut commands, &scene, &cache);
-    frame_scene(&scene, &cache, &mut pending);
+    // Игра показывает карту целиком, без отладочных слоёв: границами считается
+    // весь список отрисовки
+    frame_scene(&scene, &cache, |_| true, &mut pending);
 }

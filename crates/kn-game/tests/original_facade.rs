@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use kn_game::{Game, MapRef, MapSource, SceneOptions};
+use kn_game::{Game, MapRef, MapSource, Piece, Scene, SceneOptions, group_is_shown};
 
 fn game_roots() -> Vec<(&'static str, PathBuf)> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../original/k1");
@@ -27,13 +27,40 @@ fn game_roots() -> Vec<(&'static str, PathBuf)> {
     dirs
 }
 
-const FULL: SceneOptions = SceneOptions {
-    foot: true,
-    lights: true,
-    markers: true,
-    characters: true,
-    hero: None,
-};
+/// Куски сцены со всеми слоями, которые показывает эти опции.
+fn shown<'a>(scene: &'a Scene, options: &SceneOptions) -> Vec<&'a Piece> {
+    scene
+        .pieces
+        .iter()
+        .filter(|piece| group_is_shown(piece.group, options))
+        .collect()
+}
+
+/// Группа переходит в модель сцены вместе с куском.
+///
+/// Дальше она только видимость: `kn_io::spawn_scene` раскладывает куски по узлам
+/// групп, и кусок без группы или под чужим переключателем пропал бы с карты
+/// молча. Раскладку по слоям проверяет `k1-game/tests/original_scene.rs`, здесь —
+/// что фасад её не теряет.
+#[test]
+fn pieces_carry_their_group() {
+    for (edition, root) in game_roots() {
+        let game = Game::open(&root).unwrap();
+        let map_ref = game.maps().unwrap()[0];
+        let every = game.scene(map_ref, &SceneOptions::ALL).unwrap();
+        let clean = game.scene(map_ref, &SceneOptions::default()).unwrap();
+        assert!(
+            every.pieces.len() > clean.pieces.len(),
+            "{edition}: {map_ref:?}: со всеми слоями должно быть кусков больше, \
+             иначе проверка ничего не доказывает"
+        );
+        assert_eq!(
+            shown(&every, &SceneOptions::default()),
+            clean.pieces.iter().collect::<Vec<_>>(),
+            "{edition}: {map_ref:?} без слоёв"
+        );
+    }
+}
 
 #[test]
 fn maps_cover_game_and_tutorial() {
@@ -60,11 +87,11 @@ fn scene_of_first_map_is_full_and_deterministic() {
             source: MapSource::Game,
             number: game.maps().unwrap()[0].number,
         };
-        let scene = game.scene(first, &FULL).unwrap();
+        let scene = game.scene(first, &SceneOptions::ALL).unwrap();
         assert!(!scene.pieces.is_empty(), "{edition}: пустая сцена");
         assert_eq!(
             scene.pieces,
-            game.scene(first, &FULL).unwrap().pieces,
+            game.scene(first, &SceneOptions::ALL).unwrap().pieces,
             "{edition}: детерминированность"
         );
         let ids = scene.texture_ids();
