@@ -45,13 +45,23 @@ pub const DEFAULT_ZOOM: usize = 3;
 pub const PAN_SPEED: f32 = 900.0;
 /// Сколько «строк» прокрутки дают одну ступень масштаба: один щелчок колеса.
 pub const LINES_PER_ZOOM_STEP: f32 = 1.0;
-/// Сколько пикселей прокрутки дают одну ступень масштаба: умеренный свайп трекпада.
-pub const PIXELS_PER_ZOOM_STEP: f32 = 100.0;
+/// Сколько пикселей прокрутки дают одну ступень масштаба: короткий жест трекпада.
+///
+/// Со 100 пикселей жест трекпада отзывался не сразу: первые события не давали
+/// и ступени, и масштаб догонял прокрутку с задержкой.
+pub const PIXELS_PER_ZOOM_STEP: f32 = 60.0;
+/// Сколько ступеней может дать один кадр.
+///
+/// Нужен потолок, иначе инерция жеста пролистывает весь диапазон, но прежнее
+/// ограничение в одну ступень съедало и обычную быструю прокрутку: несколько
+/// событий между кадрами превращались в одно.
+pub const MAX_ZOOM_STEPS_PER_FRAME: f32 = 3.0;
 
 /// Накопитель прокрутки для масштаба.
 ///
 /// Одна ступень требует порога: без него свайп трекпада и инерция колеса
 /// присылают десятки событий и пролистывают весь диапазон за один жест.
+/// Незакрытая доля ступени не обнуляется, а переходит в следующий жест.
 #[derive(Debug, Default)]
 pub struct ZoomScroll {
     accum: f32,
@@ -64,7 +74,8 @@ impl ZoomScroll {
             MouseScrollUnit::Line => y / LINES_PER_ZOOM_STEP,
             MouseScrollUnit::Pixel => y / PIXELS_PER_ZOOM_STEP,
         };
-        self.accum = (self.accum + normalized).clamp(-1.0, 1.0);
+        self.accum =
+            (self.accum + normalized).clamp(-MAX_ZOOM_STEPS_PER_FRAME, MAX_ZOOM_STEPS_PER_FRAME);
         let steps = self.accum.trunc() as i32;
         self.accum -= steps as f32;
         steps
@@ -353,18 +364,45 @@ mod tests {
     #[test]
     fn trackpad_swipe_is_bounded() {
         let mut scroll = ZoomScroll::default();
-        // Свайп: 30 событий по 10 пикселей — три ступени, а не тридцать
-        let steps: i32 = (0..30)
-            .map(|_| scroll.push(MouseScrollUnit::Pixel, 10.0))
-            .sum();
-        assert_eq!(steps, 3, "свайп в 300 пикселей");
+        // Свайп: 30 событий по 10 пикселей = 300 пикселей = пять ступеней,
+        // а не тридцать; ни один вызов не даёт больше потолка за кадр
+        let mut steps = 0;
+        for _ in 0..30 {
+            let taken = scroll.push(MouseScrollUnit::Pixel, 10.0);
+            assert!(
+                taken.abs() <= MAX_ZOOM_STEPS_PER_FRAME as i32,
+                "за один вызов {taken} ступеней"
+            );
+            steps += taken;
+        }
+        assert_eq!(steps, 5);
+    }
+
+    #[test]
+    fn a_fast_scroll_is_not_flattened_to_one_step() {
+        // Несколько щелчков, пришедших одним событием (так ведёт себя колесо на
+        // macOS), были схлопнуты в одну ступень: потолок — на ступени за кадр,
+        // а не на всём событии
+        let mut scroll = ZoomScroll::default();
+        assert_eq!(scroll.push(MouseScrollUnit::Line, 2.0), 2);
+        assert_eq!(scroll.push(MouseScrollUnit::Line, 10.0), 3);
+    }
+
+    #[test]
+    fn unfinished_pixels_carry_to_the_next_event() {
+        // 60 пикселей на ступень: два незакрытых жеста складываются в одну
+        // ступень, а не обнуляются каждый раз
+        let mut scroll = ZoomScroll::default();
+        assert_eq!(scroll.push(MouseScrollUnit::Pixel, 40.0), 0);
+        assert_eq!(scroll.push(MouseScrollUnit::Pixel, 40.0), 1);
+        assert_eq!(scroll.push(MouseScrollUnit::Pixel, 40.0), 1);
     }
 
     #[test]
     fn scroll_direction_is_kept() {
         let mut scroll = ZoomScroll::default();
         assert_eq!(scroll.push(MouseScrollUnit::Line, -1.0), -1);
-        assert_eq!(scroll.push(MouseScrollUnit::Pixel, -100.0), -1);
+        assert_eq!(scroll.push(MouseScrollUnit::Pixel, -60.0), -1);
     }
 
     #[test]
