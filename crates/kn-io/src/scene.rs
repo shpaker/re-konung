@@ -28,6 +28,16 @@ pub struct MapRoot;
 #[derive(Component)]
 pub struct ScenePiece;
 
+/// Центр пиксельного прямоугольника куска в мире Bevy.
+///
+/// Кусок задан левым верхним углом в пикселях карты (y вниз), а спрайт
+/// позиционируется по центру и живёт в мире с y вверх. Общая формула для
+/// статичных кусков и для кадров анимации ([`crate::animation::frame_view`]):
+/// у кадров разные размеры, и центр должен считаться по размеру кадра.
+pub fn piece_center(x: f32, y: f32, width: f32, height: f32) -> Vec2 {
+    Vec2::new(x + width / 2.0, -(y + height / 2.0))
+}
+
 /// Пиксельный прямоугольник куска на карте → позиция и размер спрайта.
 ///
 /// `size` — размер текстуры: им заменяются отсутствующие `w`/`h`. `order` —
@@ -42,11 +52,8 @@ pub fn piece_transform(
 ) -> Transform {
     let width = w.unwrap_or(size.x as i32) as f32;
     let height = h.unwrap_or(size.y as i32) as f32;
-    Transform::from_xyz(
-        x as f32 + width / 2.0,
-        -(y as f32 + height / 2.0),
-        order as f32 * Z_STEP,
-    )
+    let center = piece_center(x as f32, y as f32, width, height);
+    Transform::from_xyz(center.x, center.y, order as f32 * Z_STEP)
 }
 
 /// Размер спрайта куска: заданный явно или размер текстуры.
