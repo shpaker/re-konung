@@ -18,8 +18,8 @@ pub use camera::{
     fitting_zoom, frame_scene,
 };
 pub use scene::{
-    MapRoot, ScenePiece, Z_STEP, clear_scene, piece_center, piece_size, piece_transform,
-    scene_bounds, spawn_scene,
+    MapRoot, ScenePiece, Z_STEP, clear_scene, piece_center, piece_sequence, piece_size,
+    piece_transform, scene_bounds, spawn_scene,
 };
 pub use textures::{TextureCache, TextureEntry};
 

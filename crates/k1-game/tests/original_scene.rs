@@ -1,9 +1,11 @@
 //! Тесты сцены на реальных данных из `original/` (без них пропускаются).
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use k1_data::{
     game_state, map,
+    objects_res::{self, FRAMES},
     repo::{GAME_FILES, GameDir},
 };
 use k1_game::{
@@ -61,6 +63,53 @@ fn draw(
         .unwrap()
 }
 
+/// Список отрисовки вместе с начальным состоянием: без него персонажей нет.
+fn draw_with_state(
+    game: &GameDir,
+    resources: &Resources,
+    number: u32,
+    overlays: Overlays,
+    state: &game_state::GameState,
+    hero: usize,
+) -> Vec<scene::DrawPiece> {
+    let map_bytes = game.map_bytes(number, GAME_FILES).unwrap();
+    let konung_map = map::parse(&map_bytes).unwrap();
+    let lights_bytes = game.lights_bytes(number, GAME_FILES).unwrap();
+    let lights = lights_bytes
+        .as_ref()
+        .map(|bytes| map::parse_lights(bytes).unwrap());
+    let entities = game_state::on_map(state, number as usize, Some(hero));
+    let input = SceneInput {
+        map: &konung_map,
+        lights: lights.as_ref(),
+        entities: Some(entities),
+        state: Some(state),
+        overlays,
+    };
+    resources
+        .with_graphics(|graph, objects| {
+            scene::draw_list(&input, graph, Some(objects), &resources.tables).unwrap()
+        })
+        .unwrap()
+}
+
+/// Чем является ключ текстуры кадра, кроме номера кадра: слой анимации не
+/// должен перепутаться с другим слоем.
+fn layer_signature(texture: &TextureKey) -> String {
+    match *texture {
+        TextureKey::ObjectFrame { object_id, .. } => format!("объект {object_id}"),
+        TextureKey::ObjectShadow { object_id, .. } => format!("тень объекта {object_id}"),
+        TextureKey::FlameFrame { .. } => "огонь".to_owned(),
+        TextureKey::SpriteImage {
+            source, palette, ..
+        } => {
+            format!("спрайт {source:?} палитра {palette}")
+        }
+        TextureKey::SpriteShadow { source, .. } => format!("тень {source:?}"),
+        other => format!("{other:?}"),
+    }
+}
+
 #[test]
 fn object_position_matches_the_reference_formula() {
     // render.object_position: x·58 − (y&1)·29, y·16
@@ -86,7 +135,7 @@ fn terrain_pieces_cover_every_nonzero_cell() {
             .count();
         let tiles = pieces
             .iter()
-            .filter(|piece| matches!(piece.texture, TextureKey::Tile { .. }))
+            .filter(|piece| matches!(piece.texture, Some(TextureKey::Tile { .. })))
             .count();
         // Тайлы земли и верхнего слоя плюс декорации из GRAPH.RES
         let decorations = resources
@@ -106,7 +155,7 @@ fn terrain_pieces_cover_every_nonzero_cell() {
         assert!(
             pieces
                 .iter()
-                .any(|piece| matches!(piece.texture, TextureKey::ObjectFrame { .. })),
+                .any(|piece| matches!(piece.texture, Some(TextureKey::ObjectFrame { .. }))),
             "{edition}: konung.{number}: объекты рисуются"
         );
     }
@@ -154,7 +203,7 @@ fn draw_list_is_deterministic() {
         assert!(
             first
                 .iter()
-                .any(|piece| matches!(piece.texture, TextureKey::SpriteImage { .. })),
+                .any(|piece| matches!(piece.texture, Some(TextureKey::SpriteImage { .. }))),
             "{edition}: konung.{number}: персонажи рисуются"
         );
     }
@@ -188,7 +237,7 @@ fn overlays_follow_map_data() {
         let foot = |color| {
             pieces
                 .iter()
-                .filter(|piece| piece.texture == TextureKey::FootDiamond { color })
+                .filter(|piece| piece.texture == Some(TextureKey::FootDiamond { color }))
                 .count()
         };
         assert_eq!(
@@ -215,8 +264,182 @@ fn overlays_follow_map_data() {
             });
         let masks = pieces
             .iter()
-            .filter(|piece| matches!(piece.texture, TextureKey::LightMask { .. }))
+            .filter(|piece| matches!(piece.texture, Some(TextureKey::LightMask { .. })))
             .count();
         assert_eq!(masks, lit, "{edition}: маски света");
+    }
+}
+
+#[test]
+fn animated_pieces_keep_their_layer_and_base_frame() {
+    for (edition, game) in game_dirs() {
+        let resources = Resources::load(&game).unwrap();
+        let number = game.map_numbers(GAME_FILES).unwrap()[0];
+        let hero = game.state_numbers(GAME_FILES).unwrap()[0] as usize;
+        let state = game_state::parse(&game.state_bytes(hero as u32, GAME_FILES).unwrap()).unwrap();
+        let overlays = Overlays {
+            characters: true,
+            ..Overlays::default()
+        };
+        let pieces = draw_with_state(&game, &resources, number, overlays, &state, hero);
+        let mut animated = 0;
+        for piece in &pieces {
+            let Some(animation) = &piece.animation else {
+                continue;
+            };
+            animated += 1;
+            // Базовый кадр — тот же кусок, что рисовался и до анимаций: та же
+            // картинка в том же углу, поэтому при выключенной анимации картина
+            // совпадает с эталоном
+            let base = &animation.frames[animation.base];
+            assert_eq!(
+                base.texture, piece.texture,
+                "{edition}: konung.{number}: базовый кадр ≠ картинка куска"
+            );
+            assert_eq!(
+                (base.dx, base.dy),
+                (0, 0),
+                "{edition}: смещение базового кадра"
+            );
+            assert!(
+                animation.frames.len() >= 2,
+                "{edition}: анимация из одного кадра"
+            );
+            // Слои не перепутаны: все кадры одного куска — один и тот же слой
+            let Some(reference) = animation.frames.iter().find_map(|frame| frame.texture) else {
+                panic!("{edition}: konung.{number}: у анимированного куска нет ни одного кадра");
+            };
+            let want = layer_signature(&reference);
+            for frame in &animation.frames {
+                assert!(frame.ticks >= 1, "{edition}: нулевая длительность кадра");
+                if let Some(texture) = frame.texture {
+                    assert_eq!(
+                        layer_signature(&texture),
+                        want,
+                        "{edition}: konung.{number}: слой сменился внутри анимации"
+                    );
+                }
+            }
+        }
+        assert!(
+            animated > 0,
+            "{edition}: konung.{number}: ни один кусок не анимируется"
+        );
+    }
+}
+
+#[test]
+fn flame_pieces_cover_the_frames_of_their_kind() {
+    // Таблица огней в exe задаёт диапазон кадров вида, оба конца включены
+    // (docs/k1/formats/executable.md): кусок огня обязан пройтись по нему целиком
+    for (edition, game) in game_dirs() {
+        let resources = Resources::load(&game).unwrap();
+        let kinds = resources.tables.flame_animations;
+        let mut checked = 0;
+        for number in game.map_numbers(GAME_FILES).unwrap() {
+            let pieces = draw(&game, &resources, number, Overlays::default());
+            for piece in &pieces {
+                let Some(animation) = &piece.animation else {
+                    continue;
+                };
+                let Some(TextureKey::FlameFrame { index: first }) =
+                    animation.frames[animation.base].texture
+                else {
+                    continue;
+                };
+                let range = kinds
+                    .iter()
+                    .find(|(start, _)| *start as usize == first)
+                    .unwrap_or_else(|| panic!("{edition}: огонь начинается с кадра {first}"));
+                let expected = (range.1.max(range.0) - range.0) as usize + 1;
+                assert_eq!(
+                    animation.frames.len(),
+                    expected,
+                    "{edition}: konung.{number}: огонь от кадра {first} за [{}, {}]",
+                    range.0,
+                    range.1
+                );
+                for (offset, frame) in animation.frames.iter().enumerate() {
+                    assert_eq!(
+                        frame.texture,
+                        Some(TextureKey::FlameFrame {
+                            index: first + offset
+                        }),
+                        "{edition}: кадры огня идут подряд"
+                    );
+                    assert_eq!(frame.ticks, 1, "{edition}: огонь меняется каждый тик");
+                }
+                checked += 1;
+            }
+            if checked > 0 {
+                break;
+            }
+        }
+        assert!(
+            checked > 0,
+            "{edition}: ни на одной карте нет анимированного огня"
+        );
+    }
+}
+
+#[test]
+fn animated_objects_play_all_their_frames_at_their_frame_time() {
+    // OBJECTS.RES: у анимированного объекта `frame_count` кадров, кадр меняется
+    // раз в `frame_time` тиков (docs/k1/formats/objects-res.md). Объект с
+    // несколькими кадрами, но без frame_time игра не анимирует.
+    for (edition, game) in game_dirs() {
+        let resources = Resources::load(&game).unwrap();
+        let expected: HashMap<usize, (usize, u32)> = resources
+            .with_graphics(|_, objects| {
+                objects
+                    .simple
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(object_id, simple)| {
+                        let simple = simple.as_ref()?;
+                        let duration = objects_res::frame_duration_ms(simple)?;
+                        let frames = (simple.frame_count as usize).min(FRAMES);
+                        let ticks = (duration / objects_res::TICK_MS).max(1);
+                        (frames >= 2).then_some((object_id, (frames, ticks)))
+                    })
+                    .collect()
+            })
+            .unwrap();
+        let mut checked = 0;
+        for number in game.map_numbers(GAME_FILES).unwrap() {
+            let pieces = draw(&game, &resources, number, Overlays::default());
+            for piece in &pieces {
+                let Some(animation) = &piece.animation else {
+                    continue;
+                };
+                let Some(object_id) = (match animation.frames[animation.base].texture {
+                    Some(TextureKey::ObjectFrame { object_id, .. })
+                    | Some(TextureKey::ObjectShadow { object_id, .. }) => Some(object_id),
+                    _ => None,
+                }) else {
+                    continue;
+                };
+                let (frames, ticks) = *expected
+                    .get(&object_id)
+                    .unwrap_or_else(|| panic!("{edition}: объект {object_id} не анимирован"));
+                assert_eq!(
+                    animation.frames.len(),
+                    frames,
+                    "{edition}: konung.{number}: объект {object_id}: число кадров"
+                );
+                assert!(
+                    animation.frames.iter().all(|frame| frame.ticks == ticks),
+                    "{edition}: konung.{number}: объект {object_id}: длительность кадра"
+                );
+                checked += 1;
+            }
+            if checked > 0 {
+                break;
+            }
+        }
+        assert!(
+            checked > 0,
+            "{edition}: ни один анимированный объект не нарисован"
+        );
     }
 }
