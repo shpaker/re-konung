@@ -5,17 +5,21 @@
 //! наложения, камера управляется пользователем. Игровой логики и знания
 //! форматов здесь нет — только Bevy и координаты.
 
+pub mod animation;
 pub mod camera;
 pub mod scene;
 pub mod textures;
 
+pub use animation::{
+    AnimPlugin, Animator, Clock, Frame, PlayState, Sequence, SpriteView, frame_view,
+};
 pub use camera::{
     CameraBounds, CameraState, MapCamera, MapCameraPlugin, PendingFrame, ZOOM_LEVELS, ZoomScroll,
     fitting_zoom, frame_scene,
 };
 pub use scene::{
-    MapRoot, ScenePiece, Z_STEP, clear_scene, piece_size, piece_transform, scene_bounds,
-    spawn_scene,
+    MapRoot, ScenePiece, Z_STEP, clear_scene, piece_center, piece_sequence, piece_size,
+    piece_transform, scene_bounds, spawn_scene,
 };
 pub use textures::{TextureCache, TextureEntry};
 

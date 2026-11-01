@@ -18,6 +18,7 @@ use k1_data::{
 };
 use k1_game::{resources::Resources, scene::SceneInput, textures::TextureKey};
 
+pub use k1_data::objects_res::TICK_MS;
 pub use k1_game::textures::{Rgba, TextureError};
 
 pub type Result<T> = std::result::Result<T, GameError>;
@@ -44,13 +45,40 @@ pub struct TextureId(TextureKey);
 
 /// Кусок сцены: textured quad в пикселях карты.
 /// `w`/`h` — None: размер текстуры; Some: растянуть.
+/// `texture` — None: в базовом кадре картинки нет (слой есть не во всех кадрах
+/// анимации); кусок скрыт, пока часы не придут к его кадру.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Piece {
-    pub texture: TextureId,
+    pub texture: Option<TextureId>,
     pub x: i32,
     pub y: i32,
     pub w: Option<i32>,
     pub h: Option<i32>,
+    pub animation: Option<Animation>,
+}
+
+/// Кадры одного слоя, которые показываются по очереди.
+///
+/// Длительности — в тиках игры ([`TICK_MS`] миллисекунд), а не в секундах: часы
+/// остаются целыми, шаг покадрового просмотра равен тику, а куски с одинаковой
+/// фазой идут в такт сами. Слои одного объекта или персонажа получают одинаковые
+/// длительности и тот же `base`, поэтому и синхронны.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Animation {
+    pub frames: Vec<AnimationFrame>,
+    /// Кадр из данных: его показывают при выключенной анимации, и именно по нему
+    /// считают порядок наложения
+    pub base: usize,
+}
+
+/// Один кадр анимации: картинка (`None` — в этом кадре слоя не видно), смещение
+/// её угла от угла куска и длительность в тиках.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnimationFrame {
+    pub texture: Option<TextureId>,
+    pub dx: i32,
+    pub dy: i32,
+    pub ticks: u32,
 }
 
 /// Список отрисовки карты: порядок = порядок наложения (painter's algorithm).
@@ -60,15 +88,53 @@ pub struct Scene {
 }
 
 impl Scene {
-    /// Уникальные ключи текстур в порядке первого появления.
+    /// Уникальные ключи текстур в порядке первого появления: базовый кадр куска
+    /// и все кадры его анимации.
+    ///
+    /// Кадры нужны целиком: не докачанный кадр означал бы пустой спрайт в
+    /// середине цикла, а `check` не увидел бы, что он не декодируется.
     pub fn texture_ids(&self) -> Vec<TextureId> {
         let mut seen = std::collections::HashSet::new();
-        self.pieces
-            .iter()
-            .map(|piece| piece.texture)
-            .filter(|id| seen.insert(*id))
-            .collect()
+        let mut ids = Vec::new();
+        for piece in &self.pieces {
+            let frames = piece
+                .animation
+                .iter()
+                .flat_map(|animation| animation.frames.iter())
+                .filter_map(|frame| frame.texture.as_ref());
+            for texture in piece.texture.iter().chain(frames) {
+                if seen.insert(*texture) {
+                    ids.push(*texture);
+                }
+            }
+        }
+        ids
     }
+
+    /// Статистика анимаций для диагностики.
+    pub fn animation_stats(&self) -> AnimationStats {
+        let mut stats = AnimationStats::default();
+        for piece in &self.pieces {
+            // Видимым кусок считает базовый кадр: без картинки в нём спрайт скрыт
+            if piece.texture.is_some() {
+                stats.visible += 1;
+            }
+            if let Some(animation) = &piece.animation {
+                stats.pieces += 1;
+                stats.frames += animation.frames.len();
+            }
+        }
+        stats
+    }
+}
+
+/// Анимационная статистика сцены: сколько кусков анимируется, сколько в них
+/// кадров и сколько кусков видно в базовом кадре.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct AnimationStats {
+    pub pieces: usize,
+    pub frames: usize,
+    pub visible: usize,
 }
 
 /// Часть серии: первая игра или обучение ENG. Позже — K2/K2.5.
@@ -353,12 +419,16 @@ impl Game {
         };
         let pieces =
             k1_game::scene::draw_list(&input, graph, Some(objects), &self.resources.tables)?;
-        check.pieces = pieces.len();
         let scene = Scene {
             pieces: pieces.into_iter().map(piece).collect(),
         };
         let ids = scene.texture_ids();
+        let stats = scene.animation_stats();
+        check.pieces = scene.pieces.len();
         check.unique_textures = ids.len();
+        check.animated_pieces = stats.pieces;
+        check.animation_frames = stats.frames;
+        check.visible_pieces = stats.visible;
         let mut missing = 0;
         for id in &ids {
             match k1_game::textures::decode(
@@ -399,11 +469,24 @@ type SourceState = (MapSource, Option<u32>, Option<GameState>);
 
 fn piece(from: k1_game::scene::DrawPiece) -> Piece {
     Piece {
-        texture: TextureId(from.texture),
+        texture: from.texture.map(TextureId),
         x: from.x,
         y: from.y,
         w: from.w,
         h: from.h,
+        animation: from.animation.map(|animation| Animation {
+            base: animation.base,
+            frames: animation
+                .frames
+                .into_iter()
+                .map(|frame| AnimationFrame {
+                    texture: frame.texture.map(TextureId),
+                    dx: frame.dx,
+                    dy: frame.dy,
+                    ticks: frame.ticks,
+                })
+                .collect(),
+        }),
     }
 }
 
@@ -415,6 +498,14 @@ pub struct MapCheck {
     pub pieces: usize,
     pub unique_textures: usize,
     pub missing_textures: usize,
+    /// Куски с анимацией и суммарное число их кадров: кадры тоже декодируются,
+    /// и битый кадр — ошибка, а не пустой спрайт в середине цикла
+    pub animated_pieces: usize,
+    pub animation_frames: usize,
+    /// Куски с картинкой в базовом кадре — то, что видно при выключенной
+    /// анимации. Их число не изменилось с появлением анимаций: слои, которых нет
+    /// в базовом кадре, добавляются скрытыми
+    pub visible_pieces: usize,
     pub objects: usize,
     pub decorations: usize,
     pub raw_decorations: usize,
@@ -431,6 +522,9 @@ impl MapCheck {
             pieces: 0,
             unique_textures: 0,
             missing_textures: 0,
+            animated_pieces: 0,
+            animation_frames: 0,
+            visible_pieces: 0,
             objects: 0,
             decorations: 0,
             raw_decorations: 0,
@@ -457,14 +551,17 @@ impl std::fmt::Display for CheckReport {
         for map in &self.maps {
             writeln!(
                 f,
-                "{} {:>2}: кусков {:>6}, текстур {:>4}, объектов {:>4}, декораций {:>4} (сырых {}), персонажей {:>3}, свет {}, ошибок {}",
+                "{} {:>2}: кусков {:>6} (видимых {:>6}), текстур {:>4}, анимаций {:>4} (кадров {:>5}), объектов {:>4}, декораций {:>4} (сырых {}), персонажей {:>3}, свет {}, ошибок {}",
                 match map.source {
                     MapSource::Game => "game    ",
                     MapSource::Tutorial => "tutorial",
                 },
                 map.number,
                 map.pieces,
+                map.visible_pieces,
                 map.unique_textures,
+                map.animated_pieces,
+                map.animation_frames,
                 map.objects,
                 map.decorations,
                 map.raw_decorations,
@@ -488,6 +585,26 @@ impl std::fmt::Display for CheckReport {
 mod tests {
     use super::*;
 
+    fn piece(texture: TextureKey) -> Piece {
+        Piece {
+            texture: Some(TextureId(texture)),
+            x: 0,
+            y: 0,
+            w: None,
+            h: None,
+            animation: None,
+        }
+    }
+
+    fn frame(texture: Option<TextureKey>) -> AnimationFrame {
+        AnimationFrame {
+            texture: texture.map(TextureId),
+            dx: 0,
+            dy: 0,
+            ticks: 1,
+        }
+    }
+
     #[test]
     fn open_without_game_files_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
@@ -496,43 +613,113 @@ mod tests {
 
     #[test]
     fn scene_deduplicates_texture_ids_in_order() {
+        let solid = TextureKey::Solid {
+            color: [1, 2, 3, 4],
+        };
         let scene = Scene {
             pieces: vec![
+                piece(solid),
+                piece(TextureKey::Tile { index: 7 }),
                 Piece {
-                    texture: TextureId(TextureKey::Solid {
-                        color: [1, 2, 3, 4],
-                    }),
-                    x: 0,
-                    y: 0,
-                    w: None,
-                    h: None,
-                },
-                Piece {
-                    texture: TextureId(TextureKey::Tile { index: 7 }),
-                    x: 0,
-                    y: 0,
-                    w: None,
-                    h: None,
-                },
-                Piece {
-                    texture: TextureId(TextureKey::Solid {
-                        color: [1, 2, 3, 4],
-                    }),
                     x: 1,
                     y: 1,
-                    w: None,
-                    h: None,
+                    ..piece(solid)
                 },
             ],
         };
         assert_eq!(
             scene.texture_ids(),
-            [
-                TextureId(TextureKey::Solid {
-                    color: [1, 2, 3, 4]
+            [TextureId(solid), TextureId(TextureKey::Tile { index: 7 })]
+        );
+    }
+
+    #[test]
+    fn texture_ids_include_every_animation_frame() {
+        // Базовый кадр идёт первым (он же кадр из файла), затем остальные кадры;
+        // общий кадр двух кусков не дублируется
+        let shared = TextureKey::FlameFrame { index: 3 };
+        let first = TextureKey::FlameFrame { index: 1 };
+        let second = TextureKey::FlameFrame { index: 2 };
+        let animation = || Animation {
+            base: 0,
+            frames: vec![frame(Some(first)), frame(Some(second)), frame(Some(shared))],
+        };
+        let scene = Scene {
+            pieces: vec![
+                Piece {
+                    animation: Some(animation()),
+                    ..piece(first)
+                },
+                Piece {
+                    animation: Some(animation()),
+                    ..piece(first)
+                },
+            ],
+        };
+        assert_eq!(
+            scene.texture_ids(),
+            [TextureId(first), TextureId(second), TextureId(shared)]
+        );
+        assert_eq!(
+            scene.animation_stats(),
+            AnimationStats {
+                pieces: 2,
+                frames: 6,
+                visible: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn hidden_base_still_declares_its_frames() {
+        // Слой, у которого в базовом кадре картинки нет, всё равно обязан
+        // получить текстуры своих кадров
+        let body = TextureKey::SpriteImage {
+            source: k1_data::characters::LayerSource::Model(4),
+            image_id: 11,
+            palette: 2,
+        };
+        let gear = TextureKey::SpriteImage {
+            source: k1_data::characters::LayerSource::Equipment(1),
+            image_id: 5,
+            palette: 3,
+        };
+        let scene = Scene {
+            pieces: vec![Piece {
+                texture: None,
+                x: 0,
+                y: 0,
+                w: None,
+                h: None,
+                animation: Some(Animation {
+                    base: 0,
+                    frames: vec![frame(None), frame(Some(gear)), frame(Some(body))],
                 }),
-                TextureId(TextureKey::Tile { index: 7 })
-            ]
+            }],
+        };
+        assert_eq!(scene.texture_ids(), [TextureId(gear), TextureId(body)]);
+        assert_eq!(
+            scene.animation_stats(),
+            AnimationStats {
+                pieces: 1,
+                frames: 3,
+                visible: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn static_scene_has_no_animation() {
+        let scene = Scene {
+            pieces: vec![piece(TextureKey::Tile { index: 1 })],
+        };
+        assert_eq!(
+            scene.animation_stats(),
+            AnimationStats {
+                pieces: 0,
+                frames: 0,
+                visible: 1,
+            }
         );
     }
 }
