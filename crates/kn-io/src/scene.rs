@@ -27,14 +27,30 @@ pub const Z_STEP: f32 = 0.01;
 #[derive(Component, Default)]
 pub struct MapRoot;
 
-/// Узел группы кусков: `Visibility::Hidden` на нём прячет всю группу, а дети
-/// остаются с [`Visibility::Inherited`].
+/// Узел группы кусков: `Visibility::Hidden` на нём прячет всю группу.
 ///
 /// Так переключение оверлея — одна запись компонента вместо пересборки карты:
 /// порядок наложения задаёт позиция куска в [`Scene::pieces`], а не состав
 /// группы, и скрытая группа ничего в нём не меняет.
+///
+/// Показанная группа — [`Visibility::Inherited`], а не `Visible`: `Visible`
+/// перебивает наследование, и карта, спрятанная целиком на [`MapRoot`], осталась
+/// бы на экране.
 #[derive(Component, Debug)]
-pub struct SceneGroup(pub PieceGroup);
+pub struct SceneGroup {
+    pub group: PieceGroup,
+    /// Мировые границы спрайтов группы со всеми кадрами их анимаций. Нужны, чтобы
+    /// включённый слой не оставался за пределами, куда пускают камеру, когда их
+    /// пересчитывают без разбора карты.
+    pub bounds: Option<(Vec2, Vec2)>,
+}
+
+impl SceneGroup {
+    /// Узел группы с её границами.
+    pub fn new(group: PieceGroup, bounds: Option<(Vec2, Vec2)>) -> Self {
+        Self { group, bounds }
+    }
+}
 
 /// Спрайт одного куска сцены.
 ///
@@ -136,6 +152,7 @@ pub fn spawn_scene(commands: &mut Commands, scene: &Scene, cache: &TextureCache)
     let mut nodes = Vec::with_capacity(PieceGroup::ALL.len());
     for (group, orders) in group_orders(scene) {
         let mut children = Vec::new();
+        let mut bounds = None;
         for order in orders {
             let piece = &scene.pieces[order];
             let base = piece.texture.as_ref().and_then(|id| cache.get(id));
@@ -166,19 +183,58 @@ pub fn spawn_scene(commands: &mut Commands, scene: &Scene, cache: &TextureCache)
                 ));
             }
             children.push(entity.id());
+            bounds = merge(bounds, piece_bounds(piece, cache));
         }
         if children.is_empty() {
             // Пустой узел группы только множил бы обход иерархии
             continue;
         }
         let node = commands
-            .spawn((SceneGroup(group), Transform::IDENTITY, Visibility::Visible))
+            .spawn((
+                SceneGroup::new(group, bounds),
+                Transform::IDENTITY,
+                Visibility::Inherited,
+            ))
             .id();
         commands.entity(node).add_children(&children);
         nodes.push(node);
     }
     commands.entity(root).add_children(&nodes);
     root
+}
+
+/// Границы одного куска: базовый кадр и все кадры его анимации, которые собрались.
+///
+/// Берутся все кадры, а не показанный сейчас: спрайт анимации меняет размер и
+/// угол, и иначе крупный огонь у края карты оказался бы за границами, которые
+/// подбирает `frame_scene`, а включённый слой — недостижимым для камеры.
+/// `None` — картинок куска нет ни в одном кадре, спрайта не будет.
+fn piece_bounds(piece: &Piece, cache: &TextureCache) -> Option<(Vec2, Vec2)> {
+    let mut bounds: Option<(Vec2, Vec2)> = None;
+    for (texture, dx, dy) in piece_frames(piece) {
+        let Some(entry) = texture.as_ref().and_then(|id| cache.get(id)) else {
+            continue;
+        };
+        let size = piece_size(piece, entry.size);
+        let left = (piece.x + dx) as f32;
+        let top = (piece.y + dy) as f32;
+        bounds = merge(
+            bounds,
+            Some((
+                Vec2::new(left, -(top + size.y)),
+                Vec2::new(left + size.x, -top),
+            )),
+        );
+    }
+    bounds
+}
+
+/// Прямоугольник, покрывающий оба переданных.
+fn merge(a: Option<(Vec2, Vec2)>, b: Option<(Vec2, Vec2)>) -> Option<(Vec2, Vec2)> {
+    match (a, b) {
+        (Some((a_min, a_max)), Some((b_min, b_max))) => Some((a_min.min(b_min), a_max.max(b_max))),
+        (bounds, other) => bounds.or(other),
+    }
 }
 
 /// Куски каждой группы: сама группа и номера её кусков в списке отрисовки.
@@ -240,10 +296,8 @@ fn piece_frames(piece: &Piece) -> impl Iterator<Item = (Option<TextureId>, i32, 
 ///
 /// Номинальный размер карты (`kn_game::Game::map_size`) — это вся сетка 80×160,
 /// а нарисовано бывает только её часть, поэтому камеру и её ограничения
-/// считают по фактическому содержимому. Берутся и кадры анимаций: они могут быть
-/// больше базового кадра и сдвинуты от его угла, и иначе крупный огонь у края
-/// карты оказался бы за границами, которые подобрать `frame_scene`. Куски без
-/// загруженной текстуры пропускаются, как в [spawn_scene].
+/// считают по фактическому содержимому. Куски без загруженной текстуры
+/// пропускаются, как в [spawn_scene].
 ///
 /// `shown` — какие куски сейчас видно: карта собирается целиком со всеми
 /// оверлеями, а наводить камеру на спрятанные под [`SceneGroup`] ромбы
@@ -254,23 +308,13 @@ pub fn scene_bounds(
     cache: &TextureCache,
     shown: impl Fn(&Piece) -> bool,
 ) -> Option<(Vec2, Vec2)> {
-    let mut min = Vec2::splat(f32::MAX);
-    let mut max = Vec2::splat(f32::MIN);
-    let mut any = false;
-    for piece in scene.pieces.iter().filter(|piece| shown(piece)) {
-        for (texture, dx, dy) in piece_frames(piece) {
-            let Some(entry) = texture.as_ref().and_then(|id| cache.get(id)) else {
-                continue;
-            };
-            let size = piece_size(piece, entry.size);
-            let left = (piece.x + dx) as f32;
-            let top = (piece.y + dy) as f32;
-            min = min.min(Vec2::new(left, -(top + size.y)));
-            max = max.max(Vec2::new(left + size.x, -top));
-            any = true;
-        }
-    }
-    any.then_some((min, max))
+    scene
+        .pieces
+        .iter()
+        .filter(|piece| shown(piece))
+        .fold(None, |bounds, piece| {
+            merge(bounds, piece_bounds(piece, cache))
+        })
 }
 
 #[cfg(test)]

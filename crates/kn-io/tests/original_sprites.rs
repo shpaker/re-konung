@@ -13,7 +13,8 @@ use bevy::{
 };
 use kn_game::{Game, MapSource, Piece, PieceGroup, Scene, SceneOptions, group_is_shown};
 use kn_io::{
-    Animator, GameResource, MapRoot, SceneGroup, ScenePiece, TextureCache, Z_STEP, spawn_scene,
+    Animator, GameResource, MapRoot, SceneGroup, ScenePiece, TextureCache, Z_STEP, scene_bounds,
+    spawn_scene,
 };
 
 fn game_roots() -> Vec<(&'static str, PathBuf)> {
@@ -137,7 +138,7 @@ fn sprites(app: &App, root: Entity) -> HashMap<PieceGroup, Vec<(usize, Entity)>>
     );
     let mut groups = HashMap::new();
     for node in world.get::<Children>(root).unwrap() {
-        let group = world.get::<SceneGroup>(*node).unwrap().0;
+        let group = world.get::<SceneGroup>(*node).unwrap().group;
         // Без Transform у узла его потомки не получили бы GlobalTransform и не
         // попали бы в рендер — окно осталось бы пустым
         assert!(
@@ -219,6 +220,14 @@ fn every_group_of_a_real_map_gets_its_own_node() {
     }
 }
 
+/// Видно ли спрайт с учётом наследования от группы.
+fn visible(app: &App, sprite: Entity) -> bool {
+    app.world()
+        .get::<InheritedVisibility>(sprite)
+        .expect("спрайт жив")
+        .get()
+}
+
 #[test]
 fn a_hidden_group_hides_only_its_own_sprites() {
     for (edition, dir) in game_roots() {
@@ -233,9 +242,17 @@ fn a_hidden_group_hides_only_its_own_sprites() {
             !switched.is_empty(),
             "{edition}: на карте нет ни одного переключемого слоя"
         );
+        // Что видно до переключения: часть спрайтов скрыта и без групп — кадром
+        // анимации без картинки, и после переключения она обязана остаться такой же
+        let kept = groups
+            .iter()
+            .filter(|(group, _)| !switched.contains(group))
+            .flat_map(|(_, pieces)| pieces.iter().map(|(_, sprite)| *sprite))
+            .map(|sprite| (sprite, visible(&app, sprite)))
+            .collect::<Vec<_>>();
         let nodes = app.world().get::<Children>(root).unwrap().to_vec();
         for node in nodes {
-            let group = app.world().get::<SceneGroup>(node).unwrap().0;
+            let group = app.world().get::<SceneGroup>(node).unwrap().group;
             if switched.contains(&group) {
                 *app.world_mut().get_mut::<Visibility>(node).unwrap() = Visibility::Hidden;
             }
@@ -246,30 +263,52 @@ fn a_hidden_group_hides_only_its_own_sprites() {
         for group in &switched {
             for (_, sprite) in &groups[group] {
                 assert!(
-                    !app.world()
-                        .get::<InheritedVisibility>(*sprite)
-                        .unwrap()
-                        .get(),
+                    !visible(&app, *sprite),
                     "{edition}: {group:?}: спрайт скрытой группы виден"
                 );
                 hidden += 1;
             }
         }
-        for (group, pieces) in &groups {
-            if switched.contains(group) {
-                continue;
-            }
-            for (_, sprite) in pieces {
-                assert!(
-                    app.world()
-                        .get::<InheritedVisibility>(*sprite)
-                        .unwrap()
-                        .get(),
-                    "{edition}: {group:?}: спрайт открытой группы скрылся"
-                );
-            }
-        }
         assert!(hidden > 0, "{edition}: скрывать было нечего");
+        for (sprite, was) in kept {
+            assert_eq!(
+                visible(&app, sprite),
+                was,
+                "{edition}: спрайт открытой группы изменил видимость"
+            );
+        }
+    }
+}
+
+/// Границы группы покрывают ровно то, что показывает набор слоёв.
+///
+/// Просмотрщик пересчитывает ими границы камеры, не трогая список отрисовки, —
+/// иначе включённый слой окажется там, куда камера не пускает.
+#[test]
+fn group_bounds_cover_the_pieces_a_layer_shows() {
+    for (edition, dir) in game_roots() {
+        let (app, scene, root) = spawn_map(edition, dir);
+        let cache = app.world().resource::<TextureCache>();
+        let mut bounds = HashMap::new();
+        for node in app.world().get::<Children>(root).unwrap() {
+            let group = app.world().get::<SceneGroup>(*node).unwrap();
+            bounds.insert(group.group, group.bounds);
+        }
+        let union = |options: &SceneOptions| -> Option<(Vec2, Vec2)> {
+            PieceGroup::ALL
+                .into_iter()
+                .filter(|group| group_is_shown(*group, options) && bounds.contains_key(group))
+                .map(|group| bounds[&group].expect("узел группы с кусками без границ"))
+                .reduce(|(a_min, a_max), (b_min, b_max)| (a_min.min(b_min), a_max.max(b_max)))
+        };
+        for options in [SceneOptions::default(), SceneOptions::ALL] {
+            let want = scene_bounds(&scene, cache, |piece| group_is_shown(piece.group, &options));
+            assert_eq!(
+                union(&options),
+                want,
+                "{edition}: границы видимых групп с опциями {options:?}"
+            );
+        }
     }
 }
 

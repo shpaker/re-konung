@@ -27,8 +27,8 @@ use bevy::{
 };
 use kn_game::{Game, MapRef, MapSource, Piece, SceneOptions, TICK_MS, group_is_shown};
 use kn_io::{
-    AnimPlugin, CameraState, Clock, GameResource, MapCameraPlugin, PendingFrame, PlayState,
-    SceneGroup, TextureCache, clear_scene, frame_scene, spawn_scene,
+    AnimPlugin, CameraBounds, CameraState, Clock, GameResource, MapCameraPlugin, PendingFrame,
+    PlayState, SceneGroup, ScenePiece, TextureCache, clear_scene, frame_scene, spawn_scene,
 };
 use thiserror::Error;
 
@@ -165,8 +165,9 @@ pub struct ActiveRoot(pub Option<Entity>);
 
 /// Статистика последней построенной сцены — для панели диагностики.
 ///
-/// Сколько кусков видно, считает [`diagnostics`] по узлам групп: переключение
-/// слоя не пересобирает сцену и не оставляет здесь устаревшего числа.
+/// Сколько кусков видно и сколько собрано считает [`diagnostics`] по спрайтам в
+/// мире: переключение слоя не пересобирает сцену и не оставляет здесь устаревшего
+/// числа.
 #[derive(Resource, Default)]
 pub struct Stats {
     pub map: Option<MapRef>,
@@ -573,20 +574,54 @@ fn shown(options: &SceneOptions) -> impl Fn(&Piece) -> bool + '_ {
 /// Переносит переключатели слоёв в видимость групп кусков.
 ///
 /// Узел группы — единственный, чего касается переключение: дети наследуют её
-/// видимость ([`kn_io::SceneGroup`]), поэтому кадр не обходится на тысячи
-/// despawn/spawn. Система идёт сразу за [`rebuild_scene`] и успевает спрятать
-/// свежие группы до извлечения кадра.
-fn sync_groups(viewer: Res<Viewer>, mut groups: Query<(&SceneGroup, &mut Visibility)>) {
+/// видимость ([`kn_io::SceneGroup`]), поэтому кадр не обходится в тысячи
+/// despawn/spawn. Включённая группа получает [`Visibility::Inherited`], а не
+/// `Visible`: `Visible` перебивает наследование от [`kn_io::MapRoot`], и карту,
+/// спрятанную целиком, было бы видно. Система идёт сразу за [`rebuild_scene`] и
+/// успевает спрятать свежие группы до извлечения кадра.
+///
+/// Смена видимости пересчитывает и границы камеры: слой может выходить за
+/// содержимое карты (ромбы проходимости идут по всей сетке), и иначе включённый
+/// оверлей оказался бы там, куда камера не пускает. Положение и масштаб при этом
+/// не трогаются — меняется только рамка, а `clamp_to_bounds` сам вернёт камеру,
+/// если она вылезла за сузившуюся рамку.
+fn sync_groups(
+    viewer: Res<Viewer>,
+    mut groups: Query<(&SceneGroup, &mut Visibility)>,
+    mut bounds: ResMut<CameraBounds>,
+) {
     let options = viewer.options();
+    let mut changed = false;
     for (group, mut visibility) in &mut groups {
-        let target = if group_is_shown(group.0, &options) {
-            Visibility::Visible
+        let target = if group_is_shown(group.group, &options) {
+            Visibility::Inherited
         } else {
             Visibility::Hidden
         };
         if *visibility != target {
             *visibility = target;
+            changed = true;
         }
+    }
+    if !changed {
+        return;
+    }
+    let mut shown: Option<(Vec2, Vec2)> = None;
+    for (group, visibility) in &groups {
+        if *visibility == Visibility::Hidden {
+            continue;
+        }
+        let Some((min, max)) = group.bounds else {
+            continue;
+        };
+        shown = Some(match shown {
+            Some((lo, hi)) => (lo.min(min), hi.max(max)),
+            None => (min, max),
+        });
+    }
+    if let Some((min, max)) = shown {
+        bounds.min = min;
+        bounds.max = max;
     }
 }
 
@@ -612,20 +647,14 @@ fn playback_label(playback: PlayState) -> &'static str {
     }
 }
 
-/// Сколько спрайтов в видимых группах и во всех.
+/// Сколько спрайтов видно и сколько собрано.
 ///
-/// Карта собирается сразу со всеми кусками, поэтому одно число без другого
-/// сказало бы не то, что видно на экране.
-fn group_pieces(groups: &Query<(&SceneGroup, &Children, &Visibility)>) -> (usize, usize) {
-    groups
-        .iter()
-        .fold((0, 0), |(shown, total), (_, children, visibility)| {
-            let count = children.len();
-            (
-                shown + usize::from(*visibility != Visibility::Hidden) * count,
-                total + count,
-            )
-        })
+/// `InheritedVisibility` пишет Bevy, и в неё уже входит и скрытая группа, и кадр
+/// анимации без картинки — счёт по детям групп завышал бы первое.
+fn piece_counts(pieces: &Query<&InheritedVisibility, With<ScenePiece>>) -> (usize, usize) {
+    pieces.iter().fold((0, 0), |(shown, total), visibility| {
+        (shown + usize::from(visibility.get()), total + 1)
+    })
 }
 
 fn diagnostics(
@@ -634,7 +663,7 @@ fn diagnostics(
     clock: Res<Clock>,
     zoom: Res<CameraState>,
     frames: Res<DiagnosticsStore>,
-    groups: Query<(&SceneGroup, &Children, &Visibility)>,
+    pieces: Query<&InheritedVisibility, With<ScenePiece>>,
     mut text: Single<&mut Text, With<Diagnostics>>,
 ) {
     let fps = frames
@@ -644,7 +673,7 @@ fn diagnostics(
     let next = match (&stats.map, &stats.error) {
         (_, Some(error)) => format!("error: {error}"),
         (Some(map), None) => {
-            let (shown, built) = group_pieces(&groups);
+            let (shown, built) = piece_counts(&pieces);
             let pieces = if shown == built {
                 format!("{built} pieces")
             } else {
@@ -863,12 +892,13 @@ mod tests {
 
     /// Узлы групп и их видимость после [`sync_groups`] при этих переключателях.
     ///
-    /// Узлы спавнятся руками с `Visible`, как их спавнит `spawn_scene`: важно,
+    /// Узлы спавнятся руками с `Inherited`, как их спавнит `spawn_scene`: важно,
     /// что система делает со скрытым слоем, а не то, сколько спрайтов под узлом.
     fn group_visibility(overlays: [bool; 4]) -> Vec<(PieceGroup, Visibility)> {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .insert_resource(viewer(overlays))
+            .init_resource::<CameraBounds>()
             .add_systems(Update, sync_groups);
         let nodes: Vec<(PieceGroup, Entity)> = PieceGroup::ALL
             .iter()
@@ -876,7 +906,7 @@ mod tests {
                 (
                     group,
                     app.world_mut()
-                        .spawn((SceneGroup(group), Visibility::Visible))
+                        .spawn((SceneGroup::new(group, None), Visibility::Inherited))
                         .id(),
                 )
             })
@@ -913,7 +943,7 @@ mod tests {
                     .find(|(g, _)| *g == group)
                     .expect("группа под своим узлом")
                     .1
-                    == Visibility::Visible;
+                    == Visibility::Inherited;
                 assert_eq!(
                     visible,
                     group_is_shown(group, &options),
@@ -924,13 +954,81 @@ mod tests {
     }
 
     #[test]
+    fn a_shown_group_follows_the_map_root_instead_of_overriding_it() {
+        // Включённая группа — `Inherited`, иначе она перебивает наследование и
+        // карту, спрятанную целиком на `MapRoot`, было бы видно
+        let characters = group_visibility(DEFAULT_OVERLAYS)
+            .into_iter()
+            .find(|(group, _)| *group == PieceGroup::Characters)
+            .expect("персонажи включены");
+        assert_eq!(characters.1, Visibility::Inherited);
+    }
+
+    #[test]
+    fn a_layer_outside_the_map_widens_the_camera_bounds() {
+        let terrain = (Vec2::new(0.0, -200.0), Vec2::new(1000.0, 0.0));
+        // Ромбы проходимости идут по всей сетке и дальше тайлов карты — с обеих
+        // сторон, чтобы рамка с ними сравнивалась целиком
+        let foot = (Vec2::new(-50.0, -260.0), Vec2::new(1050.0, 20.0));
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(viewer([false; 4]))
+            .init_resource::<CameraBounds>()
+            .add_systems(Update, sync_groups);
+        let map_node = app
+            .world_mut()
+            .spawn((
+                SceneGroup::new(PieceGroup::Terrain, Some(terrain)),
+                Visibility::Inherited,
+            ))
+            .id();
+        let walkability = app
+            .world_mut()
+            .spawn((
+                SceneGroup::new(PieceGroup::Foot, Some(foot)),
+                Visibility::Inherited,
+            ))
+            .id();
+        app.update();
+        assert_eq!(app.world().resource::<CameraBounds>().min, terrain.0);
+        assert_eq!(app.world().resource::<CameraBounds>().max, terrain.1);
+
+        // Слой включили — рамка расширилась, отступ и остальное остались своими
+        app.world_mut()
+            .resource_mut::<Viewer>()
+            .set(Overlay::Foot, true);
+        app.update();
+        let bounds = *app.world().resource::<CameraBounds>();
+        assert_eq!(bounds.min, foot.0, "границы расширились по x и y");
+        assert_eq!(bounds.max, foot.1);
+        assert_eq!(bounds.margin, CameraBounds::default().margin);
+
+        // Слой выключили — рамка сузилась обратно: за неё камеру вернёт
+        // ограничение в PostUpdate, а не этот расчёт
+        app.world_mut()
+            .resource_mut::<Viewer>()
+            .set(Overlay::Foot, false);
+        app.update();
+        assert_eq!(app.world().resource::<CameraBounds>().min, terrain.0);
+        assert_eq!(app.world().resource::<CameraBounds>().max, terrain.1);
+        assert_eq!(
+            *app.world().get::<Visibility>(map_node).unwrap(),
+            Visibility::Inherited
+        );
+        assert_eq!(
+            *app.world().get::<Visibility>(walkability).unwrap(),
+            Visibility::Hidden
+        );
+    }
+
+    #[test]
     fn map_groups_survive_every_switch() {
         let all_on = group_visibility([true; 4]);
         assert_eq!(all_on.len(), PieceGroup::ALL.len(), "узел на каждую группу");
         assert!(
             all_on
                 .iter()
-                .all(|(_, visibility)| *visibility == Visibility::Visible),
+                .all(|(_, visibility)| *visibility == Visibility::Inherited),
             "все слои включены"
         );
         // Выключенный слой не убирает узлы: карта остаётся собранной, и её можно
