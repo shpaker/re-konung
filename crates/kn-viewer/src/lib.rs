@@ -24,10 +24,10 @@ use bevy::{
     ui::Checked,
     ui_widgets::ValueChange,
 };
-use kn_game::{Game, MapRef, MapSource, SceneOptions};
+use kn_game::{Game, MapRef, MapSource, SceneOptions, TICK_MS};
 use kn_io::{
-    CameraState, GameResource, MapCameraPlugin, PendingFrame, TextureCache, clear_scene,
-    frame_scene, spawn_scene,
+    AnimPlugin, CameraState, Clock, GameResource, MapCameraPlugin, PendingFrame, PlayState,
+    TextureCache, clear_scene, frame_scene, spawn_scene,
 };
 use thiserror::Error;
 
@@ -75,6 +75,10 @@ pub enum Overlay {
 /// виджет хранит состояние сам, а не читает его из [Viewer].
 pub const DEFAULT_OVERLAYS: [bool; 4] = [false, false, false, true];
 
+/// Включена ли анимация при запуске и стоит ли она на паузе. Согласовано с
+/// `Checked` чекбоксов `Animation` и `Paused` в [panel].
+pub const DEFAULT_PLAYBACK: PlayState = PlayState::Playing;
+
 /// Что показывает просмотрщик. Правится интерфейсом, читается системами.
 #[derive(Resource)]
 pub struct Viewer {
@@ -82,6 +86,37 @@ pub struct Viewer {
     pub selected: usize,
     /// Включённые оверлеи в порядке [Overlay]
     pub overlays: [bool; 4],
+    /// Воспроизведение анимации: пауза и выключение — разные состояния
+    pub playback: PlayState,
+}
+
+/// Переключатель `Animation`: выключенная анимация показывает базовый кадр (тот,
+/// что записан в данных), включённая — начинает с него же.
+pub fn set_animation(on: bool) -> PlayState {
+    if on {
+        PlayState::Playing
+    } else {
+        PlayState::Off
+    }
+}
+
+/// Переключатель `Paused`: держит текущий кадр, не трогая базовый. Пауза
+/// бессмысленна, когда анимации нет, и в этом случае остаётся `Off`.
+pub fn set_paused(playback: PlayState, paused: bool) -> PlayState {
+    match (playback, paused) {
+        (PlayState::Off, _) => PlayState::Off,
+        (_, true) => PlayState::Paused,
+        (_, false) => PlayState::Playing,
+    }
+}
+
+/// Клавиша воспроизведения: пауза и продолжение одним нажатием. Если анимация
+/// была выключена, клавиша её включает.
+pub fn toggle_playback(playback: PlayState) -> PlayState {
+    match playback {
+        PlayState::Playing => PlayState::Paused,
+        PlayState::Paused | PlayState::Off => PlayState::Playing,
+    }
 }
 
 impl Viewer {
@@ -134,9 +169,24 @@ pub struct Stats {
     pub unique_textures: usize,
     pub cached_textures: usize,
     pub built_ms: u128,
+    /// Куски с анимацией и все их кадры: кадры тоже декодируются при сборке
+    pub animated_pieces: usize,
+    pub animation_frames: usize,
     /// Ключи, по которым картинка не собралась: карта показана, но не целиком
     pub problems: Vec<String>,
     pub error: Option<String>,
+}
+
+/// Переключатель воспроизведения: какой именно, видит компонент.
+#[derive(Component, Clone, Copy, Default)]
+struct PlaybackToggle(PlaybackKind);
+
+/// Что переключает виджет воспроизведения.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum PlaybackKind {
+    #[default]
+    Animation,
+    Paused,
 }
 
 /// Подпись элемента интерфейса, включающего оверлей.
@@ -209,6 +259,8 @@ pub fn run_viewer(cli: Cli) -> ExitCode {
         .add_plugins((
             FeathersPlugins,
             MapCameraPlugin,
+            // Тик игры: на нём меняются кадры объектов, персонажей и огней
+            AnimPlugin::new(TICK_MS as f32),
             FrameTimeDiagnosticsPlugin::default(),
         ))
         .insert_resource(UiTheme(create_dark_theme()))
@@ -223,13 +275,17 @@ pub fn run_viewer(cli: Cli) -> ExitCode {
             maps: maps.clone(),
             selected,
             overlays: DEFAULT_OVERLAYS,
+            playback: DEFAULT_PLAYBACK,
         })
         .add_systems(Startup, move |world: &mut World| {
             if let Err(error) = world.spawn_scene_list(panel_list(labels.clone(), selected)) {
                 error!("не собрался интерфейс: {error}");
             }
         })
-        .add_systems(Update, (rebuild_scene, diagnostics))
+        .add_systems(
+            Update,
+            (playback_hotkeys, apply_playback, rebuild_scene, diagnostics).chain(),
+        )
         .run();
     ExitCode::SUCCESS
 }
@@ -292,6 +348,21 @@ fn panel(labels: Vec<String>, selected: usize) -> impl Scene {
             OverlayToggle(Overlay::Characters)
             on(toggle_overlay)
             --
+            @caption("Playback")
+            --
+            @FeathersCheckbox {
+                @caption: bsn! { @caption("Animation") }
+            }
+            Checked
+            PlaybackToggle(PlaybackKind::Animation)
+            on(change_playback)
+            --
+            @FeathersCheckbox {
+                @caption: bsn! { @caption("Paused") }
+            }
+            PlaybackToggle(PlaybackKind::Paused)
+            on(change_playback)
+            --
             @caption("") Diagnostics
         ]
     }
@@ -324,13 +395,75 @@ fn toggle_overlay(
     };
     viewer.set(kind.0, change.value);
     rebuild.request = Some(RebuildRequest::Overlays);
-    // Checkbox считает новое значение как !Has<Checked> и сам его не пишет:
-    // без этого каждый клик присылал бы true (bevy_ui_widgets::checkbox_self_update)
-    let mut checkbox = commands.entity(change.source);
-    if change.value {
+    sync_checked(&mut commands, change.source, change.value);
+}
+
+/// `Checkbox` считает новое значение как `!Has<Checked>` и сам `Checked` не
+/// пишет: без этого каждый клик присылал бы `true`
+/// (`bevy_ui_widgets::checkbox_self_update`).
+fn sync_checked(commands: &mut Commands, widget: Entity, checked: bool) {
+    let mut checkbox = commands.entity(widget);
+    if checked {
         checkbox.insert(Checked);
     } else {
         checkbox.remove::<Checked>();
+    }
+}
+
+/// Переключатели воспроизведения правят только состояние: сцена той же карты не
+/// перестраивается, меняются лишь часы анимации.
+fn change_playback(
+    change: On<ValueChange<bool>>,
+    toggles: Query<&PlaybackToggle>,
+    mut viewer: ResMut<Viewer>,
+    mut commands: Commands,
+) {
+    let Ok(kind) = toggles.get(change.source) else {
+        return;
+    };
+    viewer.playback = match kind.0 {
+        PlaybackKind::Animation => set_animation(change.value),
+        PlaybackKind::Paused => set_paused(viewer.playback, change.value),
+    };
+    // Значение виджета берётся из состояния, а не из события: пауза вне
+    // анимации невозможна, и чекбокс должен остаться неотмеченным
+    sync_checked(
+        &mut commands,
+        change.source,
+        playback_checked(&viewer, kind.0),
+    );
+}
+
+/// Как должен выглядеть переключатель при этом состоянии.
+fn playback_checked(viewer: &Viewer, kind: PlaybackKind) -> bool {
+    match kind {
+        PlaybackKind::Animation => viewer.playback != PlayState::Off,
+        PlaybackKind::Paused => viewer.playback == PlayState::Paused,
+    }
+}
+
+/// Клавиши: `Space` — пауза и продолжение, `.` и `,` — шаг на тик вперёд и
+/// назад. Панорамирование камеры этих клавиш не использует.
+fn playback_hotkeys(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut viewer: ResMut<Viewer>,
+    mut clock: ResMut<Clock>,
+) {
+    if keys.just_pressed(KeyCode::Space) {
+        viewer.playback = toggle_playback(viewer.playback);
+    }
+    if keys.just_pressed(KeyCode::Period) {
+        clock.step(1);
+    }
+    if keys.just_pressed(KeyCode::Comma) {
+        clock.step(-1);
+    }
+}
+
+/// Состояние интерфейса переносится в часы анимации.
+fn apply_playback(viewer: Res<Viewer>, mut clock: ResMut<Clock>) {
+    if clock.state != viewer.playback {
+        clock.goto(viewer.playback);
     }
 }
 
@@ -363,6 +496,7 @@ fn rebuild_scene(
     };
     let ids = scene.texture_ids();
     let (pieces, unique) = (scene.pieces.len(), ids.len());
+    let animation = scene.animation_stats();
     let problems = match cache.load(&game.0, &ids, &mut images) {
         Ok(problems) => problems,
         Err(error) => {
@@ -389,6 +523,8 @@ fn rebuild_scene(
         unique_textures: unique,
         cached_textures: cache.len(),
         built_ms: started.elapsed().as_millis(),
+        animated_pieces: animation.pieces,
+        animation_frames: animation.frames,
         problems,
         error: None,
     };
@@ -401,13 +537,26 @@ fn failed(map: MapRef, cached: usize, error: String, elapsed: Duration) -> Stats
         unique_textures: 0,
         cached_textures: cached,
         built_ms: elapsed.as_millis(),
+        animated_pieces: 0,
+        animation_frames: 0,
         problems: Vec::new(),
         error: Some(error),
     }
 }
 
+/// Как состояние воспроизведения подписать в диагностике.
+fn playback_label(playback: PlayState) -> &'static str {
+    match playback {
+        PlayState::Playing => "playing",
+        PlayState::Paused => "paused",
+        PlayState::Off => "off",
+    }
+}
+
 fn diagnostics(
     stats: Res<Stats>,
+    viewer: Res<Viewer>,
+    clock: Res<Clock>,
     zoom: Res<CameraState>,
     frames: Res<DiagnosticsStore>,
     mut text: Single<&mut Text, With<Diagnostics>>,
@@ -424,8 +573,20 @@ fn diagnostics(
             } else {
                 format!(" · {} textures missing", stats.problems.len())
             };
+            // Карта без огней и движущихся объектов — без этой строки
+            let playback = if stats.animated_pieces == 0 {
+                String::new()
+            } else {
+                format!(
+                    "\nanim {} · {} frames · tick {} · {}",
+                    stats.animated_pieces,
+                    stats.animation_frames,
+                    clock.ticks,
+                    playback_label(viewer.playback),
+                )
+            };
             format!(
-                "{} {} · {} pieces · {} textures · {} ms{problems}\nzoom ×{} · {} fps",
+                "{} {} · {} pieces · {} textures · {} ms{problems}\nzoom ×{} · {} fps{playback}",
                 match map.source {
                     MapSource::Game => "map",
                     MapSource::Tutorial => "tutorial",
@@ -522,13 +683,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn overlay_flags_round_trip() {
-        let mut viewer = Viewer {
+    fn viewer(overlays: [bool; 4]) -> Viewer {
+        Viewer {
             maps: vec![],
             selected: 0,
-            overlays: [false; 4],
-        };
+            overlays,
+            playback: DEFAULT_PLAYBACK,
+        }
+    }
+
+    #[test]
+    fn overlay_flags_round_trip() {
+        let mut viewer = viewer([false; 4]);
         assert!(!viewer.is_on(Overlay::Markers));
         viewer.set(Overlay::Markers, true);
         assert!(viewer.is_on(Overlay::Markers));
@@ -539,11 +705,7 @@ mod tests {
     #[test]
     fn default_overlays_show_characters_only() {
         // Совпадает с `Checked` у чекбокса Characters в panel()
-        let viewer = Viewer {
-            maps: vec![],
-            selected: 0,
-            overlays: DEFAULT_OVERLAYS,
-        };
+        let viewer = viewer(DEFAULT_OVERLAYS);
         assert!(viewer.is_on(Overlay::Characters));
         assert!(!viewer.is_on(Overlay::Foot));
         assert!(!viewer.is_on(Overlay::Lights));
@@ -553,6 +715,59 @@ mod tests {
         // Просмотрщик героя не выбирает: фасад делает это по источнику карты,
         // иначе tutorial-карты описывались бы состоянием основной игры
         assert!(options.hero.is_none());
+    }
+
+    #[test]
+    fn turning_animation_off_returns_to_the_base_frame() {
+        // Выключение — не пауза: оно показывает кадр из данных, и с него же
+        // продолжит воспроизведение
+        assert_eq!(set_animation(false), PlayState::Off);
+        assert_eq!(set_animation(true), PlayState::Playing);
+    }
+
+    #[test]
+    fn pause_never_overrides_a_stopped_animation() {
+        assert_eq!(set_paused(PlayState::Playing, true), PlayState::Paused);
+        assert_eq!(set_paused(PlayState::Paused, false), PlayState::Playing);
+        // Пауза вне анимации невозможна: она не должна её включить
+        assert_eq!(set_paused(PlayState::Off, true), PlayState::Off);
+        assert_eq!(set_paused(PlayState::Off, false), PlayState::Off);
+    }
+
+    #[test]
+    fn space_toggles_playback_and_wakes_a_stopped_animation() {
+        assert_eq!(toggle_playback(PlayState::Playing), PlayState::Paused);
+        assert_eq!(toggle_playback(PlayState::Paused), PlayState::Playing);
+        assert_eq!(toggle_playback(PlayState::Off), PlayState::Playing);
+    }
+
+    #[test]
+    fn playback_checkboxes_mirror_the_state() {
+        for (playback, animation, paused) in [
+            (PlayState::Playing, true, false),
+            (PlayState::Paused, true, true),
+            (PlayState::Off, false, false),
+        ] {
+            let mut viewer = viewer([false; 4]);
+            viewer.playback = playback;
+            assert_eq!(
+                (
+                    playback_checked(&viewer, PlaybackKind::Animation),
+                    playback_checked(&viewer, PlaybackKind::Paused),
+                ),
+                (animation, paused),
+                "{playback:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_playback_matches_its_checkboxes() {
+        // Совпадает с `Checked` у чекбоксов Animation и Paused в panel()
+        let viewer = viewer(DEFAULT_OVERLAYS);
+        assert_eq!(viewer.playback, PlayState::Playing);
+        assert!(playback_checked(&viewer, PlaybackKind::Animation));
+        assert!(!playback_checked(&viewer, PlaybackKind::Paused));
     }
 
     #[test]
