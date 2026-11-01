@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use kn_game::{Piece, Scene};
+use kn_game::{Piece, Scene, TextureId};
 
 use crate::animation::{Animator, Frame, Sequence};
 use crate::textures::{TextureCache, TextureEntry};
@@ -159,26 +159,45 @@ pub fn clear_scene(commands: &mut Commands, root: Entity) {
     commands.entity(root).despawn();
 }
 
+/// Что кусок может показать: базовая картинка с нулевым смещением и каждый кадр
+/// анимации с её смещением от угла куска.
+///
+/// Отдельно от [`scene_bounds`], чтобы список кадров можно было проверить без
+/// кэша текстур: ключ `TextureId` для `kn-io` непрозрачен.
+fn piece_frames(piece: &Piece) -> impl Iterator<Item = (Option<TextureId>, i32, i32)> {
+    std::iter::once((piece.texture, 0, 0)).chain(
+        piece
+            .animation
+            .iter()
+            .flat_map(|animation| animation.frames.iter())
+            .map(|frame| (frame.texture, frame.dx, frame.dy)),
+    )
+}
+
 /// Мировые границы спрайтов сцены: (минимум, максимум) по x и y.
 ///
 /// Номинальный размер карты (`kn_game::Game::map_size`) — это вся сетка 80×160,
 /// а нарисовано бывает только её часть, поэтому камеру и её ограничения
-/// считают по фактическому содержимому. Куски без загруженной текстуры
-/// пропускаются, как в [spawn_scene].
+/// считают по фактическому содержимому. Берутся и кадры анимаций: они могут быть
+/// больше базового кадра и сдвинуты от его угла, и иначе крупный огонь у края
+/// карты оказался бы за границами, которые подобрать `frame_scene`. Куски без
+/// загруженной текстуры пропускаются, как в [spawn_scene].
 pub fn scene_bounds(scene: &Scene, cache: &TextureCache) -> Option<(Vec2, Vec2)> {
     let mut min = Vec2::splat(f32::MAX);
     let mut max = Vec2::splat(f32::MIN);
     let mut any = false;
     for piece in &scene.pieces {
-        let Some(entry) = piece.texture.as_ref().and_then(|id| cache.get(id)) else {
-            continue;
-        };
-        let size = piece_size(piece, entry.size);
-        let left = piece.x as f32;
-        let top = piece.y as f32;
-        min = min.min(Vec2::new(left, -(top + size.y)));
-        max = max.max(Vec2::new(left + size.x, -top));
-        any = true;
+        for (texture, dx, dy) in piece_frames(piece) {
+            let Some(entry) = texture.as_ref().and_then(|id| cache.get(id)) else {
+                continue;
+            };
+            let size = piece_size(piece, entry.size);
+            let left = (piece.x + dx) as f32;
+            let top = (piece.y + dy) as f32;
+            min = min.min(Vec2::new(left, -(top + size.y)));
+            max = max.max(Vec2::new(left + size.x, -top));
+            any = true;
+        }
     }
     any.then_some((min, max))
 }
@@ -252,6 +271,41 @@ mod tests {
         let frame = animation_frame(&model_frame(0, 0, 1), Some(&entry));
         assert_eq!(frame.size, Vec2::new(114.0, 64.0));
         assert!(frame.image.is_some());
+    }
+
+    #[test]
+    fn bounds_walk_every_animation_frame() {
+        let piece = Piece {
+            texture: None,
+            x: 10,
+            y: 20,
+            w: None,
+            h: None,
+            animation: Some(kn_game::Animation {
+                base: 0,
+                frames: vec![
+                    kn_game::AnimationFrame {
+                        texture: None,
+                        dx: 0,
+                        dy: 0,
+                        ticks: 1,
+                    },
+                    kn_game::AnimationFrame {
+                        texture: None,
+                        dx: -4,
+                        dy: 7,
+                        ticks: 1,
+                    },
+                ],
+            }),
+        };
+        // Границы считают по базовому кадру и по каждому кадру анимации:
+        // крупный огонь больше своего базового кадра, и без этого он ушёл бы за
+        // границы, которые подбирает frame_scene
+        assert_eq!(
+            piece_frames(&piece).collect::<Vec<_>>(),
+            [(None, 0, 0), (None, 0, 0), (None, -4, 7)]
+        );
     }
 
     #[test]

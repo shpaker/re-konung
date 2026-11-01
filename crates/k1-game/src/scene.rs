@@ -78,6 +78,20 @@ fn pad_frames(tracks: &mut [(LayerKey, Vec<LayerFrame>)], index: usize) {
     }
 }
 
+/// Номера кадров простого объекта, из которых собирается слой, и номер базового
+/// кадра внутри этого списка.
+///
+/// Анимированный объект проигрывает все `count` кадров от нуля. Статичный
+/// показывает один — тот, что записан в карте (`placed.frame`), а не первый:
+/// объект, оставленный игрой на третьем кадре, иначе рисовался бы нулевым.
+fn frame_plan(count: usize, base: usize, animated: bool) -> (Vec<usize>, usize) {
+    if animated {
+        ((0..count).collect(), base.min(count - 1))
+    } else {
+        (vec![base], 0)
+    }
+}
+
 /// Кусок, собранный из кадров одного слоя.
 struct Track {
     texture: Option<TextureKey>,
@@ -347,7 +361,7 @@ fn object_pieces(
     // расширение Tiled берут у него один кадр), поэтому берёмся только за base.
     let animated =
         objects_res::frame_duration_ms(simple).map(|ms| (ms / objects_res::TICK_MS).max(1));
-    let frames = animated.map_or(1, |_| count);
+    let (indices, base_index) = frame_plan(count, base, animated.is_some());
     let ticks = animated.unwrap_or(1);
     let picture = |index: usize| {
         let frame = &simple.frames[index];
@@ -376,10 +390,14 @@ fn object_pieces(
         })
     };
 
-    let mut group = layer_track((0..frames).map(picture).collect(), base, ticks)
-        .map(DrawPiece::track)
-        .into_iter()
-        .collect::<Vec<_>>();
+    let mut group = layer_track(
+        indices.iter().map(|&index| picture(index)).collect(),
+        base_index,
+        ticks,
+    )
+    .map(DrawPiece::track)
+    .into_iter()
+    .collect::<Vec<_>>();
     // Огни объекта — сразу поверх него: все кадры анимации своего вида, по тике
     // на кадр. У кадра огня нет своего смещения, угол задаёт точка огня.
     for flame in &simple.flames {
@@ -400,7 +418,11 @@ fn object_pieces(
             group.push(DrawPiece::track(track));
         }
     }
-    if let Some(track) = layer_track((0..frames).map(shadow).collect(), base, ticks) {
+    if let Some(track) = layer_track(
+        indices.iter().map(|&index| shadow(index)).collect(),
+        base_index,
+        ticks,
+    ) {
         shadows.push(DrawPiece::track(track));
     }
     drawn.push((key, group));
@@ -626,6 +648,26 @@ mod tests {
 
     fn picture(index: u8, x: i32, y: i32) -> LayerFrame {
         Some((key(index), x, y))
+    }
+
+    #[test]
+    fn a_static_object_shows_the_frame_from_the_map() {
+        // Кадров много, но frame_time = 0: объект не анимируется, и рисовать
+        // надо записанный в карте кадр, а не первый
+        let (indices, base) = frame_plan(8, 3, false);
+        assert_eq!(indices, [3]);
+        assert_eq!(base, 0);
+    }
+
+    #[test]
+    fn an_animated_object_plays_every_frame() {
+        let (indices, base) = frame_plan(4, 2, true);
+        assert_eq!(indices, [0, 1, 2, 3]);
+        assert_eq!(base, 2);
+        // Кадр из данных может быть за пределами frame_count
+        let (indices, base) = frame_plan(2, 7, true);
+        assert_eq!(indices, [0, 1]);
+        assert_eq!(base, 1);
     }
 
     #[test]
