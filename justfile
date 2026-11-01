@@ -31,6 +31,22 @@ cargo-lint:
     cargo fmt --manifest-path crates/Cargo.toml --all --check
     cargo clippy --manifest-path crates/Cargo.toml --all-targets -- -D warnings
 
+# Каталог установленной игры для запуска (original/k1/<издание>/game, docs/k1/editions.md);
+# переопределяется переменной окружения: GAME_DIR=original/k1/eng/game just viewer 17
+game_dir := env_var_or_default("GAME_DIR", "original/k1/rus/game")
+
+# Просмотрщик карт: just viewer [N] [source] — карта N (без N — первая), источник game|tutorial
+viewer map="" source="game":
+    cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- --game-dir {{game_dir}} --source {{source}} {{ if map == "" { "" } else { "--map " + map } }}
+
+# Headless-диагностика без окна и GPU: just check-maps [source] — все карты источника
+check-maps source="game":
+    cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- --game-dir {{game_dir}} --source {{source}} check --all
+
+# Игра: just game — заготовка re-konung на стартовой карте новой игры
+game:
+    cargo run --release --manifest-path crates/Cargo.toml -p kn-exec -- --game-dir {{game_dir}}
+
 # Расширение Tiled «konung» — в папку расширений Tiled; запущенный Tiled подхватит его сам
 [windows]
 tiled-install:

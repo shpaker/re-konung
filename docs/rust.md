@@ -64,18 +64,30 @@ Bevy 0.20; окно и GPU нужны только чтобы запустить
 ## Запуск
 
 ```bash
+just viewer 17                        # карта 17; без номера — первая карта источника
+just viewer 4 tutorial                # карта обучения (есть только в ENG)
+just check-maps [tutorial]            # то же без окна, GPU и рендерера — используют CI и агенты
+just game                             # заготовка re-konung на стартовой карте новой игры
+```
+
+Каталог игры — `original/k1/<издание>/game` (как распаковать — [k1/editions.md](k1/editions.md)); по умолчанию RUS, переопределяется переменной:
+
+```bash
+GAME_DIR=original/k1/eng/game just viewer 17
+```
+
+Рецепты — обёртка над cargo-командами, их можно расписать и вручную:
+
+```bash
 cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- \
     --game-dir original/k1/rus/game [--map N] [--source tutorial]
 
+cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- \
+    --game-dir original/k1/rus/game check --map 1
+… check --all [--format json]
+
 cargo run --release --manifest-path crates/Cargo.toml -p kn-exec -- \
     --game-dir original/k1/rus/game
-```
-
-Headless-диагностика — без окна, GPU и рендерера; её же используют CI и агенты:
-
-```bash
-… -p kn-viewer -- --game-dir original/k1/rus/game check --map 1
-… -p kn-viewer -- --game-dir original/k1/rus/game check --all [--format json]
 ```
 
 Код возврата ненулевой, если карта не собралась или её текстура не декодировалась. Оригинальные файлы только читаются.
