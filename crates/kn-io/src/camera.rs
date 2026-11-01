@@ -285,15 +285,17 @@ pub struct PendingFrame {
 /// Наводит камеру на содержимое сцены и сужает её границы до этого содержимого.
 ///
 /// Номинальный размер карты — вся сетка, а нарисована бывает только её часть,
-/// поэтому центр и границы берутся из фактических спрайтов. Само наведение
-/// откладывается в [PendingFrame]: камеру спавнят команды, и в `Startup` её ещё
-/// может не быть.
+/// поэтому центр и границы берутся из фактических спрайтов. `shown` — какие куски
+/// считать содержимым: скрытый оверлей не должен двигать камеру (см.
+/// [`crate::scene::scene_bounds`]). Само наведение откладывается в
+/// [PendingFrame]: камеру спавнят команды, и в `Startup` её ещё может не быть.
 pub fn frame_scene(
     scene: &kn_game::Scene,
     cache: &crate::textures::TextureCache,
+    shown: impl Fn(&kn_game::Piece) -> bool,
     pending: &mut PendingFrame,
 ) {
-    let Some((min, max)) = crate::scene::scene_bounds(scene, cache) else {
+    let Some((min, max)) = crate::scene::scene_bounds(scene, cache, shown) else {
         return;
     };
     pending.center = Some((min + max) / 2.0);

@@ -25,10 +25,10 @@ use bevy::{
     ui::Checked,
     ui_widgets::ValueChange,
 };
-use kn_game::{Game, MapRef, MapSource, SceneOptions, TICK_MS};
+use kn_game::{Game, MapRef, MapSource, Piece, SceneOptions, TICK_MS, group_is_shown};
 use kn_io::{
-    AnimPlugin, CameraState, Clock, GameResource, MapCameraPlugin, PendingFrame, PlayState,
-    TextureCache, clear_scene, frame_scene, spawn_scene,
+    AnimPlugin, CameraBounds, CameraState, Clock, GameResource, MapCameraPlugin, PendingFrame,
+    PlayState, SceneGroup, ScenePiece, TextureCache, clear_scene, frame_scene, spawn_scene,
 };
 use thiserror::Error;
 
@@ -129,6 +129,12 @@ impl Viewer {
         self.overlays[overlay as usize] = on;
     }
 
+    /// Включённые слои как опции сцены: по ним [`sync_groups`] выбирает, какие
+    /// группы кусков показывать.
+    ///
+    /// Это не состав сцены — карта собирается сразу со всеми кусками
+    /// ([`SceneOptions::ALL`]), иначе переключение слоя стоило бы пересборки
+    /// тысяч спрайтов.
     fn options(&self) -> SceneOptions {
         SceneOptions {
             foot: self.is_on(Overlay::Foot),
@@ -143,19 +149,14 @@ impl Viewer {
     }
 }
 
-/// Почему сцену надо перестроить.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RebuildRequest {
-    /// Выбрана другая карта: сцену собрать заново и навести на неё камеру.
-    Map,
-    /// Переключён оверлей: сцена та же карта, камера и масштаб остаются как были.
-    Overlays,
-}
-
-/// Запрос на перестройку сцены: интерфейс его оставляет, система забирает.
+/// Сцену надо собрать заново: выбрана другая карта.
+///
+/// Оверлеи флаг не взводят: карта собирается сразу со всеми кусками, а слой
+/// переключается видимостью группы ([`sync_groups`]) — иначе клик по чекбоксу
+/// сносил тысячи спрайтов ради нескольких десятков.
 #[derive(Resource, Default)]
 pub struct Rebuild {
-    pub request: Option<RebuildRequest>,
+    pub map: bool,
 }
 
 /// Корень спрайтов текущей карты.
@@ -163,10 +164,13 @@ pub struct Rebuild {
 pub struct ActiveRoot(pub Option<Entity>);
 
 /// Статистика последней построенной сцены — для панели диагностики.
+///
+/// Сколько кусков видно и сколько собрано считает [`diagnostics`] по спрайтам в
+/// мире: переключение слоя не пересобирает сцену и не оставляет здесь устаревшего
+/// числа.
 #[derive(Resource, Default)]
 pub struct Stats {
     pub map: Option<MapRef>,
-    pub pieces: usize,
     pub unique_textures: usize,
     pub cached_textures: usize,
     pub built_ms: u128,
@@ -269,9 +273,7 @@ pub fn run_viewer(cli: Cli) -> ExitCode {
         .init_resource::<TextureCache>()
         .init_resource::<ActiveRoot>()
         .init_resource::<Stats>()
-        .insert_resource(Rebuild {
-            request: Some(RebuildRequest::Map),
-        })
+        .insert_resource(Rebuild { map: true })
         .insert_resource(Viewer {
             maps: maps.clone(),
             selected,
@@ -290,6 +292,7 @@ pub fn run_viewer(cli: Cli) -> ExitCode {
                 apply_playback,
                 sync_playboxes,
                 rebuild_scene,
+                sync_groups,
                 diagnostics,
             )
                 .chain(),
@@ -392,22 +395,23 @@ fn select_map(
     };
     if viewer.selected != option.0 {
         viewer.selected = option.0;
-        rebuild.request = Some(RebuildRequest::Map);
+        rebuild.map = true;
     }
 }
 
+/// Переключатель оверлея правит только состояние: спрайты той же карты остаются
+/// на месте, а [`sync_groups`] прячет и показывает группу. Виджет подписывает
+/// [sync_checked] — иначе каждый клик присылал бы `true`.
 fn toggle_overlay(
     change: On<ValueChange<bool>>,
     toggles: Query<&OverlayToggle>,
     mut viewer: ResMut<Viewer>,
-    mut rebuild: ResMut<Rebuild>,
     mut commands: Commands,
 ) {
     let Ok(kind) = toggles.get(change.source) else {
         return;
     };
     viewer.set(kind.0, change.value);
-    rebuild.request = Some(RebuildRequest::Overlays);
     sync_checked(&mut commands, change.source, change.value);
 }
 
@@ -495,7 +499,11 @@ fn apply_playback(viewer: Res<Viewer>, mut clock: ResMut<Clock>) {
     }
 }
 
-/// Перестраивает сцену, когда интерфейс что-то переключил.
+/// Перестраивает сцену, когда выбрана другая карта.
+///
+/// Карта собирается со всеми кусками ([`SceneOptions::ALL`]): переключать слой
+/// пересборкой значит сносить тысячи спрайтов ради нескольких десятков — см.
+/// [`sync_groups`].
 #[allow(clippy::too_many_arguments)]
 fn rebuild_scene(
     mut rebuild: ResMut<Rebuild>,
@@ -508,14 +516,15 @@ fn rebuild_scene(
     mut stats: ResMut<Stats>,
     mut pending: ResMut<PendingFrame>,
 ) {
-    let Some(request) = rebuild.request.take() else {
+    if !rebuild.map {
         return;
-    };
+    }
+    rebuild.map = false;
     let Some(&map_ref) = viewer.maps.get(viewer.selected) else {
         return;
     };
     let started = Instant::now();
-    let scene = match game.0.scene(map_ref, &viewer.options()) {
+    let scene = match game.0.scene(map_ref, &SceneOptions::ALL) {
         Ok(scene) => scene,
         Err(error) => {
             *stats = failed(map_ref, cache.len(), error.to_string(), started.elapsed());
@@ -523,7 +532,7 @@ fn rebuild_scene(
         }
     };
     let ids = scene.texture_ids();
-    let (pieces, unique) = (scene.pieces.len(), ids.len());
+    let unique = ids.len();
     let animation = scene.animation_stats();
     let problems = match cache.load(&game.0, &ids, &mut images) {
         Ok(problems) => problems,
@@ -541,13 +550,11 @@ fn rebuild_scene(
     let root = spawn_scene(&mut commands, &scene, &cache);
     active.0 = Some(root);
     // Кадр и масштаб сбрасываются только на новой карте: переключение оверлея
-    // оставляет камеру там, где её оставил пользователь
-    if request == RebuildRequest::Map {
-        frame_scene(&scene, &cache, &mut pending);
-    }
+    // оставляет камеру там, где её оставил пользователь. Границы берутся по
+    // видимым группам, иначе выключенный слой раздвигал бы их навсегда
+    frame_scene(&scene, &cache, shown(&viewer.options()), &mut pending);
     *stats = Stats {
         map: Some(map_ref),
-        pieces,
         unique_textures: unique,
         cached_textures: cache.len(),
         built_ms: started.elapsed().as_millis(),
@@ -558,10 +565,69 @@ fn rebuild_scene(
     };
 }
 
+/// Видимость куска по включённым слоям: границы сцены считают только по тому,
+/// что действительно на экране.
+fn shown(options: &SceneOptions) -> impl Fn(&Piece) -> bool + '_ {
+    move |piece| group_is_shown(piece.group, options)
+}
+
+/// Переносит переключатели слоёв в видимость групп кусков.
+///
+/// Узел группы — единственный, чего касается переключение: дети наследуют её
+/// видимость ([`kn_io::SceneGroup`]), поэтому кадр не обходится в тысячи
+/// despawn/spawn. Включённая группа получает [`Visibility::Inherited`], а не
+/// `Visible`: `Visible` перебивает наследование от [`kn_io::MapRoot`], и карту,
+/// спрятанную целиком, было бы видно. Система идёт сразу за [`rebuild_scene`] и
+/// успевает спрятать свежие группы до извлечения кадра.
+///
+/// Смена видимости пересчитывает и границы камеры: слой может выходить за
+/// содержимое карты (ромбы проходимости идут по всей сетке), и иначе включённый
+/// оверлей оказался бы там, куда камера не пускает. Положение и масштаб при этом
+/// не трогаются — меняется только рамка, а `clamp_to_bounds` сам вернёт камеру,
+/// если она вылезла за сузившуюся рамку.
+fn sync_groups(
+    viewer: Res<Viewer>,
+    mut groups: Query<(&SceneGroup, &mut Visibility)>,
+    mut bounds: ResMut<CameraBounds>,
+) {
+    let options = viewer.options();
+    let mut changed = false;
+    for (group, mut visibility) in &mut groups {
+        let target = if group_is_shown(group.group, &options) {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *visibility != target {
+            *visibility = target;
+            changed = true;
+        }
+    }
+    if !changed {
+        return;
+    }
+    let mut shown: Option<(Vec2, Vec2)> = None;
+    for (group, visibility) in &groups {
+        if *visibility == Visibility::Hidden {
+            continue;
+        }
+        let Some((min, max)) = group.bounds else {
+            continue;
+        };
+        shown = Some(match shown {
+            Some((lo, hi)) => (lo.min(min), hi.max(max)),
+            None => (min, max),
+        });
+    }
+    if let Some((min, max)) = shown {
+        bounds.min = min;
+        bounds.max = max;
+    }
+}
+
 fn failed(map: MapRef, cached: usize, error: String, elapsed: Duration) -> Stats {
     Stats {
         map: Some(map),
-        pieces: 0,
         unique_textures: 0,
         cached_textures: cached,
         built_ms: elapsed.as_millis(),
@@ -581,12 +647,25 @@ fn playback_label(playback: PlayState) -> &'static str {
     }
 }
 
+/// Сколько спрайтов видно и сколько собрано.
+///
+/// `InheritedVisibility` пишет Bevy, и в неё уже входит и скрытая группа, и кадр
+/// анимации без картинки — счёт по детям групп завышал бы первое. Это линейный
+/// обход, а не сумма по девяти узлам: он на три порядка дешевле переключения,
+/// которое за ним следует (замеры — «Цена переключения слоёв» в docs/rust.md).
+fn piece_counts(pieces: &Query<&InheritedVisibility, With<ScenePiece>>) -> (usize, usize) {
+    pieces.iter().fold((0, 0), |(shown, total), visibility| {
+        (shown + usize::from(visibility.get()), total + 1)
+    })
+}
+
 fn diagnostics(
     stats: Res<Stats>,
     viewer: Res<Viewer>,
     clock: Res<Clock>,
     zoom: Res<CameraState>,
     frames: Res<DiagnosticsStore>,
+    pieces: Query<&InheritedVisibility, With<ScenePiece>>,
     mut text: Single<&mut Text, With<Diagnostics>>,
 ) {
     let fps = frames
@@ -596,6 +675,12 @@ fn diagnostics(
     let next = match (&stats.map, &stats.error) {
         (_, Some(error)) => format!("error: {error}"),
         (Some(map), None) => {
+            let (shown, built) = piece_counts(&pieces);
+            let pieces = if shown == built {
+                format!("{built} pieces")
+            } else {
+                format!("{shown}/{built} pieces")
+            };
             let problems = if stats.problems.is_empty() {
                 String::new()
             } else {
@@ -614,13 +699,12 @@ fn diagnostics(
                 )
             };
             format!(
-                "{} {} · {} pieces · {} textures · {} ms{problems}\nzoom ×{} · {} fps{playback}",
+                "{} {} · {pieces} · {} textures · {} ms{problems}\nzoom ×{} · {} fps{playback}",
                 match map.source {
                     MapSource::Game => "map",
                     MapSource::Tutorial => "tutorial",
                 },
                 map.number,
-                stats.pieces,
                 stats.unique_textures,
                 stats.built_ms,
                 zoom.scale(),
@@ -693,6 +777,7 @@ pub fn check(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kn_game::PieceGroup;
 
     #[test]
     fn labels_show_source_and_number() {
@@ -807,15 +892,150 @@ mod tests {
         assert!(!playback_checked(&viewer, PlaybackKind::Paused));
     }
 
+    /// Узлы групп и их видимость после [`sync_groups`] при этих переключателях.
+    ///
+    /// Узлы спавнятся руками с `Inherited`, как их спавнит `spawn_scene`: важно,
+    /// что система делает со скрытым слоем, а не то, сколько спрайтов под узлом.
+    fn group_visibility(overlays: [bool; 4]) -> Vec<(PieceGroup, Visibility)> {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(viewer(overlays))
+            .init_resource::<CameraBounds>()
+            .add_systems(Update, sync_groups);
+        let nodes: Vec<(PieceGroup, Entity)> = PieceGroup::ALL
+            .iter()
+            .map(|&group| {
+                (
+                    group,
+                    app.world_mut()
+                        .spawn((SceneGroup::new(group, None), Visibility::Inherited))
+                        .id(),
+                )
+            })
+            .collect();
+        app.update();
+        nodes
+            .iter()
+            .map(|&(group, node)| {
+                (
+                    group,
+                    *app.world()
+                        .get::<Visibility>(node)
+                        .expect("узел группы жив"),
+                )
+            })
+            .collect()
+    }
+
     #[test]
-    fn rebuild_request_is_taken_once() {
-        // Одна перестройка на один запрос: иначе сцена собиралась бы каждый кадр
-        let mut rebuild = Rebuild {
-            request: Some(RebuildRequest::Map),
-        };
-        assert_eq!(rebuild.request.take(), Some(RebuildRequest::Map));
-        assert_eq!(rebuild.request.take(), None);
-        assert_eq!(Rebuild::default().request, None);
+    fn a_switch_hides_exactly_the_groups_the_model_hides() {
+        for group in PieceGroup::ALL {
+            for index in 0..4 {
+                let mut overlays = [false; 4];
+                overlays[index] = true;
+                let options = SceneOptions {
+                    foot: index == 0,
+                    lights: index == 1,
+                    markers: index == 2,
+                    characters: index == 3,
+                    hero: None,
+                };
+                let visible = group_visibility(overlays)
+                    .into_iter()
+                    .find(|(g, _)| *g == group)
+                    .expect("группа под своим узлом")
+                    .1
+                    == Visibility::Inherited;
+                assert_eq!(
+                    visible,
+                    group_is_shown(group, &options),
+                    "{group:?} при переключателе {index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_shown_group_follows_the_map_root_instead_of_overriding_it() {
+        // Включённая группа — `Inherited`, иначе она перебивает наследование и
+        // карту, спрятанную целиком на `MapRoot`, было бы видно
+        let characters = group_visibility(DEFAULT_OVERLAYS)
+            .into_iter()
+            .find(|(group, _)| *group == PieceGroup::Characters)
+            .expect("персонажи включены");
+        assert_eq!(characters.1, Visibility::Inherited);
+    }
+
+    #[test]
+    fn a_layer_outside_the_map_widens_the_camera_bounds() {
+        let terrain = (Vec2::new(0.0, -200.0), Vec2::new(1000.0, 0.0));
+        // Ромбы проходимости идут по всей сетке и дальше тайлов карты — с обеих
+        // сторон, чтобы рамка с ними сравнивалась целиком
+        let foot = (Vec2::new(-50.0, -260.0), Vec2::new(1050.0, 20.0));
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(viewer([false; 4]))
+            .init_resource::<CameraBounds>()
+            .add_systems(Update, sync_groups);
+        let map_node = app
+            .world_mut()
+            .spawn((
+                SceneGroup::new(PieceGroup::Terrain, Some(terrain)),
+                Visibility::Inherited,
+            ))
+            .id();
+        let walkability = app
+            .world_mut()
+            .spawn((
+                SceneGroup::new(PieceGroup::Foot, Some(foot)),
+                Visibility::Inherited,
+            ))
+            .id();
+        app.update();
+        assert_eq!(app.world().resource::<CameraBounds>().min, terrain.0);
+        assert_eq!(app.world().resource::<CameraBounds>().max, terrain.1);
+
+        // Слой включили — рамка расширилась, отступ и остальное остались своими
+        app.world_mut()
+            .resource_mut::<Viewer>()
+            .set(Overlay::Foot, true);
+        app.update();
+        let bounds = *app.world().resource::<CameraBounds>();
+        assert_eq!(bounds.min, foot.0, "границы расширились по x и y");
+        assert_eq!(bounds.max, foot.1);
+        assert_eq!(bounds.margin, CameraBounds::default().margin);
+
+        // Слой выключили — рамка сузилась обратно: за неё камеру вернёт
+        // ограничение в PostUpdate, а не этот расчёт
+        app.world_mut()
+            .resource_mut::<Viewer>()
+            .set(Overlay::Foot, false);
+        app.update();
+        assert_eq!(app.world().resource::<CameraBounds>().min, terrain.0);
+        assert_eq!(app.world().resource::<CameraBounds>().max, terrain.1);
+        assert_eq!(
+            *app.world().get::<Visibility>(map_node).unwrap(),
+            Visibility::Inherited
+        );
+        assert_eq!(
+            *app.world().get::<Visibility>(walkability).unwrap(),
+            Visibility::Hidden
+        );
+    }
+
+    #[test]
+    fn map_groups_survive_every_switch() {
+        let all_on = group_visibility([true; 4]);
+        assert_eq!(all_on.len(), PieceGroup::ALL.len(), "узел на каждую группу");
+        assert!(
+            all_on
+                .iter()
+                .all(|(_, visibility)| *visibility == Visibility::Inherited),
+            "все слои включены"
+        );
+        // Выключенный слой не убирает узлы: карта остаётся собранной, и её можно
+        // показать обратно без пересборки
+        assert_eq!(group_visibility([false; 4]).len(), all_on.len());
     }
 
     #[test]

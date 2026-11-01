@@ -279,6 +279,11 @@ fn advance_clock(time: Res<Time>, mut clock: ResMut<Clock>) {
 /// каждый кадр помечала бы компоненты изменёнными, и рендер заново вытягивал бы
 /// всю карту. Порядок наложения (z) не трогается — он задан один раз при сборке
 /// сцены по базовому кадру.
+///
+/// Кадру с картинкой ставится [`Visibility::Inherited`], а не `Visible`: кусок
+/// карты показан ровно тогда, когда показана его группа ([`crate::scene`]), а
+/// `Visible` видимость группы ломает — включённая анимация показывала бы куски
+/// скрытого оверлея.
 fn apply_animators(
     clock: Res<Clock>,
     mut query: Query<(&mut Animator, &mut Sprite, &mut Transform, &mut Visibility)>,
@@ -296,7 +301,7 @@ fn apply_animators(
             *visibility = Visibility::Hidden;
             continue;
         };
-        *visibility = Visibility::Visible;
+        *visibility = Visibility::Inherited;
         sprite.image = image;
         let view = frame_view(animator.x, animator.y, frame);
         sprite.custom_size = Some(view.size);
@@ -530,7 +535,11 @@ mod tests {
             assert_eq!(sprite.custom_size, Some(Vec2::splat(10.0)));
             // Базовый кадр при нуле часов: центр куска 10×10 с углом (100, 200)
             assert_eq!(transform.translation, Vec3::new(105.0, -205.0, 0.0));
-            assert_eq!(world.get::<Visibility>(entity), Some(&Visibility::Visible));
+            assert_eq!(
+                world.get::<Visibility>(entity),
+                Some(&Visibility::Inherited),
+                "кусок наследует видимость своей группы"
+            );
         }
         // Два тика — третий кадр последовательности из трёх по тику
         app.world_mut().resource_mut::<Clock>().ticks = 2;
@@ -560,8 +569,8 @@ mod tests {
         app.update();
         assert_eq!(
             app.world().get::<Visibility>(entity),
-            Some(&Visibility::Visible),
-            "первый кадр показан"
+            Some(&Visibility::Inherited),
+            "первый кадр показан, когда видна его группа"
         );
         app.world_mut().resource_mut::<Clock>().ticks = 1;
         app.update();
@@ -570,12 +579,12 @@ mod tests {
             Some(&Visibility::Hidden),
             "кадра без картинки не видно"
         );
-        // Цикл вернулся к первому кадру — спрайт снова виден
+        // Цикл вернулся к первому кадру — спрайт снова наследует группу
         app.world_mut().resource_mut::<Clock>().ticks = 2;
         app.update();
         assert_eq!(
             app.world().get::<Visibility>(entity),
-            Some(&Visibility::Visible)
+            Some(&Visibility::Inherited)
         );
     }
 }

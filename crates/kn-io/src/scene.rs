@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use kn_game::{Piece, Scene, TextureId};
+use kn_game::{Piece, PieceGroup, Scene, TextureId};
 
 use crate::animation::{Animator, Frame, Sequence};
 use crate::textures::{TextureCache, TextureEntry};
@@ -27,7 +27,36 @@ pub const Z_STEP: f32 = 0.01;
 #[derive(Component, Default)]
 pub struct MapRoot;
 
+/// Узел группы кусков: `Visibility::Hidden` на нём прячет всю группу.
+///
+/// Так переключение оверлея — одна запись компонента вместо пересборки карты:
+/// порядок наложения задаёт позиция куска в [`Scene::pieces`], а не состав
+/// группы, и скрытая группа ничего в нём не меняет.
+///
+/// Показанная группа — [`Visibility::Inherited`], а не `Visible`: `Visible`
+/// перебивает наследование, и карта, спрятанная целиком на [`MapRoot`], осталась
+/// бы на экране.
+#[derive(Component, Debug)]
+pub struct SceneGroup {
+    pub group: PieceGroup,
+    /// Мировые границы спрайтов группы со всеми кадрами их анимаций. Нужны, чтобы
+    /// включённый слой не оставался за пределами, куда пускают камеру, когда их
+    /// пересчитывают без разбора карты.
+    pub bounds: Option<(Vec2, Vec2)>,
+}
+
+impl SceneGroup {
+    /// Узел группы с её границами.
+    pub fn new(group: PieceGroup, bounds: Option<(Vec2, Vec2)>) -> Self {
+        Self { group, bounds }
+    }
+}
+
 /// Спрайт одного куска сцены.
+///
+/// Сам кусок видимость не выбирает: она [`Visibility::Inherited`], а решает её
+/// узел группы ([`SceneGroup`]) — плюс [`Animator`], когда картинки текущего
+/// кадра нет.
 #[derive(Component)]
 pub struct ScenePiece;
 
@@ -103,55 +132,144 @@ pub fn piece_sequence(
         .then(|| Arc::new(Sequence::new(frames)))
 }
 
-/// Спрайты сцены новым корнем; куски без единой загруженной картинки пропускаются.
+/// Спрайты сцены новым корнем: по узлу на группу, куски без единой загруженной
+/// картинки пропускаются.
 ///
 /// Кусок с анимацией получает [`Animator`]: часы у сцены одни, поэтому слои
 /// одного объекта или персонажа идут в такт, а базовый кадр (кадр из данных)
 /// показан при нуле часов — пока анимация не включена, картина совпадает со
 /// статичным рендером.
+///
+/// Видимость куска — `Inherited`, то есть видимость его узла: переключить
+/// оверлей значит скрыть группу, а не пересобрать карту. Порядок наложения при
+/// этом не меняется, потому что z даёт номер куска в [`Scene::pieces`], а не
+/// соседство в дереве: куски одной группы идут вперемежку с чужими (персонажи с
+/// объектами), и каждый остаётся на своём месте.
 pub fn spawn_scene(commands: &mut Commands, scene: &Scene, cache: &TextureCache) -> Entity {
     let root = commands
         .spawn((MapRoot, Transform::IDENTITY, Visibility::Visible))
         .id();
-    let mut children = Vec::with_capacity(scene.pieces.len());
-    for (order, piece) in scene.pieces.iter().enumerate() {
-        let base = piece.texture.as_ref().and_then(|id| cache.get(id));
-        let sequence = piece
-            .animation
-            .as_ref()
-            .and_then(|animation| piece_sequence(animation, cache));
-        if base.is_none() && sequence.is_none() {
+    let mut nodes = Vec::with_capacity(PieceGroup::ALL.len());
+    for (group, orders) in group_orders(scene) {
+        let mut children = Vec::new();
+        let mut bounds = None;
+        for order in orders {
+            let piece = &scene.pieces[order];
+            let base = piece.texture.as_ref().and_then(|id| cache.get(id));
+            let sequence = piece
+                .animation
+                .as_ref()
+                .and_then(|animation| piece_sequence(animation, cache));
+            if base.is_none() && sequence.is_none() {
+                continue;
+            }
+            let size = base.map_or(UVec2::ZERO, |entry| entry.size);
+            let mut entity = commands.spawn((
+                ScenePiece,
+                Sprite {
+                    image: base.map_or_else(Handle::default, |entry| entry.handle.clone()),
+                    custom_size: Some(piece_size(piece, size)),
+                    ..Default::default()
+                },
+                piece_visibility(base),
+                piece_transform(piece.x, piece.y, piece.w, piece.h, size, order),
+            ));
+            if let (Some(sequence), Some(animation)) = (sequence, piece.animation.as_ref()) {
+                entity.insert(Animator::with_base(
+                    sequence,
+                    piece.x,
+                    piece.y,
+                    animation.base,
+                ));
+            }
+            children.push(entity.id());
+            bounds = merge(bounds, piece_bounds(piece, cache));
+        }
+        if children.is_empty() {
+            // Пустой узел группы только множил бы обход иерархии
             continue;
         }
-        let size = base.map_or(UVec2::ZERO, |entry| entry.size);
-        let mut entity = commands.spawn((
-            ScenePiece,
-            Sprite {
-                image: base.map_or_else(Handle::default, |entry| entry.handle.clone()),
-                custom_size: Some(piece_size(piece, size)),
-                ..Default::default()
-            },
-            // Куску, у которого в базовом кадре картинки нет, показывать нечего
-            // до его кадра анимации
-            if base.is_some() {
-                Visibility::Visible
-            } else {
-                Visibility::Hidden
-            },
-            piece_transform(piece.x, piece.y, piece.w, piece.h, size, order),
-        ));
-        if let (Some(sequence), Some(animation)) = (sequence, piece.animation.as_ref()) {
-            entity.insert(Animator::with_base(
-                sequence,
-                piece.x,
-                piece.y,
-                animation.base,
-            ));
-        }
-        children.push(entity.id());
+        let node = commands
+            .spawn((
+                SceneGroup::new(group, bounds),
+                Transform::IDENTITY,
+                Visibility::Inherited,
+            ))
+            .id();
+        commands.entity(node).add_children(&children);
+        nodes.push(node);
     }
-    commands.entity(root).add_children(&children);
+    commands.entity(root).add_children(&nodes);
     root
+}
+
+/// Границы одного куска: базовый кадр и все кадры его анимации, которые собрались.
+///
+/// Берутся все кадры, а не показанный сейчас: спрайт анимации меняет размер и
+/// угол, и иначе крупный огонь у края карты оказался бы за границами, которые
+/// подбирает `frame_scene`, а включённый слой — недостижимым для камеры.
+/// `None` — картинок куска нет ни в одном кадре, спрайта не будет.
+fn piece_bounds(piece: &Piece, cache: &TextureCache) -> Option<(Vec2, Vec2)> {
+    let mut bounds: Option<(Vec2, Vec2)> = None;
+    for (texture, dx, dy) in piece_frames(piece) {
+        let Some(entry) = texture.as_ref().and_then(|id| cache.get(id)) else {
+            continue;
+        };
+        let size = piece_size(piece, entry.size);
+        let left = (piece.x + dx) as f32;
+        let top = (piece.y + dy) as f32;
+        bounds = merge(
+            bounds,
+            Some((
+                Vec2::new(left, -(top + size.y)),
+                Vec2::new(left + size.x, -top),
+            )),
+        );
+    }
+    bounds
+}
+
+/// Прямоугольник, покрывающий оба переданных.
+fn merge(a: Option<(Vec2, Vec2)>, b: Option<(Vec2, Vec2)>) -> Option<(Vec2, Vec2)> {
+    match (a, b) {
+        (Some((a_min, a_max)), Some((b_min, b_max))) => Some((a_min.min(b_min), a_max.max(b_max))),
+        (bounds, other) => bounds.or(other),
+    }
+}
+
+/// Куски каждой группы: сама группа и номера её кусков в списке отрисовки.
+///
+/// Номера общие, а не внутригрупповые: z куска считает [`piece_transform`] по
+/// позиции в [`Scene::pieces`], и разнос по узлам не должен переставлять куски,
+/// идущие вперемежку с чужими. Групп без кусков в списке нет, порядок — по
+/// [`PieceGroup::ALL`].
+fn group_orders(scene: &Scene) -> Vec<(PieceGroup, Vec<usize>)> {
+    PieceGroup::ALL
+        .iter()
+        .filter_map(|group| {
+            let orders = scene
+                .pieces
+                .iter()
+                .enumerate()
+                .filter(|(_, piece)| piece.group == *group)
+                .map(|(order, _)| order)
+                .collect::<Vec<_>>();
+            (!orders.is_empty()).then_some((*group, orders))
+        })
+        .collect()
+}
+
+/// Видимость спрайта куска: есть картинка базового кадра — наследовать узел
+/// группы, нет — быть скрытым до своего кадра анимации.
+///
+/// `Visible` здесь ставить нельзя: он перебивает наследование, и включённая
+/// анимация показывала бы куски скрытого оверлея.
+fn piece_visibility(base: Option<&TextureEntry>) -> Visibility {
+    if base.is_some() {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    }
 }
 
 /// Убирает спрайты карты вместе с корнем (потомки — рекурсивно).
@@ -178,28 +296,25 @@ fn piece_frames(piece: &Piece) -> impl Iterator<Item = (Option<TextureId>, i32, 
 ///
 /// Номинальный размер карты (`kn_game::Game::map_size`) — это вся сетка 80×160,
 /// а нарисовано бывает только её часть, поэтому камеру и её ограничения
-/// считают по фактическому содержимому. Берутся и кадры анимаций: они могут быть
-/// больше базового кадра и сдвинуты от его угла, и иначе крупный огонь у края
-/// карты оказался бы за границами, которые подобрать `frame_scene`. Куски без
-/// загруженной текстуры пропускаются, как в [spawn_scene].
-pub fn scene_bounds(scene: &Scene, cache: &TextureCache) -> Option<(Vec2, Vec2)> {
-    let mut min = Vec2::splat(f32::MAX);
-    let mut max = Vec2::splat(f32::MIN);
-    let mut any = false;
-    for piece in &scene.pieces {
-        for (texture, dx, dy) in piece_frames(piece) {
-            let Some(entry) = texture.as_ref().and_then(|id| cache.get(id)) else {
-                continue;
-            };
-            let size = piece_size(piece, entry.size);
-            let left = (piece.x + dx) as f32;
-            let top = (piece.y + dy) as f32;
-            min = min.min(Vec2::new(left, -(top + size.y)));
-            max = max.max(Vec2::new(left + size.x, -top));
-            any = true;
-        }
-    }
-    any.then_some((min, max))
+/// считают по фактическому содержимому. Куски без загруженной текстуры
+/// пропускаются, как в [spawn_scene].
+///
+/// `shown` — какие куски сейчас видно: карта собирается целиком со всеми
+/// оверлеями, а наводить камеру на спрятанные под [`SceneGroup`] ромбы
+/// проходимости или маски света незачем. Как именно группа оказывается видимой,
+/// решает вызывающий: `kn-io` про оверлеи ничего не знает.
+pub fn scene_bounds(
+    scene: &Scene,
+    cache: &TextureCache,
+    shown: impl Fn(&Piece) -> bool,
+) -> Option<(Vec2, Vec2)> {
+    scene
+        .pieces
+        .iter()
+        .filter(|piece| shown(piece))
+        .fold(None, |bounds, piece| {
+            merge(bounds, piece_bounds(piece, cache))
+        })
 }
 
 #[cfg(test)]
@@ -298,6 +413,7 @@ mod tests {
                     },
                 ],
             }),
+            group: PieceGroup::Objects,
         };
         // Границы считают по базовому кадру и по каждому кадру анимации:
         // крупный огонь больше своего базового кадра, и без этого он ушёл бы за
@@ -306,6 +422,55 @@ mod tests {
             piece_frames(&piece).collect::<Vec<_>>(),
             [(None, 0, 0), (None, 0, 0), (None, -4, 7)]
         );
+    }
+
+    fn group_piece(group: PieceGroup) -> Piece {
+        Piece {
+            texture: None,
+            x: 0,
+            y: 0,
+            w: None,
+            h: None,
+            animation: None,
+            group,
+        }
+    }
+
+    #[test]
+    fn interleaved_pieces_keep_their_draw_numbers() {
+        // Куски одной группы идут вперемежку с чужими (персонажи между
+        // объектами), и узел группы обязан сохранить общие номера: по ним
+        // считается z, и перестановка уронила бы огонь под дерево
+        let scene = Scene {
+            pieces: vec![
+                group_piece(PieceGroup::Terrain),
+                group_piece(PieceGroup::Objects),
+                group_piece(PieceGroup::Characters),
+                group_piece(PieceGroup::Objects),
+                group_piece(PieceGroup::Markers),
+            ],
+        };
+        assert_eq!(
+            group_orders(&scene),
+            vec![
+                (PieceGroup::Terrain, vec![0]),
+                (PieceGroup::Objects, vec![1, 3]),
+                (PieceGroup::Characters, vec![2]),
+                (PieceGroup::Markers, vec![4]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_loaded_base_inherits_the_group_visibility() {
+        // Кусок с картинкой не становится `Visible`: видимость выбирает узел его
+        // группы, а `Visible` перебивает наследование
+        let entry = TextureEntry {
+            handle: Handle::default(),
+            size: UVec2::new(8, 8),
+        };
+        assert_eq!(piece_visibility(Some(&entry)), Visibility::Inherited);
+        assert_eq!(piece_visibility(None), Visibility::Hidden);
     }
 
     #[test]
