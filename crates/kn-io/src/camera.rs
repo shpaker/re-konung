@@ -92,6 +92,15 @@ impl ZoomScroll {
         self.accum -= steps;
         steps as i32
     }
+
+    /// Забывает накопленное целиком.
+    ///
+    /// Нужно, когда курсор над интерфейсом: прокрутка, случившаяся над
+    /// панелью, не должна позже доехать до карты, а `take` оставил бы её ждать
+    /// следующего кадра.
+    pub fn clear(&mut self) {
+        self.accum = 0.0;
+    }
 }
 
 /// Текущая ступень масштаба.
@@ -225,19 +234,26 @@ fn drag_pan(
 /// Прокрутка над интерфейсом карту не масштабирует: иначе колесо, наведённое
 /// на список карт, ещё и меняло бы масштаб сцены.
 ///
-/// Очередь забирается в любом случае: прокрутка, случившаяся над панелью, не
-/// должна позже «прилететь» на карту, когда курсор уберут с виджета.
+/// Над интерфейсом очередь не ждёт своей очереди, а сгорает целиком: три
+/// ступени, накрученные над панелью, не должны доехать до карты в следующем
+/// кадре, когда курсор уберут с виджета. События при этом прочитаны всегда —
+/// иначе они копились бы до следующей прокрутки над картой.
 fn wheel_zoom(
     mut wheel: MessageReader<MouseWheel>,
     mut state: ResMut<CameraState>,
     mut scroll: Local<ZoomScroll>,
     over_ui: Query<&Hovered, With<Node>>,
 ) {
+    let over_ui = pointer_over_ui(over_ui.iter().map(|hovered| hovered.0));
     for event in wheel.read() {
         scroll.push(event.unit, event.y);
     }
+    if over_ui {
+        scroll.clear();
+        return;
+    }
     let steps = scroll.take();
-    if steps != 0 && !pointer_over_ui(over_ui.iter().map(|hovered| hovered.0)) {
+    if steps != 0 {
         state.step(steps);
     }
 }
@@ -479,6 +495,26 @@ mod tests {
         // Незакрытый порог в одну сторону гасится прокруткой в другую
         scroll.push(MouseScrollUnit::Line, 0.5);
         scroll.push(MouseScrollUnit::Line, -0.5);
+        assert_eq!(scroll.take(), 0);
+    }
+
+    #[test]
+    fn scrolling_over_the_interface_does_not_reach_the_map_later() {
+        // Сценарий из ревью: шесть ступеней над панелью, потом курсор уходит на
+        // карту. take() вернул бы три из них — поэтому над интерфейсом очередь
+        // сгорает целиком
+        let mut scroll = ZoomScroll::default();
+        for _ in 0..6 {
+            scroll.push(MouseScrollUnit::Line, 1.0);
+        }
+        scroll.clear();
+        assert_eq!(scroll.take(), 0);
+
+        // Дробный остаток сгорает так же: половина ступени над панелью не должна
+        // сложиться с следующим жестом, уже над картой
+        scroll.push(MouseScrollUnit::Line, 0.5);
+        scroll.clear();
+        scroll.push(MouseScrollUnit::Line, 0.5);
         assert_eq!(scroll.take(), 0);
     }
 }
