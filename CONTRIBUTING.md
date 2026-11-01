@@ -6,13 +6,19 @@
 
 Имя ветки — короткое, по смыслу: `feat/k1-maps`, `fix/rle-shadow`, `docs/sources`.
 
+Мерж в `main` — только merge-коммитом: squash и rebase в репозитории выключены. Заголовком мерж-коммита
+GitHub пишет заголовок PR с его номером — `feat: parse k1 map files (#29)`, тело остаётся пустым.
+Коммиты внутри ветки в историю `main` не попадают отдельно, поэтому тип, из которого считается релиз,
+надо ставить в заголовке PR ([docs/releases.md](docs/releases.md)).
+
 ## Коммиты
 
 [Conventional Commits](https://www.conventionalcommits.org/) на английском, от лица автора: `feat: ...`, `fix: ...`, `docs: ...`.
 
 ## Описание PR
 
-Заголовок — на английском, в формате Conventional Commits: `feat: parse k1 map files`.
+Заголовок — на английском, в формате Conventional Commits: `feat: parse k1 map files`. Он же станет
+заголовком мерж-коммита в `main` и пунктом релиза.
 
 Описание — на русском. Все разделы обязательны:
 
