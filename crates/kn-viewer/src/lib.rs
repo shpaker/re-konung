@@ -284,7 +284,14 @@ pub fn run_viewer(cli: Cli) -> ExitCode {
         })
         .add_systems(
             Update,
-            (playback_hotkeys, apply_playback, rebuild_scene, diagnostics).chain(),
+            (
+                playback_hotkeys,
+                apply_playback,
+                sync_playboxes,
+                rebuild_scene,
+                diagnostics,
+            )
+                .chain(),
         )
         .run();
     ExitCode::SUCCESS
@@ -411,12 +418,13 @@ fn sync_checked(commands: &mut Commands, widget: Entity, checked: bool) {
 }
 
 /// Переключатели воспроизведения правят только состояние: сцена той же карты не
-/// перестраивается, меняются лишь часы анимации.
+/// перестраивается, меняются лишь часы анимации. Виджет подписывает
+/// [sync_playboxes] — иначе клик по `Paused` при выключенной анимации оставил бы
+/// чекбокс отмеченным, а `Space` не отразился бы на панели вовсе.
 fn change_playback(
     change: On<ValueChange<bool>>,
     toggles: Query<&PlaybackToggle>,
     mut viewer: ResMut<Viewer>,
-    mut commands: Commands,
 ) {
     let Ok(kind) = toggles.get(change.source) else {
         return;
@@ -425,20 +433,32 @@ fn change_playback(
         PlaybackKind::Animation => set_animation(change.value),
         PlaybackKind::Paused => set_paused(viewer.playback, change.value),
     };
-    // Значение виджета берётся из состояния, а не из события: пауза вне
-    // анимации невозможна, и чекбокс должен остаться неотмеченным
-    sync_checked(
-        &mut commands,
-        change.source,
-        playback_checked(&viewer, kind.0),
-    );
 }
 
-/// Как должен выглядеть переключатель при этом состоянии.
+/// Отмечен ли переключатель при этом состоянии.
 fn playback_checked(viewer: &Viewer, kind: PlaybackKind) -> bool {
     match kind {
         PlaybackKind::Animation => viewer.playback != PlayState::Off,
         PlaybackKind::Paused => viewer.playback == PlayState::Paused,
+    }
+}
+
+/// Зеркалит состояние воспроизведения в чекбоксы.
+///
+/// `Checkbox` в Bevy сам `Checked` не пишет (см. [sync_checked]), и пишет его
+/// только обработчик клика — а состояние правят и клавиши, и второй чекбокс
+/// (пауза невозможна при выключенной анимации). Поэтому признак берётся из
+/// `Viewer`, а не из того события, которое чекбокс послал.
+fn sync_playboxes(
+    viewer: Res<Viewer>,
+    boxes: Query<(Entity, &PlaybackToggle, Has<Checked>)>,
+    mut commands: Commands,
+) {
+    for (entity, kind, checked) in &boxes {
+        let want = playback_checked(&viewer, kind.0);
+        if want != checked {
+            sync_checked(&mut commands, entity, want);
+        }
     }
 }
 
@@ -452,11 +472,13 @@ fn playback_hotkeys(
     if keys.just_pressed(KeyCode::Space) {
         viewer.playback = toggle_playback(viewer.playback);
     }
-    if keys.just_pressed(KeyCode::Period) {
-        clock.step(1);
-    }
-    if keys.just_pressed(KeyCode::Comma) {
-        clock.step(-1);
+    let steps = i64::from(keys.just_pressed(KeyCode::Period))
+        - i64::from(keys.just_pressed(KeyCode::Comma));
+    if steps != 0 {
+        // Шаг при идущем воспроизведении часы тут же увели бы кадр обратно,
+        // поэтому он ставит паузу; выключенную анимацию шаг не включает
+        viewer.playback = set_paused(viewer.playback, true);
+        clock.step(steps);
     }
 }
 
@@ -732,6 +754,15 @@ mod tests {
         // Пауза вне анимации невозможна: она не должна её включить
         assert_eq!(set_paused(PlayState::Off, true), PlayState::Off);
         assert_eq!(set_paused(PlayState::Off, false), PlayState::Off);
+    }
+
+    #[test]
+    fn a_frame_step_pauses_a_playing_animation() {
+        // Шаг при идущем воспроизведении часы тут же увели бы кадр дальше,
+        // поэтому клавиша шага сначала ставит паузу — и не будит выключенную
+        assert_eq!(set_paused(PlayState::Playing, true), PlayState::Paused);
+        assert_eq!(set_paused(PlayState::Paused, true), PlayState::Paused);
+        assert_eq!(set_paused(PlayState::Off, true), PlayState::Off);
     }
 
     #[test]
