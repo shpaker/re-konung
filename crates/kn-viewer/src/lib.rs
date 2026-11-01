@@ -20,6 +20,7 @@ use bevy::{
         theme::{ThemeBackgroundColor, UiTheme},
         tokens,
     },
+    picking::hover::Hovered,
     prelude::*,
     ui::Checked,
     ui_widgets::ValueChange,
@@ -315,6 +316,11 @@ fn panel(labels: Vec<String>, selected: usize) -> impl Scene {
             row_gap: px(6.0),
             padding: UiRect::axes(px(10.0), px(10.0)),
         }
+        // Панель блокирует ввод камеры целиком, а не только над виджетами:
+        // `Hovered` Bevy обновляет лишь у тех, у кого он уже есть, а Feathers
+        // кладёт его на свои контролы — пустые промежутки панели иначе остались
+        // бы «не над интерфейсом»
+        Hovered
         ThemeBackgroundColor(tokens::WINDOW_BG)
         Children[
             @caption("Map")

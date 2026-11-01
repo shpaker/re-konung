@@ -45,29 +45,61 @@ pub const DEFAULT_ZOOM: usize = 3;
 pub const PAN_SPEED: f32 = 900.0;
 /// Сколько «строк» прокрутки дают одну ступень масштаба: один щелчок колеса.
 pub const LINES_PER_ZOOM_STEP: f32 = 1.0;
-/// Сколько пикселей прокрутки дают одну ступень масштаба: умеренный свайп трекпада.
-pub const PIXELS_PER_ZOOM_STEP: f32 = 100.0;
+/// Сколько пикселей прокрутки дают одну ступень масштаба: короткий жест трекпада.
+///
+/// Со 100 пикселей жест трекпада отзывался не сразу: первые события не давали
+/// и ступени, и масштаб догонял прокрутку с задержкой.
+pub const PIXELS_PER_ZOOM_STEP: f32 = 60.0;
+/// Сколько ступеней масштаба отдаёт одному кадру.
+///
+/// Потолок нужен, иначе инерция жеста пролистывает весь диапазон, но считать его
+/// надо на кадр, а не на событие: колесо присылает несколько щелчков одним
+/// событием, и прежнее ограничение съедало их в одну ступень.
+pub const MAX_ZOOM_STEPS_PER_FRAME: i32 = 3;
+/// Сколько ступеней переживает ожидание своей очереди.
+///
+/// Долгий жест размазывается по кадрам, но не копит бесконечно: за этим пределом
+/// лишнее всё равно отбрасывается — как раньше, только намного позже.
+const ZOOM_ACCUM_LIMIT: f32 = 6.0;
 
 /// Накопитель прокрутки для масштаба.
 ///
-/// Одна ступень требует порога: без него свайп трекпада и инерция колеса
-/// присылают десятки событий и пролистывают весь диапазон за один жест.
+/// Одна ступень требует порога, а незакрытая доля не обнуляется: [ZoomScroll::push]
+/// копит прокрутку, [ZoomScroll::take] отдаёт не больше [`MAX_ZOOM_STEPS_PER_FRAME`]
+/// на кадр, и остаток переходит в следующий кадр.
 #[derive(Debug, Default)]
 pub struct ZoomScroll {
     accum: f32,
 }
 
 impl ZoomScroll {
-    /// Учитывает прокрутку и возвращает, на сколько ступеней изменить масштаб.
-    pub fn push(&mut self, unit: MouseScrollUnit, y: f32) -> i32 {
+    /// Учитывает очередное событие прокрутки.
+    pub fn push(&mut self, unit: MouseScrollUnit, y: f32) {
         let normalized = match unit {
             MouseScrollUnit::Line => y / LINES_PER_ZOOM_STEP,
             MouseScrollUnit::Pixel => y / PIXELS_PER_ZOOM_STEP,
         };
-        self.accum = (self.accum + normalized).clamp(-1.0, 1.0);
-        let steps = self.accum.trunc() as i32;
-        self.accum -= steps as f32;
-        steps
+        self.accum = (self.accum + normalized).clamp(-ZOOM_ACCUM_LIMIT, ZOOM_ACCUM_LIMIT);
+    }
+
+    /// Забирает ступени этого кадра: не больше потолка, остаток остаётся далее.
+    pub fn take(&mut self) -> i32 {
+        let whole = self.accum.trunc();
+        let steps = whole.clamp(
+            -(MAX_ZOOM_STEPS_PER_FRAME as f32),
+            MAX_ZOOM_STEPS_PER_FRAME as f32,
+        );
+        self.accum -= steps;
+        steps as i32
+    }
+
+    /// Забывает накопленное целиком.
+    ///
+    /// Нужно, когда курсор над интерфейсом: прокрутка, случившаяся над
+    /// панелью, не должна позже доехать до карты, а `take` оставил бы её ждать
+    /// следующего кадра.
+    pub fn clear(&mut self) {
+        self.accum = 0.0;
     }
 }
 
@@ -168,6 +200,17 @@ fn keyboard_pan(
         direction.y * PAN_SPEED * time.delta_secs() * ortho_scale(projection);
 }
 
+/// Курсор над интерфейсом.
+///
+/// Значение, а не наличие компонента: `Hovered` в Bevy — булево-компонент, и
+/// плагин ховера только обновляет его у тех, у кого он уже есть. Bevy Feathers
+/// навешивает `Hovered` на каждый свой контрол при спавне, поэтому «на UI-ноде
+/// есть `Hovered`» означает «в панели есть виджет», а не «курсор над панелью» —
+/// по такому признаку карта не двигалась и не масштабировалась вовсе.
+fn pointer_over_ui(mut hovers: impl Iterator<Item = bool>) -> bool {
+    hovers.any(|hovered| hovered)
+}
+
 /// Панорамирование перетаскиванием левой кнопкой: мир следует за курсором.
 /// Над интерфейсом не работает — иначе список карт двигал бы карту.
 fn drag_pan(
@@ -176,7 +219,9 @@ fn drag_pan(
     over_ui: Query<&Hovered, With<Node>>,
     camera: Single<(&mut Transform, &Projection), With<MapCamera>>,
 ) {
-    if !buttons.pressed(MouseButton::Left) || !over_ui.is_empty() {
+    if !buttons.pressed(MouseButton::Left)
+        || pointer_over_ui(over_ui.iter().map(|hovered| hovered.0))
+    {
         return;
     }
     let (mut transform, projection) = camera.into_inner();
@@ -188,17 +233,27 @@ fn drag_pan(
 
 /// Прокрутка над интерфейсом карту не масштабирует: иначе колесо, наведённое
 /// на список карт, ещё и меняло бы масштаб сцены.
+///
+/// Над интерфейсом очередь не ждёт своей очереди, а сгорает целиком: три
+/// ступени, накрученные над панелью, не должны доехать до карты в следующем
+/// кадре, когда курсор уберут с виджета. События при этом прочитаны всегда —
+/// иначе они копились бы до следующей прокрутки над картой.
 fn wheel_zoom(
     mut wheel: MessageReader<MouseWheel>,
     mut state: ResMut<CameraState>,
     mut scroll: Local<ZoomScroll>,
     over_ui: Query<&Hovered, With<Node>>,
 ) {
-    let mut steps = 0i32;
+    let over_ui = pointer_over_ui(over_ui.iter().map(|hovered| hovered.0));
     for event in wheel.read() {
-        steps += scroll.push(event.unit, event.y);
+        scroll.push(event.unit, event.y);
     }
-    if steps != 0 && over_ui.is_empty() {
+    if over_ui {
+        scroll.clear();
+        return;
+    }
+    let steps = scroll.take();
+    if steps != 0 {
         state.step(steps);
     }
 }
@@ -313,36 +368,99 @@ mod tests {
         assert_eq!(state.scale(), 1.0);
     }
 
+    /// События прокрутки — по одному на кадр — возвращает ступени, которые кадры
+    /// действительно получат: очередное `take` добирает то, что осталось в очереди
+    /// после последнего события, уже без новых событий.
+    fn scroll_events(events: &[(MouseScrollUnit, f32)]) -> Vec<i32> {
+        let mut scroll = ZoomScroll::default();
+        let mut frames = Vec::new();
+        for &(unit, y) in events {
+            scroll.push(unit, y);
+            frames.push(scroll.take());
+        }
+        loop {
+            let taken = scroll.take();
+            if taken == 0 {
+                break;
+            }
+            frames.push(taken);
+        }
+        frames.retain(|steps| *steps != 0);
+        frames
+    }
+
     #[test]
     fn one_wheel_notch_is_one_level() {
-        let mut scroll = ZoomScroll::default();
-        assert_eq!(scroll.push(MouseScrollUnit::Line, 1.0), 1);
-        assert_eq!(scroll.push(MouseScrollUnit::Line, -1.0), -1);
+        assert_eq!(scroll_events(&[(MouseScrollUnit::Line, 1.0)]), [1]);
+        assert_eq!(scroll_events(&[(MouseScrollUnit::Line, -1.0)]), [-1]);
     }
 
     #[test]
     fn fractional_scrolls_accumulate_to_a_level() {
-        let mut scroll = ZoomScroll::default();
         // Половинки не дают ступень, пока не наберут целое
-        assert_eq!(scroll.push(MouseScrollUnit::Line, 0.5), 0);
-        assert_eq!(scroll.push(MouseScrollUnit::Line, 0.5), 1);
+        assert_eq!(
+            scroll_events(&[(MouseScrollUnit::Line, 0.5), (MouseScrollUnit::Line, 0.5)]),
+            [1]
+        );
     }
 
     #[test]
     fn trackpad_swipe_is_bounded() {
+        // Свайп: 30 событий по 10 пикселей = 300 пикселей = пять ступеней,
+        // а не тридцать; за кадр не больше потолка, остаток доезжает следом
+        let events = vec![(MouseScrollUnit::Pixel, 10.0); 30];
+        let per_frame = scroll_events(&events);
+        assert_eq!(per_frame.iter().sum::<i32>(), 5, "свайп в 300 пикселей");
+        assert!(
+            per_frame
+                .iter()
+                .all(|steps| steps.abs() <= MAX_ZOOM_STEPS_PER_FRAME),
+            "{per_frame:?} — за кадр больше потолка"
+        );
+    }
+
+    #[test]
+    fn a_fast_scroll_spreads_over_frames_instead_of_vanishing() {
+        // Колесо на macOS присылает несколько щелчков одним событием. Прежний
+        // потолок на событии схлопывал их в одну ступень; теперь потолок на
+        // кадр, и очередное событие не отбрасывается, а ждёт своего кадра
+        assert_eq!(scroll_events(&[(MouseScrollUnit::Line, 2.0)]), [2]);
+        assert_eq!(
+            scroll_events(&[(MouseScrollUnit::Line, 3.0), (MouseScrollUnit::Line, 3.0)]),
+            [3, 3]
+        );
+    }
+
+    #[test]
+    fn unfinished_pixels_carry_to_the_next_event() {
+        // 60 пикселей на ступень: два незакрытых жеста складываются в ступень
         let mut scroll = ZoomScroll::default();
-        // Свайп: 30 событий по 10 пикселей — три ступени, а не тридцать
-        let steps: i32 = (0..30)
-            .map(|_| scroll.push(MouseScrollUnit::Pixel, 10.0))
-            .sum();
-        assert_eq!(steps, 3, "свайп в 300 пикселей");
+        scroll.push(MouseScrollUnit::Pixel, 40.0);
+        assert_eq!(scroll.take(), 0);
+        scroll.push(MouseScrollUnit::Pixel, 40.0);
+        assert_eq!(scroll.take(), 1);
+        scroll.push(MouseScrollUnit::Pixel, 40.0);
+        assert_eq!(scroll.take(), 1);
     }
 
     #[test]
     fn scroll_direction_is_kept() {
-        let mut scroll = ZoomScroll::default();
-        assert_eq!(scroll.push(MouseScrollUnit::Line, -1.0), -1);
-        assert_eq!(scroll.push(MouseScrollUnit::Pixel, -100.0), -1);
+        assert_eq!(
+            scroll_events(&[
+                (MouseScrollUnit::Line, -1.0),
+                (MouseScrollUnit::Pixel, -60.0)
+            ]),
+            [-1, -1]
+        );
+    }
+
+    #[test]
+    fn widgets_without_the_cursor_are_not_the_ui_under_it() {
+        // Feathers носит Hovered на каждом контроле, и вне курсора он false:
+        // по наличию компонента карта лишалась и перетаскивания, и колеса
+        assert!(!pointer_over_ui([false, false, false].into_iter()));
+        assert!(!pointer_over_ui(std::iter::empty()));
+        assert!(pointer_over_ui([false, true, false].into_iter()));
     }
 
     #[test]
@@ -375,7 +493,28 @@ mod tests {
     fn opposite_scrolls_cancel_out() {
         let mut scroll = ZoomScroll::default();
         // Незакрытый порог в одну сторону гасится прокруткой в другую
-        assert_eq!(scroll.push(MouseScrollUnit::Line, 0.5), 0);
-        assert_eq!(scroll.push(MouseScrollUnit::Line, -0.5), 0);
+        scroll.push(MouseScrollUnit::Line, 0.5);
+        scroll.push(MouseScrollUnit::Line, -0.5);
+        assert_eq!(scroll.take(), 0);
+    }
+
+    #[test]
+    fn scrolling_over_the_interface_does_not_reach_the_map_later() {
+        // Сценарий из ревью: шесть ступеней над панелью, потом курсор уходит на
+        // карту. take() вернул бы три из них — поэтому над интерфейсом очередь
+        // сгорает целиком
+        let mut scroll = ZoomScroll::default();
+        for _ in 0..6 {
+            scroll.push(MouseScrollUnit::Line, 1.0);
+        }
+        scroll.clear();
+        assert_eq!(scroll.take(), 0);
+
+        // Дробный остаток сгорает так же: половина ступени над панелью не должна
+        // сложиться с следующим жестом, уже над картой
+        scroll.push(MouseScrollUnit::Line, 0.5);
+        scroll.clear();
+        scroll.push(MouseScrollUnit::Line, 0.5);
+        assert_eq!(scroll.take(), 0);
     }
 }
