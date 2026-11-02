@@ -18,7 +18,7 @@ pub const COLORS_PER_PALETTE: usize = 256;
 pub const DYNAMIC_ANIMATIONS: u8 = 6;
 
 /// Walking is animation 1 of a sprite table: state 1 and state 7 (a weapon in
-/// hand) share its frame count (docs/k1/creatures.md, "Animation states 0-9").
+/// hand) share its frame count: the animation-states table of docs/k1/creatures.md.
 pub const WALK_ANIMATION: usize = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

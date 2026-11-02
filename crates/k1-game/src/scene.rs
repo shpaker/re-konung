@@ -253,9 +253,11 @@ impl DrawPiece {
     }
 }
 
-/// Ключ сортировки объектов и персонажей: нижний край картинки, вид
-/// (0 — объекты раньше персонажей), слот — как ключ в `render.py`.
-type SortKey = (i32, i32, usize);
+/// Sort key of objects and creatures: the bottom edge of the picture, the kind
+/// (0 — objects before creatures) and the slot, as in `render.py`.
+///
+/// Public because #37 sorts moving creatures among the static object stacks.
+pub type SortKey = (i32, i32, usize);
 /// Куски одного объекта или персонажа, которые сортируются и попадают в список
 /// целиком (огни объекта остаются сразу над его картинкой).
 ///
@@ -287,6 +289,126 @@ pub struct SceneInput<'a> {
     pub overlays: Overlays,
 }
 
+/// The map without creatures: what stays when a creature leaves its place.
+///
+/// [`stacks`] are unsorted — [`assemble`] and [`MapScene::ordered`] put them in
+/// order together with the poses of the creatures.
+///
+/// [`stacks`]: Self::stacks
+pub struct MapScene {
+    background: Vec<DrawPiece>,
+    /// One shadow layer under every sprite, as `shadow_layer` in render.py
+    shadows: Vec<DrawPiece>,
+    stacks: Vec<Stack>,
+    overlays: Vec<DrawPiece>,
+}
+
+impl MapScene {
+    /// The static blocks with the key each of them sorts under: what a consumer
+    /// needs to interleave moving creatures with the objects of the map (#37).
+    pub fn stacks(&self) -> &[(SortKey, Vec<DrawPiece>)] {
+        &self.stacks
+    }
+
+    /// The same order as [`assemble`], borrowed instead of rebuilt: a consumer
+    /// that keeps the map around asks for the list again after every change of a
+    /// pose, without parsing the resources or cloning a single piece.
+    ///
+    /// The order is the one rule of the list: background, then shadows (objects
+    /// first, creatures after), then every block by depth, then the overlays.
+    pub fn ordered<'a>(&'a self, poses: &'a [Pose]) -> Vec<&'a DrawPiece> {
+        let mut stacks: Vec<(SortKey, &'a Vec<DrawPiece>)> = self
+            .stacks
+            .iter()
+            .map(|(key, pieces)| (*key, pieces))
+            .collect();
+        stacks.extend(poses.iter().map(|pose| (pose.key, &pose.pieces)));
+        stacks.sort_by_key(|(key, _)| *key);
+        let poses_len: usize = poses.iter().map(Pose::len).sum();
+        let mut order = Vec::with_capacity(self.pieces_len() + poses_len);
+        order.extend(self.background.iter());
+        order.extend(self.shadows.iter());
+        order.extend(poses.iter().filter_map(|pose| pose.shadow.as_ref()));
+        order.extend(stacks.iter().flat_map(|(_, pieces)| pieces.iter()));
+        order.extend(self.overlays.iter());
+        order
+    }
+
+    /// How many pieces the map itself holds, creatures aside.
+    pub fn pieces_len(&self) -> usize {
+        self.background.len()
+            + self.shadows.len()
+            + self.overlays.len()
+            + self
+                .stacks
+                .iter()
+                .map(|(_, pieces)| pieces.len())
+                .sum::<usize>()
+    }
+}
+
+/// A creature's pose: the blocks that enter the list as one unit, where they
+/// sort, and the creature's own shadow.
+///
+/// The shadow is kept apart because the list puts it in the shared layer under
+/// every sprite, not above the creature.
+pub struct Pose {
+    pub key: SortKey,
+    pub pieces: Vec<DrawPiece>,
+    pub shadow: Option<DrawPiece>,
+}
+
+impl Pose {
+    pub fn bottom(&self) -> i32 {
+        self.key.0
+    }
+
+    /// How many pieces this pose contributes to the list, its shadow included.
+    fn len(&self) -> usize {
+        self.pieces.len() + usize::from(self.shadow.is_some())
+    }
+}
+
+/// Which pose of a creature to build: the animation state, the direction and the
+/// frame shown while the animation is not playing.
+///
+/// The recorded state and direction belong to the map as it was saved; a creature
+/// that starts to walk or turns needs another pose, and asking for one must not
+/// inherit the frame of the old animation — it indexes a sequence of a different
+/// length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoseKind {
+    pub state: u8,
+    pub direction: u8,
+    /// `None` — the frame from the record, which is what the map shows today;
+    /// `Some(index)` — an explicit frame, clamped to the animation like the
+    /// recorded one is.
+    pub frame: Option<u8>,
+}
+
+impl PoseKind {
+    /// The pose the record itself describes: its state, its direction, its frame.
+    pub fn of_record(character: &game_state::Character) -> PoseKind {
+        PoseKind {
+            state: character.state,
+            direction: character.direction,
+            frame: None,
+        }
+    }
+
+    /// The first frame of a new animation, for a creature that starts to walk or
+    /// turns around. Where the original begins a fresh animation is not confirmed
+    /// (docs/k1/creatures.md), so this is our decision, spelled out rather than
+    /// left to whatever the record happened to hold.
+    pub fn start(state: u8, direction: u8) -> PoseKind {
+        PoseKind {
+            state,
+            direction,
+            frame: Some(0),
+        }
+    }
+}
+
 /// Позиция объекта (клетка мелкой сетки) в пикселях карты (render.object_position).
 pub fn object_position(x: i16, y: i16) -> (i32, i32) {
     let (x, y) = (i32::from(x), i32::from(y));
@@ -296,14 +418,33 @@ pub fn object_position(x: i16, y: i16) -> (i32, i32) {
     )
 }
 
-/// Список отрисовки карты в порядке наложения.
+/// The draw list of a map, in stacking order.
+///
+/// Assembled from [`map_scene`] and [`creature_poses`], so the same scene is
+/// reordered when a creature moves instead of being rebuilt (#37).
 pub fn draw_list(
     input: &SceneInput<'_>,
     graph: &GraphRes<'_>,
     objects: Option<&ObjectsRes<'_>>,
     tables: &Executable,
 ) -> Result<Vec<DrawPiece>> {
-    let mut pieces = Vec::new();
+    let map = map_scene(input, graph, objects, tables)?;
+    let poses = creature_poses(input, graph, objects, tables)?;
+    Ok(assemble(map, &poses))
+}
+
+/// Everything of the map that stays when a creature leaves its place: ground,
+/// decorations, object shadows, object stacks and the debug overlays.
+///
+/// Creature pieces are not here: they arrive as [`Pose`] blocks, which is what
+/// lets the display rebuild only what moved.
+pub fn map_scene(
+    input: &SceneInput<'_>,
+    graph: &GraphRes<'_>,
+    objects: Option<&ObjectsRes<'_>>,
+    tables: &Executable,
+) -> Result<MapScene> {
+    let mut background = Vec::new();
 
     // Земля и верхний слой: номера тайлов с единицы, 0 — пусто
     for layer in [&input.map.ground, &input.map.overlay] {
@@ -311,7 +452,7 @@ pub fn draw_list(
             for (column, &value) in cells.iter().enumerate() {
                 if value != 0 {
                     let (x, y) = map::tile_position(column, row);
-                    pieces.push(DrawPiece::textured(
+                    background.push(DrawPiece::textured(
                         PieceGroup::Terrain,
                         TextureKey::Tile {
                             index: (value - 1) as usize,
@@ -327,7 +468,7 @@ pub fn draw_list(
     // Декорации: сырые (тайл вне GRAPH.RES) не нарисовать — пропускаем
     for decoration in &input.map.decorations {
         if decoration.tile >= 0 && graph.tile(decoration.tile as usize).is_some() {
-            pieces.push(DrawPiece::textured(
+            background.push(DrawPiece::textured(
                 PieceGroup::Decorations,
                 TextureKey::Tile {
                     index: decoration.tile as usize,
@@ -338,55 +479,150 @@ pub fn draw_list(
         }
     }
 
-    // Объекты и персонажи: собираем стеки с ключом сортировки и тени отдельно
     let mut shadows = Vec::new();
-    let mut drawn: Vec<Stack> = Vec::new();
+    let mut stacks: Vec<Stack> = Vec::new();
     if let Some(objects) = objects {
-        let sheets = Sheets {
+        let graphics = Graphics {
             graph,
             objects,
             tables,
         };
         for placed in &input.map.objects {
-            object_pieces(placed, &sheets, &mut shadows, &mut drawn);
-        }
-        if input.overlays.characters
-            && let (Some(entities), Some(state)) = (input.entities.as_ref(), input.state)
-        {
-            for (character, x, y) in characters::placed(entities, state) {
-                let (px, py) = game_state::character_position(x, y);
-                character_pieces(character, px, py, state, &sheets, &mut shadows, &mut drawn)?;
-            }
+            object_pieces(placed, &graphics, &mut shadows, &mut stacks);
         }
     }
 
-    // Тени — один слой под объектами (как shadow_layer в render.py)
-    pieces.extend(shadows);
-
-    // Ближе к зрителю то, что ниже на экране; сортировка устойчивая: огни
-    // объекта остаются сразу над его картинкой
-    drawn.sort_by_key(|stack| stack.0);
-    pieces.extend(drawn.into_iter().flat_map(|(_, stack)| stack));
-
+    let mut overlays = Vec::new();
     if input.overlays.lights {
-        light_pieces(input, &mut pieces);
+        light_pieces(input, &mut overlays);
     }
     if input.overlays.foot {
-        foot_pieces(input.map, &mut pieces);
+        foot_pieces(input.map, &mut overlays);
     }
     if input.overlays.markers
         && let Some(entities) = input.entities.as_ref()
     {
-        marker_pieces(entities, &mut pieces);
+        marker_pieces(entities, &mut overlays);
     }
-    Ok(pieces)
+    Ok(MapScene {
+        background,
+        shadows,
+        stacks,
+        overlays,
+    })
 }
 
-/// Графика одной карты, общая для объектов и персонажей списка отрисовки.
-struct Sheets<'a> {
+/// The poses of the creatures standing on the map, in the order of
+/// [`characters::placed`].
+///
+/// Empty when the creature layer is off or the pictures are missing: a list
+/// without creatures holds no creature shadows either
+/// ([`PieceGroup::is_shown_by`]).
+///
+/// [`characters::placed`]: k1_data::characters::placed
+pub fn creature_poses(
+    input: &SceneInput<'_>,
+    graph: &GraphRes<'_>,
+    objects: Option<&ObjectsRes<'_>>,
+    tables: &Executable,
+) -> Result<Vec<Pose>> {
+    let mut poses = Vec::new();
+    if !input.overlays.characters {
+        return Ok(poses);
+    }
+    let (Some(objects), Some(entities), Some(state)) =
+        (objects, input.entities.as_ref(), input.state)
+    else {
+        return Ok(poses);
+    };
+    let graphics = Graphics {
+        graph,
+        objects,
+        tables,
+    };
+    for (character, x, y) in characters::placed(entities, state) {
+        let (px, py) = game_state::character_position(x, y);
+        if let Some(pose) = character_pose(
+            character,
+            px,
+            py,
+            state,
+            &graphics,
+            &PoseKind::of_record(character),
+        )? {
+            poses.push(pose);
+        }
+    }
+    Ok(poses)
+}
+
+/// The whole draw list: background, shadows (objects, then creatures), every
+/// block by depth, then the overlays.
+///
+/// Closer to the viewer is what sits lower on the screen; the sort is stable, so
+/// an object keeps its flames right above its picture and an object with the same
+/// bottom edge as a creature still comes first.
+pub fn assemble(map: MapScene, poses: &[Pose]) -> Vec<DrawPiece> {
+    let MapScene {
+        background,
+        shadows,
+        stacks,
+        overlays,
+    } = map;
+    let mut pieces = background;
+    pieces.extend(shadows);
+    pieces.extend(poses.iter().filter_map(|pose| pose.shadow.clone()));
+    let mut drawn = stacks;
+    drawn.extend(poses.iter().map(|pose| (pose.key, pose.pieces.clone())));
+    drawn.sort_by_key(|stack| stack.0);
+    pieces.extend(drawn.into_iter().flat_map(|(_, stack)| stack));
+    pieces.extend(overlays);
+    pieces
+}
+
+/// The pose of a creature in an arbitrary state and direction (#36: a pose is
+/// built for any state, not only the one the file recorded).
+///
+/// [`PoseKind`] says which frame to show as the base of the new animation: the
+/// recorded one is meaningless for a sequence of a different length. The record is
+/// copied with those fields replaced, so the layers and frames are assembled by the
+/// one existing path: there is no second implementation.
+pub fn pose_in(
+    character: &game_state::Character,
+    x: i32,
+    y: i32,
+    state: &GameState,
+    graphics: &Graphics<'_>,
+    kind: &PoseKind,
+) -> Result<Option<Pose>> {
+    character_pose(character, x, y, state, graphics, kind)
+}
+
+/// The graphics of one map, shared by the objects and the creatures of the list.
+///
+/// `GRAPH.RES` and `Objects.res` are 66 megabytes, so a consumer that builds more
+/// than one pose holds one of these instead of parsing again
+/// ([`k1_data::graph_res`] is parsed by [`Resources::with_graphics`]).
+///
+/// [`Resources::with_graphics`]: crate::resources::Resources::with_graphics
+pub struct Graphics<'a> {
     graph: &'a GraphRes<'a>,
     objects: &'a ObjectsRes<'a>,
     tables: &'a Executable,
+}
+
+impl<'a> Graphics<'a> {
+    pub fn new(
+        graph: &'a GraphRes<'a>,
+        objects: &'a ObjectsRes<'a>,
+        tables: &'a Executable,
+    ) -> Graphics<'a> {
+        Graphics {
+            graph,
+            objects,
+            tables,
+        }
+    }
 }
 
 /// Кадры, которые длятся один тик: так игра меняет кадры огней (Slavik
@@ -395,11 +631,11 @@ const ONE_TICK: u32 = 1;
 
 fn object_pieces(
     placed: &MapObject,
-    sheets: &Sheets<'_>,
+    graphics: &Graphics<'_>,
     shadows: &mut Vec<DrawPiece>,
     drawn: &mut Vec<Stack>,
 ) {
-    let Some(simple) = sheets
+    let Some(simple) = graphics
         .objects
         .simple
         .get(placed.object_id as usize)
@@ -475,7 +711,10 @@ fn object_pieces(
         if flame.flame_id < 0 {
             continue;
         }
-        let Some(&(first, last)) = sheets.tables.flame_animations.get(flame.flame_id as usize)
+        let Some(&(first, last)) = graphics
+            .tables
+            .flame_animations
+            .get(flame.flame_id as usize)
         else {
             continue;
         };
@@ -499,22 +738,29 @@ fn object_pieces(
     drawn.push((key, stack));
 }
 
-#[allow(clippy::too_many_arguments)]
-fn character_pieces(
+/// The pose of one creature as [`PoseKind`] asks for it.
+///
+/// `None` when there are no frames or no bottom edge is found: such a creature is
+/// not in the list at all, as in `render.py`.
+fn character_pose(
     character: &game_state::Character,
     x: i32,
     y: i32,
     state: &GameState,
-    sheets: &Sheets<'_>,
-    shadows: &mut Vec<DrawPiece>,
-    drawn: &mut Vec<Stack>,
-) -> Result<()> {
-    let count = characters::frame_count(character, sheets.graph, sheets.objects);
+    graphics: &Graphics<'_>,
+    kind: &PoseKind,
+) -> Result<Option<Pose>> {
+    // The pose may belong to another animation than the record describes
+    let mut record = (*character).clone();
+    record.state = kind.state;
+    record.direction = kind.direction;
+    let count = characters::frame_count(&record, graphics.graph, graphics.objects);
     if count == 0 {
-        return Ok(());
+        return Ok(None);
     }
-    // Кадр из записи персонажа; вне последовательности — первый, как sequence_frame
-    let base = (character.frame as usize).min(count - 1);
+    // The frame of the record unless asked otherwise; outside the sequence the
+    // first one is taken, as sequence_frame does
+    let base = (kind.frame.unwrap_or(record.frame) as usize).min(count - 1);
     // Слои собираются по устойчивому ключу: предмет без картинки в части кадров
     // сдвинул бы позиции, и снаряжение разъехалось бы по кадрам
     let mut tracks: Vec<(LayerKey, Vec<LayerFrame>)> = Vec::new();
@@ -522,13 +768,13 @@ fn character_pieces(
     let mut bottoms: Vec<Option<i32>> = Vec::with_capacity(count);
     for index in 0..count {
         let sprite = characters::compose(
-            character,
+            &record,
             x,
             y,
             state,
-            sheets.graph,
-            sheets.objects,
-            sheets.tables,
+            graphics.graph,
+            graphics.objects,
+            graphics.tables,
             Some(index),
         )?;
         // Нет картинки тела — нет и всего спрайта (как `compose` в Python), но
@@ -583,19 +829,21 @@ fn character_pieces(
         .flatten()
         .or_else(|| bottoms.iter().find_map(|bottom| *bottom))
     else {
-        return Ok(());
+        return Ok(None);
     };
-    let mut stack = Vec::new();
+    let mut pieces = Vec::new();
     for (_, frames) in tracks {
         if let Some(track) = layer_track(frames, base, ONE_TICK) {
-            stack.push(DrawPiece::track(PieceGroup::Characters, track));
+            pieces.push(DrawPiece::track(PieceGroup::Characters, track));
         }
     }
-    if let Some(track) = layer_track(shadows_by_frame, base, ONE_TICK) {
-        shadows.push(DrawPiece::track(PieceGroup::CharacterShadows, track));
-    }
-    drawn.push(((bottom, 1, character.slot), stack));
-    Ok(())
+    let shadow = layer_track(shadows_by_frame, base, ONE_TICK)
+        .map(|track| DrawPiece::track(PieceGroup::CharacterShadows, track));
+    Ok(Some(Pose {
+        key: (bottom, 1, record.slot),
+        pieces,
+        shadow,
+    }))
 }
 
 fn light_pieces(input: &SceneInput<'_>, pieces: &mut Vec<DrawPiece>) {
