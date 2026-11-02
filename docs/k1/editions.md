@@ -53,11 +53,19 @@ just k1-unpack eng
 | `LIGHTS.N` | 40 | 40, те же |
 | `Objects.res`, `FLAMES.RES`, `LIGHTS.RES` | | те же |
 | `GRAPH.RES` | отличается от ENG одним курсором (+22 байта); на диске RUS лежит вариант ENG | |
+| `Game.0/1/2` | | byte-for-byte different, see below |
+| `SOUNDS.RES`, `GAME.RES`, `MAPS.RES`, `Sounds_.res`, `playavi.dll`, `Uninstall.exe` | | differ |
 | Интерфейс | `*R.RES` — русский | `*E.RES` — английский, `*T.RES` — третий язык (`MENU`, `INTR`, `QUEST`) |
 | Только в ENG | | туториал (`TUTORIAL.EXE`, `tutorial.4/5`, `TLIGHTS.4/5`, `TGame.1`), сеть (`LAN_KONG.EXE`, `Lanusers.dat`, `SERVER`, `Servers.cfg`), `SAVITEMS.DAT`, `KONUNG.EXE` под своим именем |
 | Только в RUS | `CLIENT.EXE`, `konung.res` (это PE-файл, похоже на переименованный `konung.exe`) | |
 
 Вывод: для карт издания равноценны. ENG полнее — в нём есть туториал и сетевая игра. RUS — оригинал 1999 года.
+
+### Differences in `Game.0/1/2`
+
+**Confirmed** over both unpacked editions: the files are one length and differ over about 10–11.5 thousand bytes, and only in `characters` (attributes, equipment) and `items`/`loot` — `groups`, `exits` and `villages` match byte for byte, so the maps, transitions and villages are the same while ENG keeps more filled item slots (1448 against 1405 in `Game.1`). Maps stay interchangeable between the editions; the content of `Game.N` is compared edition by edition.
+
+The difference reaches the picture: `just check-maps` counts differ on 14 of the 43 maps in pieces, visible pieces, textures, animations and frames, while objects, decorations, characters and errors match on all of them and the three maps without characters match entirely. Worn equipment is a layer of its own, so a check of the scene against both editions compares two separate baselines. **Confirmed** by measurement.
 
 ## Чего нет
 
