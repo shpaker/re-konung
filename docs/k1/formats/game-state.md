@@ -71,6 +71,21 @@ uv run konung k1 map original/k1/rus/game out/k1/maps -n 1 --game 0
 - `0x80`–`0x82` — жители деревень; младшие 2 бита — сторона.
 - У всех, кроме бродячих, место берётся из записи персонажа. **Подтверждено**: у всех таких персонажей место не (0, 0).
 
+Roaming is exactly `0x41`–`0x50`, so our predicate is a range test — `Group::is_roaming`
+in `crates/k1-data/src/game_state.rs`, `Group.is_roaming` in `konung/k1/game_state.py`,
+`roaming` in `tiled/konung/lib/k1.mjs`. Slavik compares `unk5 < 0x51 && !(unk5 & 0x80)`
+at `game.cpp:651`, but that loop skips the player group (`_mainMapChar`, `game.cpp:638`),
+while the respawn and growth path that has no such skip uses the range (`game.cpp:708`,
+`unk5 - 0x41 < 0x10`). Our helper carries no player special case, so it takes the range:
+kind `0x20` is placed from its record, not scattered (issue #53).
+
+**Confirmed** by measuring every state file of both editions (RUS `Game.0`–`Game.2`, ENG
+`Game.0`–`Game.2`, ENG `TGame.1`): the only kinds that occur are `0x20`, `0x41`–`0x50`,
+`0x53`, `0x80`–`0x82`, so the two forms differ on the player group alone — three groups
+per edition, no real roaming group changes classification. In all seven files every
+member of every non-roaming group, the player group included, has a position that is not
+(0, 0), so the real-file tests now assert that for the player as well.
+
 ## Персонаж (256 байт)
 
 | Смещение | Тип | Смысл | Уверенность |

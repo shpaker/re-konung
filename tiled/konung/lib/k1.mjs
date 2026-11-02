@@ -513,8 +513,8 @@ export const NEW_LOOT_ITEMS = "00".repeat(LOOT_ITEMS_SIZE);
 export const NEW_LOOT_RECORD = "00".repeat(LOOT_SIZE);
 
 export const PLAYER_GROUP = 0x20;
-const FIRST_FIXED_GROUP = 0x51;
-const VILLAGE_GROUP_BIT = 0x80;
+const FIRST_ROAMING = 0x41;
+const LAST_ROAMING = 0x50;
 const DYNAMIC_SPRITE_BIT = 0x40;
 
 function isFilled(bytes, at, size, value) {
@@ -562,7 +562,7 @@ export function parseGameState(buffer) {
             mapId: bytes[at + 0x1b],
             size: bytes[at + 0x1c],
             kind,
-            roaming: kind < FIRST_FIXED_GROUP && !(kind & VILLAGE_GROUP_BIT),
+            roaming: kind >= FIRST_ROAMING && kind <= LAST_ROAMING,
         });
     }
 

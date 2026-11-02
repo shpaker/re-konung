@@ -129,3 +129,31 @@ def test_character_position_round_trips():
         assert game_state.character_cell(*game_state.character_position(x, y)) == (x, y)
     rect = game_state.Rect(4, 150, 9, 161)
     assert game_state.rect_cells(*game_state.rect_pixels(rect)) == rect
+
+
+def _group_with_kind(kind: int) -> game_state.Group:
+    rect = game_state.Rect(0, 0, 0, 0)
+    return game_state.Group(
+        slot=0,
+        first_character=0,
+        respawn_timer=0,
+        growth_timer=0,
+        spawn=rect,
+        leash=rect,
+        max_size=0,
+        growth_limit=0,
+        target_group=0,
+        map_id=0,
+        size=0,
+        ai_state=0,
+        kind=kind,
+        unknown=0,
+    )
+
+
+def test_is_roaming_covers_only_the_roaming_kinds():
+    assert not _group_with_kind(game_state.PLAYER_GROUP).is_roaming
+    for kind in range(game_state.FIRST_ROAMING, game_state.LAST_ROAMING + 1):
+        assert _group_with_kind(kind).is_roaming, hex(kind)
+    for kind in (0x00, 0x01, 0x40, game_state.FIRST_FIXED_GROUP, 0x53, 0x80, 0x81, 0x82, 0xFF):
+        assert not _group_with_kind(kind).is_roaming, hex(kind)

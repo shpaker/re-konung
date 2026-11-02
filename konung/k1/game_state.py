@@ -75,9 +75,11 @@ GAME_STATE_SIZE = (
 # (Slavik game_item.cpp:185); название — запись 30–33 таблицы снаряжения
 QUIVER_ITEM_TYPE = 12
 
-# Виды отрядов (байт 0x1E); бродячих игра ставит в случайную клетку
-# прямоугольника появления, остальных — на место из записи персонажа
+# Group kinds (byte 0x1E). The game scatters a roaming group across random
+# cells of its spawn rectangle and places everyone else at the record position.
 PLAYER_GROUP = 0x20
+FIRST_ROAMING = 0x41
+LAST_ROAMING = 0x50
 FIRST_FIXED_GROUP = 0x51
 VILLAGE_GROUP_BIT = 0x80
 
@@ -133,8 +135,11 @@ class Group:
 
     @property
     def is_roaming(self) -> bool:
-        """Бродячий отряд: игра расставляет его членов случайно в spawn."""
-        return self.kind < FIRST_FIXED_GROUP and not self.kind & VILLAGE_GROUP_BIT
+        """Roaming group: the game scatters its members randomly inside spawn.
+
+        A range, not `kind < FIRST_FIXED_GROUP` — see docs/k1/formats/game-state.md.
+        """
+        return FIRST_ROAMING <= self.kind <= LAST_ROAMING
 
     @property
     def members(self) -> range:
