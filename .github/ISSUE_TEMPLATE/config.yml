@@ -1,0 +1,3 @@
+# No blank issue: the author picks Bug report or Feature request. Maintainers keep the right to
+# file without a template through `gh issue create` — same sections, same translation (CONTRIBUTING.md).
+blank_issues_enabled: false
