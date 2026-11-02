@@ -253,11 +253,10 @@ impl DrawPiece {
     }
 }
 
-/// Ключ сортировки объектов и персонажей: нижний край картинки, вид
-/// (0 — объекты раньше персонажей), слот — как ключ в `render.py`.
+/// Sort key of objects and creatures: the bottom edge of the picture, the kind
+/// (0 — objects before creatures) and the slot, as in `render.py`.
 ///
-/// Открыт, потому что #37 сортирует движущихся существ вместе со статическими
-/// объектами и должен ставить их в тот же порядок.
+/// Public because #37 sorts moving creatures among the static object stacks.
 pub type SortKey = (i32, i32, usize);
 /// Куски одного объекта или персонажа, которые сортируются и попадают в список
 /// целиком (огни объекта остаются сразу над его картинкой).
@@ -290,20 +289,17 @@ pub struct SceneInput<'a> {
     pub overlays: Overlays,
 }
 
-/// Карта без существ: то, что не меняется, когда существо сходит с места.
+/// The map without creatures: what stays when a creature leaves its place.
 ///
-/// Куски лежат в порядке списка отрисовки, [`stacks`] — ещё не отсортированы:
-/// порядок задаёт [`assemble`], когда к ним добавляются позы существ.
+/// [`stacks`] are unsorted — [`assemble`] and [`MapScene::ordered`] put them in
+/// order together with the poses of the creatures.
 ///
 /// [`stacks`]: Self::stacks
 pub struct MapScene {
-    /// Земля и декорации
     background: Vec<DrawPiece>,
-    /// Общие тени объектов — один слой под спрайтами
+    /// One shadow layer under every sprite, as `shadow_layer` in render.py
     shadows: Vec<DrawPiece>,
-    /// Стеки объектов: картинка вместе со своими огнями
     stacks: Vec<Stack>,
-    /// Отладочные оверлеи: свет, проходимость, маркеры
     overlays: Vec<DrawPiece>,
 }
 
@@ -351,11 +347,11 @@ impl MapScene {
     }
 }
 
-/// Поза существа: блоки, которые идут в список отрисовки целиком, их место в
-/// порядке наложения и собственная тень.
+/// A creature's pose: the blocks that enter the list as one unit, where they
+/// sort, and the creature's own shadow.
 ///
-/// Тень отделена, потому что в списке она принадлежит не стеку, а общему слою
-/// теней под спрайтами: [`assemble`] ставит её туда.
+/// The shadow is kept apart because the list puts it in the shared layer under
+/// every sprite, not above the creature.
 pub struct Pose {
     pub key: SortKey,
     pub pieces: Vec<DrawPiece>,
@@ -363,7 +359,6 @@ pub struct Pose {
 }
 
 impl Pose {
-    /// Нижний край картинки: по нему существо стоит в очереди на отрисовку.
     pub fn bottom(&self) -> i32 {
         self.key.0
     }
@@ -423,11 +418,10 @@ pub fn object_position(x: i16, y: i16) -> (i32, i32) {
     )
 }
 
-/// Список отрисовки карты в порядке наложения.
+/// The draw list of a map, in stacking order.
 ///
-/// Собирается из двух половинок — [`map_scene`] (карта) и [`creature_poses`]
-/// (существа) — через [`assemble`], поэтому та же сцена переставляется без
-/// пересборки, когда существо сходит с места (#37).
+/// Assembled from [`map_scene`] and [`creature_poses`], so the same scene is
+/// reordered when a creature moves instead of being rebuilt (#37).
 pub fn draw_list(
     input: &SceneInput<'_>,
     graph: &GraphRes<'_>,
@@ -518,10 +512,12 @@ pub fn map_scene(
     })
 }
 
-/// Позы существ, стоящих на карте, в том же порядке, что и [`characters::placed`].
+/// The poses of the creatures standing on the map, in the order of
+/// [`characters::placed`].
 ///
-/// Пусто, если слой персонажей выключен или картинок нет: список отрисовки без
-/// персонажей не содержит и их теней ([`PieceGroup::is_shown_by`]).
+/// Empty when the creature layer is off or the pictures are missing: a list
+/// without creatures holds no creature shadows either
+/// ([`PieceGroup::is_shown_by`]).
 ///
 /// [`characters::placed`]: k1_data::characters::placed
 pub fn creature_poses(
@@ -560,13 +556,12 @@ pub fn creature_poses(
     Ok(poses)
 }
 
-/// Полный список отрисовки: фон, тени (сначала объектов, затем существ — один слой
-/// под спрайтами, как `shadow_layer` в render.py), затем все блоки по глубине,
-/// поверх — оверлеи.
+/// The whole draw list: background, shadows (objects, then creatures), every
+/// block by depth, then the overlays.
 ///
-/// Ближе к зрителю то, что ниже на экране; сортировка устойчивая, поэтому огни
-/// объекта остаются сразу над его картинкой, а объект с тем же краем — раньше
-/// существа.
+/// Closer to the viewer is what sits lower on the screen; the sort is stable, so
+/// an object keeps its flames right above its picture and an object with the same
+/// bottom edge as a creature still comes first.
 pub fn assemble(map: MapScene, poses: &[Pose]) -> Vec<DrawPiece> {
     let MapScene {
         background,
@@ -743,10 +738,10 @@ fn object_pieces(
     drawn.push((key, stack));
 }
 
-/// Поза существа в том состоянии и направлении, которые записаны в записи.
+/// The pose of one creature as [`PoseKind`] asks for it.
 ///
-/// `None` — кадров нет или не найден нижний край: существа в списке отрисовки не
-/// бывает, как в `render.py`.
+/// `None` when there are no frames or no bottom edge is found: such a creature is
+/// not in the list at all, as in `render.py`.
 fn character_pose(
     character: &game_state::Character,
     x: i32,
@@ -755,8 +750,7 @@ fn character_pose(
     graphics: &Graphics<'_>,
     kind: &PoseKind,
 ) -> Result<Option<Pose>> {
-    // Поза может относиться к другой анимации, чем та, что записана в файле:
-    // состояние и направление берутся из kind
+    // The pose may belong to another animation than the record describes
     let mut record = (*character).clone();
     record.state = kind.state;
     record.direction = kind.direction;
@@ -764,8 +758,8 @@ fn character_pose(
     if count == 0 {
         return Ok(None);
     }
-    // Кадр из записи персонажа, если его не запросили иначе; вне
-    // последовательности — первый, как sequence_frame
+    // The frame of the record unless asked otherwise; outside the sequence the
+    // first one is taken, as sequence_frame does
     let base = (kind.frame.unwrap_or(record.frame) as usize).min(count - 1);
     // Слои собираются по устойчивому ключу: предмет без картинки в части кадров
     // сдвинул бы позиции, и снаряжение разъехалось бы по кадрам

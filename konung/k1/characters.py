@@ -20,7 +20,7 @@ COLORS_PER_PALETTE = 256
 DYNAMIC_ANIMATIONS = 6
 
 # Walking is animation 1 of a sprite table: state 1 and state 7 (a weapon in hand)
-# share its frame count (docs/k1/creatures.md, "Состояния анимации 0–9")
+# share its frame count: the animation-states table of docs/k1/creatures.md
 WALK_ANIMATION = 1
 
 
