@@ -1,4 +1,4 @@
-# Форма PR по CONTRIBUTING.md; логика — .github/scripts/contrib_form.py, покрыта tests/test_contrib_form.py.
+# PR form per CONTRIBUTING.md; the logic is .github/scripts/contrib_form.py, covered by tests/test_contrib_form.py.
 name: pr
 
 on:
@@ -32,8 +32,8 @@ jobs:
             style
             revert
 
-      # Тело — из события в переменную окружения: многострочным аргументом его не передать.
-      - name: Форма описания PR
+      # The body comes from the event through the environment: a multiline argument cannot carry it.
+      - name: PR description form
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}

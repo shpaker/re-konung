@@ -1,8 +1,8 @@
-"""Форма описаний Issues и PR по CONTRIBUTING.md: английские разделы и перевод в <details>.
+"""Issue and PR form check for CONTRIBUTING.md: English sections and a translation in <details>.
 
-CI проверяет этим описание pull request (`.github/workflows/pr.yml`); те же функции
-проверяют шаблоны репозитория (`tests/test_contrib_form.py`). Только стандартная библиотека,
-чтобы проверку можно было запускать и в CI, и в тестах без единой зависимости.
+CI runs this on pull request descriptions (`.github/workflows/pr.yml`); the same functions validate
+the repository's own templates (`tests/test_contrib_form.py`). Standard library only, so the check
+runs in CI and in tests without a single dependency.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import re
 import sys
 from collections.abc import Sequence
 
-# Обязательные разделы: заголовок уровня `##`, в этом порядке.
+# Mandatory sections: a `##` heading, in this order.
 PR_SECTIONS = ("What", "Why", "Related", "How to Test", "Review Guide", "Risks", "Environment")
 BUG_SECTIONS = (
     "Summary",
@@ -25,9 +25,9 @@ FEATURE_SECTIONS = ("Problem", "Proposed Behavior", "Acceptance Criteria", "Scop
 
 TRANSLATION_SUMMARY = "Русский перевод"
 
-# Заголовок issue начинается с одного из этих префиксов и называет результат, а не действие
-# (CONTRIBUTING.md, «Заголовок: тип и результат»). Типы Conventional Commits — только у заголовков
-# PR: их читает git-cliff, к issue они отношения не имеют.
+# An issue title starts with one of these and names the expected result rather than the action
+# (CONTRIBUTING.md, "Issue titles: type and result"). Conventional Commits types belong to pull
+# request titles only: git-cliff reads those, issue prefixes affect no release.
 ISSUE_PREFIXES = ("bug", "feat", "task", "research")
 ISSUE_TITLE = re.compile(rf"^(?:{'|'.join(ISSUE_PREFIXES)}): \S")
 
@@ -38,11 +38,11 @@ TRANSLATION_BLOCK = re.compile(
     r"<details\b[^>]*>\s*<summary>\s*(?P<summary>.*?)\s*</summary>(?P<text>.*?)</details>\s*$",
     re.DOTALL | re.IGNORECASE,
 )
-# Разметку ищем в тексте, где блоки кода заменены пробелами той же длины: цитата вроде
-# `<details>` или `## What` из шаблона не должна двигать границу английской части.
+# Markup is searched for in a copy of the text where code is replaced by spaces of the same length:
+# a quoted `<details>` or `## What` must not move the boundary of the English part.
 CODE = re.compile(r"```.*?```|`[^`\n]*`", re.DOTALL)
-# Запрещённые упоминания (AGENTS.md, раздел «Git»). Пути вроде .claude/skills — не упоминание:
-# перед именем точка или слэш.
+# Forbidden mentions (AGENTS.md, "Git"). A path such as .claude/skills is not a mention: the name is
+# preceded by a dot or a slash.
 AI_MENTION = re.compile(
     r"(?<![./\w])(claude|qwen|anthropic|openai|chatgpt|copilot)\b"
     r"|co-authored-by"
@@ -55,12 +55,12 @@ AI_MENTION = re.compile(
 
 
 def mask_code(text: str) -> str:
-    """Тот же текст, но код — пробелы: смещения совпадают, разметка внутри кода исчезла."""
+    """The same text with code turned into spaces: offsets match, markup inside code is gone."""
     return CODE.sub(lambda match: " " * len(match.group()), text)
 
 
 def structure(body: str) -> list[tuple[str, str]]:
-    """Разделы `##` до блока перевода: (заголовок, содержимое из исходного текста)."""
+    """`##` sections before the translation block: (heading, content from the original text)."""
     masked = mask_code(body)
     opening = DETAILS_OPEN.search(masked)
     end = len(masked) if opening is None else opening.start()
@@ -73,18 +73,18 @@ def structure(body: str) -> list[tuple[str, str]]:
 
 
 def has_content(text: str) -> bool:
-    """В разделе есть ответ, а не только комментарий-заготовка из шаблона."""
+    """The section holds an answer, not just the template comment it shipped with."""
     return bool(COMMENT.sub("", text).strip())
 
 
 def check_sections(found: Sequence[tuple[str, str]], required: Sequence[str]) -> list[str]:
-    """Замечания к структуре: нет раздела, раздел пуст, порядок нарушен."""
+    """Findings about the structure: a missing section, an empty one, a broken order."""
     titles = [title for title, _ in found]
-    problems = [f"нет раздела «## {title}»" for title in required if title not in titles]
+    problems = [f'section "## {title}" is missing' for title in required if title not in titles]
     if [title for title in titles if title in required] != [t for t in required if t in titles]:
-        problems.append("обязательные разделы идут не в порядке: " + " → ".join(required))
+        problems.append("mandatory sections are out of order: " + " → ".join(required))
     problems += [
-        f"раздел «## {title}» пуст"
+        f'section "## {title}" is empty'
         for title, content in found
         if title in required and not has_content(content)
     ]
@@ -92,59 +92,57 @@ def check_sections(found: Sequence[tuple[str, str]], required: Sequence[str]) ->
 
 
 def check_translation(body: str) -> list[str]:
-    """Перевод — единственный сворачиваемый блок в конце, с нужным заголовком и не пустой."""
+    """The translation is the only collapsed block, last, with the right summary and not empty."""
     masked = mask_code(body)
     openings = list(DETAILS_OPEN.finditer(masked))
     if not openings:
-        return [f"в конце описания нет сворачиваемого блока «{TRANSLATION_SUMMARY}»"]
+        return [f'the description ends without a collapsed "{TRANSLATION_SUMMARY}" block']
     if len(openings) > 1:
-        return [
-            f"сворачиваемых блоков {len(openings)}, а должен быть один — перевод в конце описания"
-        ]
+        return [f"{len(openings)} collapsed blocks, expected one — the translation at the end"]
     block = TRANSLATION_BLOCK.search(masked)
     if block is None or block.start() != openings[0].start():
         return [
-            "блок перевода должен быть последним в описании: "
-            f"<details><summary>{TRANSLATION_SUMMARY}</summary> … </details>, после него ничего"
+            "the translation must be the last block of the description: "
+            f"<details><summary>{TRANSLATION_SUMMARY}</summary> … </details>, nothing after it"
         ]
     problems = []
     if block["summary"] != TRANSLATION_SUMMARY:
         problems.append(
-            f"в сворачиваемом блоке <summary>{block['summary']}</summary>, "
-            f"нужно <summary>{TRANSLATION_SUMMARY}</summary>"
+            f"the collapsed block has <summary>{block['summary']}</summary>, "
+            f"expected <summary>{TRANSLATION_SUMMARY}</summary>"
         )
     if not has_content(body[block.start("text") : block.end("text")]):
-        problems.append("блок перевода пуст")
+        problems.append("the translation block is empty")
     return problems
 
 
 def check_body(body: str, required: Sequence[str]) -> list[str]:
-    """Замечания к описанию: структура английской части и блок перевода."""
+    """Findings about a description: the structure of the English part and the translation block."""
     return check_translation(body) + check_sections(structure(body), required)
 
 
 def check_issue_title(title: str) -> list[str]:
-    """Заголовок issue: префикс типа из ISSUE_PREFIXES; CI его не проверяет, проверки в тестах."""
-    hint = f"заголовок issue без префикса типа: нужно одно из {', '.join(ISSUE_PREFIXES)}: ..."
+    """An issue title starts with one of ISSUE_PREFIXES; CI does not check it, the tests do."""
+    hint = f"the issue title has no type prefix, expected one of: {', '.join(ISSUE_PREFIXES)}: ..."
     return [] if ISSUE_TITLE.match(title) else [hint]
 
 
 def check_ai_mention(title: str, body: str) -> list[str]:
-    hint = "в заголовке или описании есть запрещённое упоминание — см. AGENTS.md, раздел «Git»"
+    hint = "the title or description holds a forbidden mention — see AGENTS.md, the Git section"
     return [] if AI_MENTION.search(f"{title}\n{body}") is None else [hint]
 
 
 def check_pr(title: str, body: str) -> list[str]:
-    """Все замечания к pull request: упоминания и форма описания."""
+    """Every finding about a pull request: mentions and the shape of the description."""
     return check_ai_mention(title, body) + check_body(body, PR_SECTIONS)
 
 
 def main() -> int:
     problems = check_pr(os.environ.get("PR_TITLE", ""), os.environ.get("PR_BODY", ""))
     if not problems:
-        print("форма описания PR соответствует CONTRIBUTING.md")
+        print("the PR description follows CONTRIBUTING.md")
         return 0
-    print("PR не по CONTRIBUTING.md:")
+    print("the PR does not follow CONTRIBUTING.md:")
     for problem in problems:
         print(f"- {problem}")
     return 1

@@ -1,7 +1,7 @@
-"""Форма Issues и PR по CONTRIBUTING.md: разделы, перевод, запрещённые упоминания.
+"""Issue and PR form per CONTRIBUTING.md: sections, translation, forbidden mentions.
 
-Тот же код CI запускает на каждом pull request (`.github/scripts/contrib_form.py`); здесь им
-проверяются и шаблоны репозитория, и тексты документации, чтобы форма не разъехалась.
+CI runs the same code on every pull request (`.github/scripts/contrib_form.py`); here it also
+validates the repository's own templates and the rule texts, so the form cannot drift apart.
 """
 
 import importlib.util
@@ -28,7 +28,7 @@ def _load(name: str, path: Path) -> Any:
 
 form = _load("contrib_form", SCRIPT)
 
-# Ответ каждого обязательного раздела — достаточно любого, чтобы раздел считался заполненным.
+# One answer per mandatory section — any of them is enough for the section to count as filled.
 BODY = {
     "What": "The map parser keeps the unknown bytes instead of dropping them.",
     "Why": "The round-trip test could not prove the writer is byte-exact.",
@@ -74,7 +74,7 @@ macOS, Python 3.14, издание RUS.
 
 
 def render(**overrides: str | None) -> str:
-    """Тело PR: разделы в порядке PR_SECTIONS; None — раздела в описании нет вовсе."""
+    """A PR body with sections in PR_SECTIONS order; None drops the section entirely."""
     sections = {title: BODY[title] for title in form.PR_SECTIONS}
     sections.update(overrides)
     parts = [f"## {title}\n\n{value}" for title, value in sections.items() if value is not None]
@@ -90,15 +90,15 @@ def test_correct_body_passes():
 
 
 def test_missing_section_is_named():
-    assert problems(Risks=None) == ["нет раздела «## Risks»"]
+    assert problems(Risks=None) == ['section "## Risks" is missing']
 
 
 def test_empty_section_is_named():
-    assert problems(Risks="")[0] == "раздел «## Risks» пуст"
+    assert problems(Risks="")[0] == 'section "## Risks" is empty'
 
 
 def test_section_with_only_a_comment_is_empty():
-    assert "раздел «## What» пуст" in problems(What="<!-- TODO: what changed -->")
+    assert 'section "## What" is empty' in problems(What="<!-- TODO: what changed -->")
 
 
 @pytest.mark.parametrize("answer", ["None", "none", "N/A", "n/a", "-", "—"])
@@ -113,22 +113,22 @@ def test_sections_out_of_order_are_named():
         .replace("## Environment", "## Risks")
         .replace("## TMP", "## Environment")
     )
-    assert any("не в порядке" in problem for problem in form.check_body(body, form.PR_SECTIONS))
+    assert any("out of order" in problem for problem in form.check_body(body, form.PR_SECTIONS))
 
 
 def test_headings_inside_the_translation_do_not_count():
-    """Заголовки внутри <details> не обходят проверку: разделы ищутся только до блока."""
+    """Headings in <details> cannot get past the check: sections are read only before the block."""
     english = "Prose with no headings at all.\n\n"
     inside = "\n\n".join(f"## {title}\n\n{BODY[title]}" for title in form.PR_SECTIONS)
     body = english + f"<details>\n<summary>Русский перевод</summary>\n\n{inside}\n</details>\n"
-    missing = [p for p in form.check_body(body, form.PR_SECTIONS) if "нет раздела" in p]
+    missing = [p for p in form.check_body(body, form.PR_SECTIONS) if "is missing" in p]
     assert len(missing) == len(form.PR_SECTIONS)
 
 
 def test_body_without_translation_is_named():
     body = render().replace(TRANSLATION, "")
     assert any(
-        "нет сворачиваемого блока" in problem for problem in form.check_body(body, form.PR_SECTIONS)
+        "without a collapsed" in problem for problem in form.check_body(body, form.PR_SECTIONS)
     )
 
 
@@ -144,12 +144,12 @@ def test_empty_translation_is_named():
     body = render().replace(
         TRANSLATION, "<details>\n<summary>Русский перевод</summary>\n</details>\n"
     )
-    assert form.check_body(body, form.PR_SECTIONS) == ["блок перевода пуст"]
+    assert form.check_body(body, form.PR_SECTIONS) == ["the translation block is empty"]
 
 
 def test_text_after_the_translation_is_named():
     body = render() + "Запасной раздел после перевода.\n"
-    assert any("должен быть последним" in p for p in form.check_body(body, form.PR_SECTIONS))
+    assert any("must be the last block" in p for p in form.check_body(body, form.PR_SECTIONS))
 
 
 def test_second_details_block_is_named():
@@ -158,12 +158,12 @@ def test_second_details_block_is_named():
         "<details>\n<summary>Дамп</summary>\n\n`uv run pytest`\n\n</details>\n\n" + TRANSLATION,
     )
     assert form.check_body(body, form.PR_SECTIONS) == [
-        "сворачиваемых блоков 2, а должен быть один — перевод в конце описания"
+        "2 collapsed blocks, expected one — the translation at the end"
     ]
 
 
 def test_markup_quoted_in_code_is_not_markup():
-    """Текст о самой форме цитирует `<details>` и `## What`: в коде это не разметка."""
+    """The form's own text quotes `<details>` and `## What`: quoted markup is not markup."""
     quoted = (
         BODY["What"]
         + "\n\nThe template quotes `<details>` literally:\n\n"
@@ -230,14 +230,14 @@ def test_contributing_documents_the_same_sections():
 
 
 def test_descriptions_must_be_concise():
-    """Тело тикета и PR — короткие фразы, а не пересказ диффа; правило живёт в обоих документах."""
-    rule = "Описание лаконичное"
+    """A ticket and a PR body are short sentences, not a retelling of the diff — in both docs."""
+    rule = "Descriptions are concise"
     for name in ("CONTRIBUTING.md", "AGENTS.md"):
         assert rule in (ROOT / name).read_text(encoding="utf-8"), name
 
 
 def test_github_linking_keywords_are_documented():
-    """Связи работают только служебными словами GitHub — они должны быть в правилах."""
+    """Only GitHub keywords make links work, so they have to stay in the rules."""
     contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     assert "Closes #" in contributing and "--add-blocked-by" in contributing
     assert "Closes #" in (GITHUB / "pull_request_template.md").read_text(encoding="utf-8")
@@ -245,18 +245,6 @@ def test_github_linking_keywords_are_documented():
     assert "--add-blocked-by" in feature
     bug = (GITHUB / "ISSUE_TEMPLATE/bug_report.md").read_text(encoding="utf-8")
     assert "do not invent steps" in bug
-
-
-@pytest.mark.parametrize(
-    "template",
-    ["pull_request_template.md", "ISSUE_TEMPLATE/config.yml"]
-    + [f"ISSUE_TEMPLATE/{name}" for name in ("bug_report.md", "feature_request.md")],
-)
-def test_templates_are_english_outside_the_translation(template: str):
-    """Шаблоны и их комментарии — на английском; русский только в блоке перевода."""
-    text = (GITHUB / template).read_text(encoding="utf-8")
-    english = text[: text.lower().index("<details")] if "<details" in text.lower() else text
-    assert not re.search(r"[А-Яа-яЁё]", english), template
 
 
 @pytest.mark.parametrize("prefix", form.ISSUE_PREFIXES)
@@ -290,10 +278,21 @@ def test_templates_prefill_an_issue_prefix():
 
 
 def test_issue_prefixes_stay_out_of_pull_request_titles():
-    """Тип issue — префикс заголовка, тип PR — Conventional Commits; правила не должны смешаться."""
+    """An issue title carries a type prefix, a PR title keeps Conventional Commits."""
     contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
-    assert "## Заголовки Issues: тип и результат" in contributing
-    heading = contributing.split("## Заголовки Issues: тип и результат", 1)[1]
-    section = heading.split("\n## ", 1)[0]
+    assert "## Issue titles: type and result" in contributing
+    section = contributing.split("## Issue titles: type and result", 1)[1].split("\n## ", 1)[0]
     assert "Conventional Commits" in section
     assert "task: implement pathfinding" in section
+
+
+@pytest.mark.parametrize(
+    "template",
+    ["pull_request_template.md", "ISSUE_TEMPLATE/config.yml"]
+    + [f"ISSUE_TEMPLATE/{name}" for name in ("bug_report.md", "feature_request.md")],
+)
+def test_templates_are_english_outside_the_translation(template: str):
+    """Templates and their comments are English; Russian stays inside the translation block."""
+    text = (GITHUB / template).read_text(encoding="utf-8")
+    english = text[: text.lower().index("<details")] if "<details" in text.lower() else text
+    assert not re.search(r"[А-Яа-яЁё]", english), template

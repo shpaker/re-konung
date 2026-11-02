@@ -21,7 +21,7 @@ hooks = [
     { id = "check-illegal-windows-names" },
     # Оригиналы игры и их производные в git не попадают
     { id = "check-added-large-files", args = ["--maxkb=512"] },
-    # Где скачать игру, проект не подсказывает (AGENTS.md, «Авторский контент»)
+    # Где скачать игру, проект не подсказывает (AGENTS.md, "Copyrighted content")
     { id = "deny-pattern", alias = "no-download-links", name = "no download links", exclude = '^prek\.toml$', args = [
         "-i",
         'archive\.org/(details|download)',
@@ -33,7 +33,7 @@ hooks = [
         "abandon(ware|ia)",
     ] },
     { id = "detect-private-key" },
-    # Коммиты — только от лица автора, без упоминаний ИИ (AGENTS.md, «Git»)
+    # Коммиты — только от лица автора, без упоминаний ИИ (AGENTS.md, "Git")
     { id = "check-commit-trailers", stages = ["commit-msg", "pre-push"], args = [
         "--deny=Co-authored-by=(?i)(claude|qwen|anthropic|openai|gemini|copilot|cursor)",
     ] },
@@ -107,7 +107,7 @@ stages = ["pre-push", "manual"]
 pass_filenames = false
 always_run = true
 
-# Файлы игры по именам — на случай `git add -f` мимо .gitignore (AGENTS.md, «Авторский контент»)
+# Файлы игры по именам — на случай `git add -f` мимо .gitignore (AGENTS.md, "Copyrighted content")
 [[repos.hooks]]
 id = "no-game-files"
 name = "no game files"
