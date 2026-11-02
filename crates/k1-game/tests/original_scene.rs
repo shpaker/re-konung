@@ -612,3 +612,97 @@ fn map_plus_poses_gives_the_same_draw_list() {
         "poses were built on only {maps_with_creatures} maps — the test checked almost nothing"
     );
 }
+
+/// Criterion 7 of #36: a pose is built for every direction and for the rest and
+/// walk states on real data of both editions, and its layers keep their count and
+/// their length wherever the creature looks.
+///
+/// Composing a frame decodes its picture, so the test takes a few maps rather
+/// than all 43: the point is that any state and direction is buildable, not that
+/// every creature was measured.
+#[test]
+fn poses_build_for_every_direction_and_both_locomotion_states() {
+    const REST: u8 = 0;
+    const WALK: u8 = 1;
+    // Map 1 carries armed humans, 17 the monsters of roaming groups, 19 villagers
+    // with their workplaces
+    let maps = [1, 17, 19];
+    for (edition, game) in game_dirs() {
+        let resources = Resources::load(&game).unwrap();
+        let data = game.state_bytes(0, GAME_FILES).unwrap();
+        let state = game_state::parse(&data).unwrap();
+        resources
+            .with_graphics(|graph, objects| {
+                let graphics = scene::Graphics::new(graph, objects, &resources.tables);
+                for number in maps {
+                    let entities = game_state::on_map(&state, number, Some(0));
+                    // Dynamic set 3 has no walk frames at all: it is not a pose the
+                    // game builds while moving (docs/k1/movement.md)
+                    let built = characters::placed(&entities, &state)
+                        .into_iter()
+                        .filter(|(character, _, _)| {
+                            !(character.has_dynamic_sprite() && character.sprite_set == 3)
+                        })
+                        .collect::<Vec<_>>();
+                    assert!(
+                        !built.is_empty(),
+                        "{edition} konung.{number}: no creature to build a pose from"
+                    );
+                    for (character, x, y) in &built {
+                        let (px, py) = game_state::character_position(*x, *y);
+                        for state_value in [REST, WALK] {
+                            let mut layers = None;
+                            for direction in 0..8u8 {
+                                let pose = scene::pose_in(
+                                    character,
+                                    px,
+                                    py,
+                                    &state,
+                                    &graphics,
+                                    state_value,
+                                    direction,
+                                )
+                                .unwrap()
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "{edition} konung.{number}: creature {} has no pose in state {state_value} direction {direction}",
+                                        character.slot
+                                    )
+                                });
+                                let mut record = (*character).clone();
+                                record.state = state_value;
+                                record.direction = direction;
+                                let frames = characters::frame_count(&record, graph, objects);
+                                for piece in &pose.pieces {
+                                    // A layer of one frame is a static piece:
+                                    // layer_track gives it no animation
+                                    let length = piece
+                                        .animation
+                                        .as_ref()
+                                        .map_or(1, |animation| animation.frames.len());
+                                    assert_eq!(
+                                        length, frames,
+                                        "{edition} konung.{number}: creature {} state {state_value} direction {direction}: a layer holds {length} frames, the animation has {frames}",
+                                        character.slot
+                                    );
+                                }
+                                layers = match layers {
+                                    None => Some(pose.pieces.len()),
+                                    Some(count) => {
+                                        assert_eq!(
+                                            count,
+                                            pose.pieces.len(),
+                                            "{edition} konung.{number}: creature {} state {state_value} changed its layers between directions",
+                                            character.slot
+                                        );
+                                        Some(count)
+                                    }
+                                };
+                            }
+                        }
+                    }
+                }
+            })
+            .unwrap();
+    }
+}
