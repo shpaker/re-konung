@@ -85,6 +85,8 @@ pub enum WorldError {
     UnknownCreature,
     OutsideGrid,
     CellTaken,
+    /// Клетка непроходима: встать в неё нельзя, даже если она свободна.
+    ImpassableCell,
     /// Маршрута нет: цель недоступна, существо никуда не послано.
     NoRoute,
 }
@@ -134,6 +136,10 @@ pub struct World<P: Passage, K: Pace> {
     actors: Vec<Actor>,
     rng: Rng,
     tick: u64,
+    /// События приказов, отданных между тиками: выходят первыми на следующем
+    /// [`World::tick_step`], в порядке отдачи. Единственный канал событий —
+    /// именно `tick_step`, поэтому приказ не может исчезнуть молча.
+    pending_events: Vec<Event>,
 }
 
 impl<P: Passage, K: Pace> World<P, K> {
@@ -149,6 +155,7 @@ impl<P: Passage, K: Pace> World<P, K> {
             actors: Vec::new(),
             rng: Rng::new(seed),
             tick: 0,
+            pending_events: Vec::new(),
         }
     }
 
@@ -184,9 +191,16 @@ impl<P: Passage, K: Pace> World<P, K> {
     }
 
     /// Поставить существо в клетку; номер — следующий по порядку.
+    ///
+    /// Непроходимая клетка — `Err(ImpassableCell)`: существо внутри стены
+    /// ломало бы инвариант «никто не стоит в непроходимой клетке», который мир
+    /// проверяет на каждом тике.
     pub fn add(&mut self, cell: Cell) -> Result<CreatureId, WorldError> {
         if !self.grid.contains(cell) {
             return Err(WorldError::OutsideGrid);
+        }
+        if !self.passage.is_walkable(cell) {
+            return Err(WorldError::ImpassableCell);
         }
         if self.occupancy.holder(cell).is_some() {
             return Err(WorldError::CellTaken);
@@ -211,6 +225,10 @@ impl<P: Passage, K: Pace> World<P, K> {
     /// пересчитается на границе клетки, когда клетку ещё можно отменить, и
     /// тогда возвращается `Ok(0)`.
     /// `Err(NoRoute)` — маршрута нет, существо остаётся на месте.
+    ///
+    /// События поиска (`RouteSet`/`NoRoute`) кладутся в общий канал мира и
+    /// выходят первым делом на следующем [`World::tick_step`] — вне тика движок
+    /// событий не отдаёт, но и не теряет их.
     pub fn move_to(&mut self, creature: CreatureId, goal: Cell) -> Result<usize, WorldError> {
         let index = self.index(creature).ok_or(WorldError::UnknownCreature)?;
         if !self.grid.contains(goal) {
@@ -223,8 +241,9 @@ impl<P: Passage, K: Pace> World<P, K> {
             return Ok(0);
         }
         let mut events = Vec::new();
-        self.search_route(index, &mut events)
-            .ok_or(WorldError::NoRoute)
+        let steps = self.search_route(index, &mut events);
+        self.pending_events.append(&mut events);
+        steps.ok_or(WorldError::NoRoute)
     }
 
     /// Снять приказ: существо доходит начатый шаг и останавливается.
@@ -269,7 +288,11 @@ impl<P: Passage, K: Pace> World<P, K> {
         &self.occupancy
     }
 
-    /// Один тик игры: сначала приходы, потом пересчёты и новые шаги.
+    /// Один тик игры: сначала события приказов, отданных между тиками, потом
+    /// приходы, потом пересчёты и новые шаги.
+    ///
+    /// Это единственный канал событий движка: всё, что произошло (включая поиск
+    /// маршрута по приказу `move_to`), выходит отсюда, в порядке тика.
     ///
     /// Приходы первыми, поэтому существо, сошедшее с клетки на этом тике, не
     /// мешает тому, кто входит в неё в этом же тике. Шаг длительностью `d`
@@ -277,7 +300,7 @@ impl<P: Passage, K: Pace> World<P, K> {
     /// тиков занято ходьбой, и паузы между шагами нет.
     pub fn tick_step(&mut self) -> Vec<Event> {
         self.tick += 1;
-        let mut events = Vec::new();
+        let mut events = std::mem::take(&mut self.pending_events);
         self.finish_steps(&mut events);
         self.start_steps(&mut events);
         events
@@ -341,8 +364,10 @@ impl<P: Passage, K: Pace> World<P, K> {
             }
             let creature = self.actors[index].walker.creature;
             if self.actors[index].pending {
+                // Без `continue`: новый маршрут, найденный на этом тике, тут же
+                // расходуется первым шагом, иначе между приходом и началом шага
+                // вставлялся бы пустой тик (60 мс простоя при смене цели).
                 self.search_route(index, events);
-                continue;
             }
             if self.actors[index].walker.finish() {
                 self.actors[index].goal = None;
@@ -534,6 +559,110 @@ mod tests {
     }
 
     #[test]
+    fn add_refuses_an_impassable_cell() {
+        // Существо в стене ломало бы инвариант «никто не стоит в непроходимой
+        // клетке», который мир проверяет каждый тик
+        let mut world = world(8, 8);
+        let wall = Cell::new(3, 3);
+        world.passage_mut().blocked.insert(wall);
+        assert_eq!(world.add(wall), Err(WorldError::ImpassableCell));
+        assert_eq!(world.occupancy().holder(wall), None);
+        assert!(world.add(Cell::new(4, 4)).is_ok());
+    }
+
+    #[test]
+    fn order_events_reach_the_consumer_through_the_tick() {
+        // Единственный канал событий — tick_step: приказ вне тика не должен
+        // теряться вместе с временным вектором
+        let mut world = world(8, 8);
+        let creature = world.add(Cell::new(1, 2)).unwrap();
+        assert_eq!(world.move_to(creature, Cell::new(5, 2)), Ok(4));
+        let events = world.tick_step();
+        assert!(
+            events.contains(&Event::RouteSet { creature, steps: 4 }),
+            "{events:?}"
+        );
+        assert!(
+            events.contains(&Event::StepStarted {
+                creature,
+                from: Cell::new(1, 2),
+                to: Cell::new(2, 2),
+                direction: Direction::East,
+                ticks: 2,
+            }),
+            "{events:?}"
+        );
+        // и на втором тике повторного приказа уже не появляется
+        assert!(
+            !world
+                .tick_step()
+                .iter()
+                .any(|event| matches!(event, Event::RouteSet { .. }))
+        );
+    }
+
+    #[test]
+    fn a_deferred_order_starts_its_first_step_on_the_border_tick() {
+        let mut world = world(8, 8);
+        let creature = world.add(Cell::new(1, 2)).unwrap();
+        assert_eq!(world.move_to(creature, Cell::new(3, 2)), Ok(2));
+        assert!(
+            world
+                .tick_step()
+                .iter()
+                .any(|event| matches!(event, Event::StepStarted { .. }))
+        );
+        // приказ приходит, когда существо идёт шагом: он дождётся границы клетки
+        assert_eq!(world.move_to(creature, Cell::new(6, 2)), Ok(0));
+        world.tick_step();
+        let events = world.tick_step();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::StepFinished { .. })),
+            "{events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::RouteSet { .. })),
+            "{events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::StepStarted { .. })),
+            "первый шаг после пересчёта должен начаться в том же тике: {events:?}"
+        );
+    }
+
+    #[test]
+    fn a_free_but_unreachable_goal_is_not_replaced_by_a_neighbour() {
+        let mut world = world(8, 8);
+        let creature = world.add(Cell::new(0, 0)).unwrap();
+        let goal = Cell::new(5, 5);
+        // Цель свободна и проходима, но отрезана: все восемь соседей в стене
+        let neighbours: Vec<Cell> = Direction::ALL
+            .into_iter()
+            .filter_map(|direction| goal.neighbour(direction))
+            .collect();
+        for cell in &neighbours {
+            world.passage_mut().blocked.insert(*cell);
+        }
+        assert!(
+            world.passage().is_walkable(goal),
+            "цель должна оставаться свободной"
+        );
+        assert_eq!(world.move_to(creature, goal), Err(WorldError::NoRoute));
+        let events = world.tick_step();
+        assert!(
+            events.contains(&Event::NoRoute { creature, goal }),
+            "рядом с целью есть достижимые клетки — но в приказе была сама цель: {events:?}"
+        );
+        assert_eq!(world.cell_of(creature), Some(Cell::new(0, 0)));
+    }
+
+    #[test]
     fn move_to_reports_the_route_length() {
         let mut world = world(8, 8);
         let creature = world.add(Cell::new(1, 2)).unwrap();
@@ -561,13 +690,17 @@ mod tests {
         let events = world.tick_step();
         assert_eq!(
             events,
-            vec![Event::StepStarted {
-                creature,
-                from,
-                to: Cell::new(2, 2),
-                direction: Direction::East,
-                ticks: 2,
-            }]
+            vec![
+                // приказ отдан вне тика: его событие выходит первым на этом тике
+                Event::RouteSet { creature, steps: 2 },
+                Event::StepStarted {
+                    creature,
+                    from,
+                    to: Cell::new(2, 2),
+                    direction: Direction::East,
+                    ticks: 2,
+                },
+            ]
         );
         assert_eq!(world.tick_step(), Vec::new(), "середина шага пуста");
         assert_eq!(world.cell_of(creature), Some(from));
@@ -705,7 +838,8 @@ mod tests {
             None,
             "отказался от недостижимой цели"
         );
-        assert_eq!(world.tick_step(), Vec::new());
+        // отказ тоже доходит до потребителя: единственный канал событий — тик
+        assert_eq!(world.tick_step(), vec![Event::NoRoute { creature, goal }]);
     }
 
     #[test]

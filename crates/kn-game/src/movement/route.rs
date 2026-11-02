@@ -183,7 +183,16 @@ pub fn find_route<P: Passage>(request: &RouteRequest<'_, P>, rng: &mut Rng) -> O
     }
     let turn = rng.below(8) as usize;
     let (u, v) = request.goal.lattice();
-    for radius in 0..=request.rules.goal_fallback_radius as i64 {
+    // Кольца окрестности — только для цели, в которую нельзя войти: занятой или
+    // непроходимой. Свободная, но недостижимая цель остаётся недостижимой —
+    // иначе существо вставало бы рядом и сообщало `Arrived` вместо `NoRoute`
+    // (docs/rust.md, «Решение: занятая цель — ближайшее кольцо»).
+    let rings = if request.enterable(request.goal) {
+        0
+    } else {
+        request.rules.goal_fallback_radius
+    };
+    for radius in 0..=i64::from(rings) {
         let candidates: Vec<Cell> = ring(u, v, radius)
             .into_iter()
             .filter_map(|(u, v)| Cell::from_lattice(u, v))
@@ -524,6 +533,32 @@ mod tests {
     }
 
     #[test]
+    fn a_free_but_unreachable_goal_does_not_take_a_ring_cell() {
+        // Цель проходима и свободна, но все восемь соседей в стене: в неё нельзя
+        // войти, и соседняя клетка вместо неё — это не ответ «дойди до цели»,
+        // а подмена цели. Кольца окрестности работают только для занятой или
+        // непроходимой цели (docs/rust.md, «Решение: занятая цель — ближайшее
+        // кольцо»), здесь же ответа нет.
+        let grid = Grid::new(24, 24);
+        let mut map = Map::default();
+        let goal = Cell::new(12, 12);
+        for direction in Direction::ALL {
+            map.blocked.insert(goal.neighbour(direction).unwrap());
+        }
+        assert!(map.is_walkable(goal), "сама цель свободна");
+        for (index, from) in [Cell::new(4, 12), Cell::new(20, 2), Cell::new(12, 3)]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(
+                search(&grid, &map, &Occupancy::new(), from, goal),
+                None,
+                "случай {index}: вместо недостижимой цели подставлена соседняя клетка"
+            );
+        }
+    }
+
+    #[test]
     fn occupied_goal_with_no_free_cell_nearby_has_no_route() {
         let grid = Grid::new(24, 24);
         let map = Map::default();
@@ -673,6 +708,10 @@ mod tests {
         for direction in Direction::ALL {
             wide.blocked.insert(wide_goal.neighbour(direction).unwrap());
         }
+        // Цель, закрытая самой картой (не занята существом): fallback тоже обязан
+        // работать, и кольцо кандидатов у неё — первое кольцо вокруг клетки карты.
+        let impassable_goal = Cell::new(3, 3);
+        wide.blocked.insert(impassable_goal);
         let mut occupancy = Occupancy::new();
         occupancy.stand(goal, OTHER);
         let mut wide_occupancy = Occupancy::new();
@@ -696,7 +735,7 @@ mod tests {
             ),
             (&field, Occupancy::new(), Cell::new(22, 1), Cell::new(1, 21)),
             // Цель непроходима по данным карты — маршрут до свободной рядом.
-            (&wide, Occupancy::new(), Cell::new(2, 12), wide_goal),
+            (&wide, Occupancy::new(), Cell::new(2, 12), impassable_goal),
             (&pocket, occupancy.clone(), Cell::new(2, 12), goal),
             (&pocket, occupancy.clone(), Cell::new(12, 2), goal),
             (&pocket, occupancy, Cell::new(20, 20), goal),

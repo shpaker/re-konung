@@ -170,13 +170,20 @@ fn unreachable_goal_is_refused_not_a_panic() {
     for row in 0..20 {
         world.passage_mut().blocked.insert(Cell::new(10, row));
     }
+    let goal = Cell::new(15, 10);
     world.rules_mut().route.goal_fallback_radius = 0;
     assert_eq!(
-        world.move_to(creature, Cell::new(15, 10)),
-        Err(WorldError::NoRoute)
+        world.move_to(creature, goal),
+        Err(WorldError::NoRoute),
+        "свободная, но недостижимая цель не подменяется соседней клеткой"
     );
     assert_eq!(world.cell_of(creature), Some(Cell::new(2, 10)));
-    assert_eq!(run(&mut world, 50), Vec::new(), "отказ породил движение");
+    // движения нет, но отказ доходит до потребителя одним событием на первом тике
+    assert_eq!(
+        run(&mut world, 50),
+        vec![Event::NoRoute { creature, goal }],
+        "отказ породил движение"
+    );
 }
 
 #[test]
