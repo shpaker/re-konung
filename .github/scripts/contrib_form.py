@@ -25,6 +25,12 @@ FEATURE_SECTIONS = ("Problem", "Proposed Behavior", "Acceptance Criteria", "Scop
 
 TRANSLATION_SUMMARY = "Русский перевод"
 
+# Заголовок issue начинается с одного из этих префиксов и называет результат, а не действие
+# (CONTRIBUTING.md, «Заголовок: тип и результат»). Типы Conventional Commits — только у заголовков
+# PR: их читает git-cliff, к issue они отношения не имеют.
+ISSUE_PREFIXES = ("bug", "feat", "task", "research")
+ISSUE_TITLE = re.compile(rf"^(?:{'|'.join(ISSUE_PREFIXES)}): \S")
+
 COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 HEADINGS = re.compile(r"^##(?!#)[ \t]+(.+?)[ \t]*$", re.MULTILINE)
 DETAILS_OPEN = re.compile(r"<details\b[^>]*>", re.IGNORECASE)
@@ -115,6 +121,12 @@ def check_translation(body: str) -> list[str]:
 def check_body(body: str, required: Sequence[str]) -> list[str]:
     """Замечания к описанию: структура английской части и блок перевода."""
     return check_translation(body) + check_sections(structure(body), required)
+
+
+def check_issue_title(title: str) -> list[str]:
+    """Заголовок issue: префикс типа из ISSUE_PREFIXES; CI его не проверяет, проверки в тестах."""
+    hint = f"заголовок issue без префикса типа: нужно одно из {', '.join(ISSUE_PREFIXES)}: ..."
+    return [] if ISSUE_TITLE.match(title) else [hint]
 
 
 def check_ai_mention(title: str, body: str) -> list[str]:

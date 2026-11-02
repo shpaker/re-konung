@@ -5,6 +5,7 @@
 """
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -235,3 +236,43 @@ def test_github_linking_keywords_are_documented():
     assert "Closes #" in (GITHUB / "pull_request_template.md").read_text(encoding="utf-8")
     for template in ("ISSUE_TEMPLATE/bug_report.md", "ISSUE_TEMPLATE/feature_request.md"):
         assert "Closes #" in (GITHUB / template).read_text(encoding="utf-8"), template
+
+
+@pytest.mark.parametrize("prefix", form.ISSUE_PREFIXES)
+def test_issue_title_needs_one_of_the_documented_prefixes(prefix: str):
+    assert form.check_issue_title(f"{prefix}: creatures move along the original maps") == []
+    assert f"`{prefix}:`" in (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "creatures move along the original maps",
+        "perf: creatures render without rebuilding the scene",
+        "chore: unify issue forms",
+        "feat:",
+        "bug:map does not open",
+    ],
+)
+def test_issue_title_without_a_type_prefix_is_named(title: str):
+    assert form.check_issue_title(title) != []
+
+
+def test_templates_prefill_an_issue_prefix():
+    for template, prefix in (
+        ("ISSUE_TEMPLATE/bug_report.md", "bug"),
+        ("ISSUE_TEMPLATE/feature_request.md", "feat"),
+    ):
+        text = (GITHUB / template).read_text(encoding="utf-8")
+        match = re.search(r"(?m)^title: '(?P<value>[^']*)'$", text)
+        assert match and match.group("value") == f"{prefix}: ", template
+
+
+def test_issue_prefixes_stay_out_of_pull_request_titles():
+    """Тип issue — префикс заголовка, тип PR — Conventional Commits; правила не должны смешаться."""
+    contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    assert "## Заголовки Issues: тип и результат" in contributing
+    heading = contributing.split("## Заголовки Issues: тип и результат", 1)[1]
+    section = heading.split("\n## ", 1)[0]
+    assert "Conventional Commits" in section
+    assert "task: implement pathfinding" in section

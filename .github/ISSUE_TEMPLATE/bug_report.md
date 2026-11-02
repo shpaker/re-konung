@@ -1,16 +1,17 @@
 ---
 name: Bug report
 about: Something does not work as the project documents it or as the original game does
-title: ''
+title: 'bug: '
 labels: bug
 assignees: ''
 ---
 
 <!--
-Заголовок и всё описание — на английском, перевод — последним сворачиваемым блоком
-(заготовки ниже). Один баг — один issue. Обязательные разделы не оставляют пустыми:
-неприменимое пишут как `None` или `N/A`. Необязательные — Evidence, Impact,
-Related Issues — дописывают только когда в них есть что сказать. Связь с задачей,
+Заголовок начинается с `bug:` и называет ожидаемый результат, а не действие; скоуп вроде
+`(kn-io)` не обязателен — слои перечислены в разделах. Всё описание — на английском,
+перевод — последним сворачиваемым блоком (заготовки ниже). Один баг — один issue. Обязательные
+разделы не оставляют пустыми: неприменимое пишут как `None` или `N/A`. Необязательные — Evidence,
+Impact, Related Issues — дописывают только когда в них есть что сказать. Связь с задачей,
 которая этот баг закрыла, — `Closes #NN` в описании того PR; номер в тексте тикета —
 это только перекрёстная ссылка.
 -->
@@ -32,7 +33,7 @@ map, action). Do not invent steps.
 <!--
 What the repository documents or the original game does, with the link to the note in
 `docs/` or the check that established it. An intentional difference from the original
-is not a bug: state the expected modern behaviour and point to that note.
+is not a bug: state the expected modern behavior and point to that note.
 -->
 
 ## Actual Behavior
