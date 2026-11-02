@@ -32,11 +32,16 @@ pub struct Creature {
     pub cell: (i16, i16),
     pub direction: u8,
     pub state: u8,
+    /// Byte 0x03 of the character record: the class that determines behavior.
+    /// Values from Slavik — see docs/k1/formats/game-state.md, `Character`.
+    pub class_id: u8,
     pub group: usize,
     pub roaming: bool,
     /// Rectangle the creature's group was put in the map for.
     pub spawn: Rect,
     pub workplace: Option<Workplace>,
+    /// Byte 0x02: sprite set selector (GRAPH.RES vs Objects.res).
+    pub sprite_set: u8,
 }
 
 /// Everyone standing on `map_number`, ordered by record number.
@@ -69,10 +74,12 @@ fn creature(character: &Character, group: &Group, places: &HashMap<usize, Workpl
         cell: (character.x, character.y),
         direction: character.direction,
         state: character.state,
+        class_id: character.class_id,
         group: group.slot,
         roaming: group.is_roaming(),
         spawn: group.spawn,
         workplace: places.get(&character.slot).copied(),
+        sprite_set: character.sprite_set,
     }
 }
 
