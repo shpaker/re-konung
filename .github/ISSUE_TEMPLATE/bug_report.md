@@ -16,7 +16,7 @@ Numbered commands and data a reviewer can run. If reproduction is unknown, write
 
 ## Expected Behavior
 
-What the repository documents or the original game does, with the link to the note in `docs/` or the check that established it. An intentional difference from the original is not a bug: state the expected modern behavior and link that note.
+What the repository documents or the original game does — link the note in `docs/` or the check that established it. An intentional difference from the original is not a bug: state the expected modern behavior.
 
 ## Actual Behavior
 

@@ -229,6 +229,13 @@ def test_contributing_documents_the_same_sections():
         assert f"`{section}`" in text or f"## {section}" in text, section
 
 
+def test_descriptions_must_be_concise():
+    """Тело тикета и PR — короткие фразы, а не пересказ диффа; правило живёт в обоих документах."""
+    rule = "Описание лаконичное"
+    for name in ("CONTRIBUTING.md", "AGENTS.md"):
+        assert rule in (ROOT / name).read_text(encoding="utf-8"), name
+
+
 def test_github_linking_keywords_are_documented():
     """Связи работают только служебными словами GitHub — они должны быть в правилах."""
     contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
