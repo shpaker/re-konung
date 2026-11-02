@@ -135,12 +135,16 @@ mod tests {
     use super::*;
 
     fn make_creature(group_kind: u8, id: usize) -> Creature {
+        make(group_kind, 0, id)
+    }
+
+    fn make(group_kind: u8, class_id: u8, id: usize) -> Creature {
         Creature {
             id,
             cell: (10, 10),
             direction: 0,
             state: 0,
-            class_id: 0,
+            class_id,
             group: 0,
             group_kind,
             roaming: matches!(group_kind, group::FIRST_ROAMING..=group::LAST_ROAMING),
@@ -204,6 +208,28 @@ mod tests {
     }
 
     // ── Decision tests ──
+
+    /// Independence: `class_id` never changes the classification outcome.
+    #[test]
+    fn classification_ignores_class_id() {
+        for class_id in [0x00u8, class::WARRIOR, class::WOMAN, class::CHILD, 0xff] {
+            assert_eq!(
+                classify(&make(group::LONE_NPC, class_id, 0)),
+                CreatureType::LoneNpc,
+                "class {class_id:#04x} must not change LoneNpc"
+            );
+            assert_eq!(
+                classify(&make(group::VILLAGE_FIRST, class::WARRIOR, 0)),
+                CreatureType::Villager,
+                "villager group with warrior class must stay Villager"
+            );
+            assert_eq!(
+                classify(&make(group::FIRST_ROAMING, class::WARRIOR, 0)),
+                CreatureType::RoamingMonster,
+                "roaming group with any class must stay RoamingMonster"
+            );
+        }
+    }
 
     #[test]
     fn lone_npc_gets_no_movement_decision() {
