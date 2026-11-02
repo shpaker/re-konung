@@ -430,18 +430,40 @@ fn every_character_on_every_map_is_drawn() {
     }
 }
 
-/// Дайджест списка строк — FNV-1a 64 по UTF-8, где строки разделены переводом
+/// FNV-1a 64: базовое значение `0xcbf29ce484222325`, простой `0x100000001b3`
+/// (2^40 + 435). Значения зафиксированы тестом — опечатка в простом даёт
+/// рабочий самосовпадающий дайджест и не видна на сверке Rust с Python.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    hash
+}
+
+/// Дайджест списка строк — [fnv1a64] по UTF-8, где строки разделены переводом
 /// строки. В сравнение и в вывод при расхождении попадает только он: строки игры
 /// не попадают ни в git, ни в лог теста.
 fn digest(strings: &[String]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for string in strings {
-        for &byte in string.as_bytes().iter().chain(std::iter::once(&b'\n')) {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x1000_0000_0000_01b3);
-        }
-    }
-    hash
+    let bytes: Vec<u8> = strings
+        .iter()
+        .flat_map(|string| string.bytes().chain(std::iter::once(b'\n')))
+        .collect();
+    fnv1a64(&bytes)
+}
+
+#[test]
+fn digest_is_the_published_fnv1a_64() {
+    // Векторы и константы — RFC 9923 (FNV), Appendix C. Ошибка в простом даёт
+    // рабочий самосовпадающий дайджест: Rust и Python сойдутся между собой, и
+    // на сверке изданий ничего не заметится, поэтому значения пинимся здесь.
+    assert_eq!(0x100_0000_01b3u64, (1u64 << 40) + 435, "простой FNV-1a 64");
+    assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
+    assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
+    assert_eq!(fnv1a64(b"foobar"), 0x8594_4171_f739_67e8);
+    assert_eq!(digest(&[]), 0xcbf2_9ce4_8422_2325);
+    assert_eq!(digest(&[String::from("a")]), fnv1a64(b"a\n"));
 }
 
 /// Python-эталон печатает число записей и дайджест каждой таблицы, а также
@@ -455,7 +477,7 @@ def digest(strings):
     hash = 0xCBF29CE484222325
     for s in strings:
         for b in (s + "\n").encode("utf-8"):
-            hash = ((hash ^ b) * 0x10000000000001B3) & 0xFFFFFFFFFFFFFFFF
+            hash = ((hash ^ b) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
     return hash
 
 game = Path(sys.argv[1])

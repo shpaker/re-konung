@@ -105,6 +105,10 @@ pub struct Executable {
     /// Таблицы текстов; если блок не нашёлся однозначно (другое издание) — None,
     /// и без имён карта всё равно рисуется
     pub texts: Option<Texts>,
+    /// Почему текстов нет: сообщение ошибки поиска (`parse_texts` может не
+    /// найтись только из-за неоднозначности). `None`, когда тексты нашлись или
+    /// когда их искали отдельно через [`parse_texts`] и получили `Ok`.
+    pub texts_error: Option<String>,
 }
 
 fn i16_at(data: &[u8], pos: usize) -> i16 {
@@ -434,8 +438,14 @@ fn entry(table: &[String], index: i32) -> &str {
 /// Имя персонажа, как его собирает игра: у монстров — название вида,
 /// у людей, женщин и детей — имя и прозвище через пробел (прозвище 0 — без него).
 ///
-/// Без текстов или с номером вне таблицы — пустая строка. Номера имя и прозвище —
-/// байты 0xD4 и 0xD5 записи персонажа (docs/k1/formats/game-state.md).
+/// Номер вне таблицы — пустая строка. Номера имя и прозвище — байты 0xD4 и 0xD5
+/// записи персонажа (docs/k1/formats/game-state.md).
+///
+/// Отличие от эталона: пустую часть имени не склеиваем с непустой через пробел,
+/// чтобы в подписи не висел ведущий или хвостовой пробел. Эталон
+/// (`executable.character_name`) при номере вне таблицы даёт `{имя} ` или ` {прозвище}`;
+/// на наших файлах различие не видно — у всех расставленных персонажей оба
+/// номера указывают в заполненные записи, кроме одного жителя без того и другого.
 pub fn character_name(texts: Option<&Texts>, class_id: u8, name_id: u8, nick_id: u8) -> String {
     let Some(texts) = texts else {
         return String::new();
@@ -449,7 +459,11 @@ pub fn character_name(texts: Option<&Texts>, class_id: u8, name_id: u8, nick_id:
         return name.to_string();
     }
     let nick = entry(&texts.nicknames, i32::from(nick_id));
-    format!("{name} {nick}")
+    [name, nick]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<&str>>()
+        .join(" ")
 }
 
 pub fn parse(data: &[u8]) -> Result<Executable> {
@@ -479,6 +493,7 @@ pub fn parse(data: &[u8]) -> Result<Executable> {
             *value = i32_at(data, first + direction * DRAW_ORDER_ROW_SIZE + slot * 4) as usize;
         }
     }
+    let texts = parse_texts(data);
     Ok(Executable {
         equipment,
         draw_order,
@@ -486,7 +501,10 @@ pub fn parse(data: &[u8]) -> Result<Executable> {
         // Как в эталоне: без однозначного блока рисовать можно, поэтому тексты
         // не заводят разбор — None. Эталон вдобавок теряет их, если не нашлись
         // таблицы предметов; в Rust предметов пока нет, и тексты от них не зависят.
-        texts: parse_texts(data).ok(),
+        // Причина потери остаётся доступной: иначе «не искалось», «не нашлось» и
+        // «нашлось неоднозначно» неразличимы, а это разные ситуации для отладки.
+        texts_error: texts.as_ref().err().map(ToString::to_string),
+        texts: texts.ok(),
     })
 }
 
@@ -632,8 +650,83 @@ mod tests {
         // Класс 0x40 — вид до первой записи таблицы, как в эталоне: пустая строка
         assert_eq!(character_name(texts.as_ref(), 0x40, 2, 3), "");
         assert_eq!(character_name(texts.as_ref(), 0x02, 255, 0), "");
-        assert_eq!(character_name(texts.as_ref(), 0x02, 5, 255), "name005 ");
         assert_eq!(character_name(None, 0x41, 2, 3), "");
+    }
+
+    #[test]
+    fn character_name_has_no_space_of_a_missing_part() {
+        // Номер вне таблицы — пустая часть; она не склеивается с непустой через
+        // пробел, иначе подпись висела бы на ведущем или хвостовом пробеле
+        let texts = Some(all_texts());
+        assert_eq!(character_name(texts.as_ref(), 0x02, 5, 255), "name005");
+        assert_eq!(character_name(texts.as_ref(), 0x02, 255, 3), "nick003");
+        assert_eq!(character_name(texts.as_ref(), 0x02, 255, 255), "");
+        // Имя 0 с прозвищем 0 — пустая строка, как у единственного безымянного жителя
+        assert_eq!(character_name(texts.as_ref(), 0x51, 0, 0), "");
+    }
+
+    /// Остальные таблицы exe, кроме текстов: снаряжение, порядок отрисовки, огни.
+    fn exe_body() -> Vec<u8> {
+        let mut data = Vec::new();
+        for index in 0..EQUIPMENT_COUNT {
+            let mut record = vec![0u8; EQUIPMENT_INFO_SIZE];
+            let name = format!("eq{index:02}");
+            record[..name.len()].copy_from_slice(name.as_bytes());
+            let set = (index % EQUIPMENT_SETS) as i16;
+            record[44 + 9 * 2..].copy_from_slice(&set.to_le_bytes());
+            data.extend(record);
+        }
+        data.extend(vec![0u8; 8]);
+        for row in 0..DRAW_ORDER_ROWS {
+            for slot in 0..SLOTS {
+                let value = ((row + slot) % SLOTS) as i32;
+                data.extend(value.to_le_bytes());
+            }
+        }
+        data.extend(vec![0u8; 8]);
+        for kind in 0..FLAME_KINDS as i32 {
+            let first = kind * 10;
+            let last = if kind == FLAME_KINDS as i32 - 1 {
+                FLAME_FRAMES as i32 - 1
+            } else {
+                first + 9
+            };
+            data.extend(first.to_le_bytes());
+            data.extend(last.to_le_bytes());
+        }
+        data.extend(vec![0u8; 8]);
+        data
+    }
+
+    /// Синтетический exe с табличными блоками заданного числа названий карт и
+    /// вторым блоком имён, если `duplicate`.
+    fn exe(duplicate: bool) -> Vec<u8> {
+        let mut data = exe_body();
+        data.extend(texts_data(MAP_NAMES));
+        if duplicate {
+            data.extend(names_block());
+            data.extend(vec![0u8; MAP_NAME_SIZE]);
+            data.extend(map_names(MAP_NAMES));
+            data.extend(vec![0u8; MAP_NAME_SIZE]);
+        }
+        data
+    }
+
+    #[test]
+    fn parse_reports_why_texts_are_missing() {
+        let parsed = parse(&exe(false)).unwrap();
+        assert!(parsed.texts.is_some(), "тексты должны найтись");
+        assert_eq!(parsed.texts_error, None);
+
+        // Два блока имён: разбор карты продолжается, но причина потери текстов
+        // остаётся доступной — иначе «не нашлось» неотличимо от «не искалось»
+        let parsed = parse(&exe(true)).unwrap();
+        assert_eq!(parsed.texts, None);
+        let reason = parsed.texts_error.expect("причина потери текстов");
+        assert!(reason.contains("имён"), "{reason}");
+
+        // Тот же случай через явный вызов даёт ошибку с кандидатами
+        assert!(parse_texts(&exe(true)).is_err());
     }
 
     #[test]
