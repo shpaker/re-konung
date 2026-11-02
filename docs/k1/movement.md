@@ -97,8 +97,14 @@ A step to a neighbouring cell lasts a fixed number of ticks — the number of
 walk-animation frames in that direction, not a value the code picks: Slavik
 `game_play.cpp:3727-3740` counts `Frame` up to `FrameCount`. **Confirmed**
 against Slavik; with us the duration comes from a supplier — `movement::pace::Pace`.
-The per-direction frame counts in `GRAPH.RES` and `Objects.res` are not parsed
-yet: part 3 delivers them.
+The per-direction frame counts are measured over both editions and agree between
+them: humans and almost every dynamic object walk 12 frames in every direction,
+dynamic slot 23 walks 6, slot 19 walks 2 in every direction but south-east (12),
+slot 20 walks 1 in every direction but north and south-west (12), and slot 3 has no
+walk frames at all — with us a duration of 0 counts as one tick
+(`movement::pace::Pace`). **Confirmed** over `original/k1/rus/game` and
+`original/k1/eng/game`. The record's own counter is not a source: see
+[formats/game-state.md](formats/game-state.md), byte 0xD7.
 
 The glide between cells lives in the offsets of the walk-animation frames, not in
 code: the pixel position slides the rest of the way into the new cell at the end
@@ -106,6 +112,14 @@ of the animation — Slavik `game.cpp:2884-2908`, `game_play.cpp:798-800` and ou
 own experiment over `GRAPH.RES` and `Objects.res`. **Confirmed**. That is why the
 engine hands out the cell, the cell's point, the direction and the step's tick
 count, rather than an interpolated position.
+
+Measured over the walk animation of all three human models: from the first frame to
+the last the offset slides 1–11 px short of the cell step on each axis (west −54
+against −58, east +47 against +58, north −30 against −32, north-west −27 against
+−29), identically in both editions. The frames carry almost the whole way and the
+remainder arrives as a snap when the step ends — the original never interpolates the
+last pixels. **Confirmed** by measurement; we draw the offsets as they are instead of
+smoothing them, because interpolation would be a rule the data does not show.
 
 ## Tick
 

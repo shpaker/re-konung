@@ -102,7 +102,7 @@ uv run konung k1 map original/k1/rus/game out/k1/maps -n 1 --game 0
 | 0xD2 | 2 байта | | неизвестно |
 | 0xD4 | u8, u8 | номер имени и номер прозвища в таблицах текстов exe | подтверждено: все номера из `Game.0`–`Game.2` попадают в заполненные записи таблиц ([executable.md](executable.md)) |
 | 0xD6 | u8 | набор спрайтов: у людей — модель 0–2 из `GRAPH.RES`, с битом 0x40 в классе — динамический объект 0–29 из `Objects.res` | подтверждено рендером ([graph-res.md](graph-res.md)) |
-| 0xD7 | u8 | число кадров | по Slavik |
+| 0xD7 | u8 | number of frames | per Slavik; measured: 0 in all 6358 filled character records of both editions, so the step duration comes from the resources, not from here |
 | 0xD8 | s32 | палитра: смещение в байтах в банке цветов `GRAPH.RES` | подтверждено рендером |
 | 0xDC | 36 байт | пиксельные позиции и размер картинки — их считает игра; в файлах нули | по Slavik |
 
