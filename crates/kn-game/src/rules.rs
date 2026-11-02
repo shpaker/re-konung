@@ -154,32 +154,98 @@ mod tests {
         );
     }
 
-    /// The waiting/cooldown mechanism still works when a blocked creature keeps
-    /// being sent the same order every tick: it repaths exactly once, not once
-    /// per repeated order.
+    /// A tick loop that re-sends the same goal every tick must not defeat the
+    /// waiting mechanism: a creature held up by another stands and waits, the
+    /// repeats add no new `RouteSet` while it waits, and it resumes the moment
+    /// the cell frees. The route's first step is forced through a single free
+    /// neighbour so the test is deterministic about which cell is blocked.
     #[test]
-    fn repeated_order_while_blocked_repaths_once() {
+    fn repeated_order_while_blocked_waits_then_resumes() {
         let mut world = test_world();
-        let creature = world.add(Cell::new(1, 1)).unwrap();
-        // A blocker on the only way out toward the goal.
-        let blocker = world.add(Cell::new(2, 1)).unwrap();
-        let mut route_sets = 0;
-        for _ in 0..100 {
-            // Re-send the same order every tick, as a tick loop would.
-            apply(&mut world, &[(creature, Decision::MoveTo(2, 1))]);
-            let events = world.tick_step();
-            route_sets += events
-                .iter()
-                .filter(|e| matches!(e, Event::RouteSet { .. }))
-                .count();
+        let start = Cell::new(2, 4);
+        // A screen-diagonal step has no corner-flank requirement, so the only
+        // free neighbour is a forced first step.
+        let first_step = start.neighbour(Direction::NorthEast).unwrap();
+        let goal = first_step.neighbour(Direction::NorthEast).unwrap();
+
+        // Wall off every other neighbour of `start`.
+        for direction in Direction::ALL {
+            if direction == Direction::NorthEast {
+                continue;
+            }
+            if let Some(neighbour) = start.neighbour(direction) {
+                world.passage_mut().blocked.insert(neighbour);
+            }
         }
-        // One search on the first order, one on the cooldown repath: far fewer
-        // than one per tick.
-        assert!(
-            route_sets <= 3,
-            "repeated orders forced {route_sets} searches, expected at most a couple"
+
+        let creature = world.add(start).unwrap();
+        // Build the route to `goal`; its only way out is `first_step`.
+        let opened = apply(
+            &mut world,
+            &[(creature, Decision::MoveTo(goal.column, goal.row))],
         );
-        let _ = blocker;
+        assert!(
+            matches!(opened[0], Applied::Accepted { route_steps } if route_steps > 0),
+            "{opened:?}"
+        );
+        // The held cell: the route's forced first step, occupied by a second
+        // creature that will not move on its own.
+        let blocker = world.add(first_step).unwrap();
+
+        // The first tick drains the initial search's RouteSet and finds the
+        // creature held.
+        let mut waiting = false;
+        let mut extra_route_sets = 0;
+        for tick in 0..30 {
+            // Re-send the same order every tick, exactly as a rules loop does.
+            apply(
+                &mut world,
+                &[(creature, Decision::MoveTo(goal.column, goal.row))],
+            );
+            let events = world.tick_step();
+            if events.iter().any(|e| matches!(e, Event::Waiting { .. })) {
+                waiting = true;
+            }
+            // Skip the initial RouteSet carried by the very first tick.
+            if tick > 0 {
+                extra_route_sets += events
+                    .iter()
+                    .filter(|e| matches!(e, Event::RouteSet { .. }))
+                    .count();
+            }
+        }
+        assert!(waiting, "the creature must wait behind the held cell");
+        assert_eq!(
+            extra_route_sets, 0,
+            "repeated orders must not re-search while the creature waits"
+        );
+
+        // Free the path: send the blocker to a far, reachable cell so it steps
+        // off `first_step` and holds nothing on the creature's route.
+        world.move_to(blocker, Cell::new(6, 6)).unwrap();
+        let mut resumed = false;
+        for _ in 0..40 {
+            apply(
+                &mut world,
+                &[(creature, Decision::MoveTo(goal.column, goal.row))],
+            );
+            let events = world.tick_step();
+            if events
+                .iter()
+                .any(|e| matches!(e, Event::StepFinished { creature: c, .. } if *c == creature))
+            {
+                resumed = true;
+            }
+        }
+        assert!(
+            resumed,
+            "the creature must resume once the blocker steps off"
+        );
+        assert_eq!(
+            world.cell_of(creature),
+            Some(goal),
+            "the creature should reach its goal after the hold clears"
+        );
     }
 
     #[test]
