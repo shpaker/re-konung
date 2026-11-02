@@ -234,8 +234,22 @@ def test_github_linking_keywords_are_documented():
     contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     assert "Closes #" in contributing and "--add-blocked-by" in contributing
     assert "Closes #" in (GITHUB / "pull_request_template.md").read_text(encoding="utf-8")
-    for template in ("ISSUE_TEMPLATE/bug_report.md", "ISSUE_TEMPLATE/feature_request.md"):
-        assert "Closes #" in (GITHUB / template).read_text(encoding="utf-8"), template
+    feature = (GITHUB / "ISSUE_TEMPLATE/feature_request.md").read_text(encoding="utf-8")
+    assert "--add-blocked-by" in feature
+    bug = (GITHUB / "ISSUE_TEMPLATE/bug_report.md").read_text(encoding="utf-8")
+    assert "do not invent steps" in bug
+
+
+@pytest.mark.parametrize(
+    "template",
+    ["pull_request_template.md", "ISSUE_TEMPLATE/config.yml"]
+    + [f"ISSUE_TEMPLATE/{name}" for name in ("bug_report.md", "feature_request.md")],
+)
+def test_templates_are_english_outside_the_translation(template: str):
+    """Шаблоны и их комментарии — на английском; русский только в блоке перевода."""
+    text = (GITHUB / template).read_text(encoding="utf-8")
+    english = text[: text.lower().index("<details")] if "<details" in text.lower() else text
+    assert not re.search(r"[А-Яа-яЁё]", english), template
 
 
 @pytest.mark.parametrize("prefix", form.ISSUE_PREFIXES)

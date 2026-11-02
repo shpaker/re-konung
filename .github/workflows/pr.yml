@@ -1,6 +1,4 @@
-# Форма PR по CONTRIBUTING.md: заголовок Conventional Commits, английские разделы описания,
-# перевод последним сворачиваемым блоком, без запрещённых упоминаний. Логика проверки —
-# .github/scripts/contrib_form.py, она же покрыта tests/test_contrib_form.py.
+# Форма PR по CONTRIBUTING.md; логика — .github/scripts/contrib_form.py, покрыта tests/test_contrib_form.py.
 name: pr
 
 on:
@@ -34,8 +32,7 @@ jobs:
             style
             revert
 
-      # Тело PR берут из события, скрипт читает его из переменных окружения:
-      # многострочный текст через аргумент командной строки передавать нельзя.
+      # Тело — из события в переменную окружения: многострочным аргументом его не передать.
       - name: Форма описания PR
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}

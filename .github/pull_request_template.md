@@ -4,8 +4,8 @@
 
 ## Related
 
-<!-- `Closes #NN` — тикеты, которые этот PR закрывает целиком; часть тикета — ссылка номером без
-служебного слова. Без `Closes` тикет переживёт мерж. -->
+<!-- `Closes #NN` for every ticket this PR completes; cite a partly covered ticket by number only.
+Without the keyword the ticket survives the merge. -->
 
 None
 
