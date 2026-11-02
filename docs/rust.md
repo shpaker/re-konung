@@ -197,7 +197,9 @@ cannot start (the cell ahead is taken or has become impassable) and has stood fo
 `wait_before_repath_ticks` (12 ticks ≈ 0.72 s by default), and at least
 `repath_cooldown_ticks` (60 ticks ≈ 3.6 s) have passed since its last search. The
 whole route is not rechecked every tick: a creature learns about a blockage only
-when it is about to take a step.
+when it is about to take a step. A brand-new order searches at once, and a repeat
+of an order whose search just failed is held to the same window — see "Decision: a
+failed goal is retried on a cooldown".
 
 Both numbers are `WorldRules`, not constants: there are no confirmed values from
 the game, and part 3 can set its own. That a creature does not get stuck is held
@@ -224,6 +226,52 @@ The memory is kept across arrival, so an order re-sent to a creature already at
 rest on that goal is still a no-op; `World::stop` clears it, and a different goal
 overwrites it. A goal that had no route is not remembered, because re-sending it
 is the only way to retry once a crowd clears.
+
+### Decision: a failed goal is retried on a cooldown
+
+The paragraph above leaves a hole: a goal with no route is deliberately *not*
+remembered, so a rules loop that re-sends an unreachable order every tick gets a
+fresh search every tick. That is the engine's most expensive operation — the
+search over a whole unreachable area costs 8.9–9.6 ms, a sixth of a 60 ms tick for
+one creature (#54) — so `Actor::failed_goal` remembers the goal whose last search
+found no route, and a repeat of exactly that goal inside
+`repath_cooldown_ticks` of that search is refused without a search and without a
+new `Event::NoRoute` (`repeated_unreachable_order_is_throttled_to_the_cooldown`,
+`a_retry_inside_the_window_neither_searches_nor_reports_a_refusal`). The refusal is
+told to the caller by the return value of `move_to`; the event channel carries only
+the search that actually ran.
+
+It cannot be the same mechanism as `last_commanded`, and this is what #52 turned
+up: the idempotency memory has to be *cleared* when a search fails, otherwise the
+order sticks and a goal the crowd has freed is never retried
+(`deferred_no_route_can_be_retried_after_the_path_clears`). So the two memories
+pull in opposite directions — one keeps an order it must not re-search, the other
+keeps an order it must search again — and the throttle window is what separates
+them: the retry is late, never absent
+(`a_repeated_unreachable_order_gets_a_route_once_the_window_passes`). Late is the
+best the engine can promise: `Passage` is a query, not a notifier, so nothing tells
+the world that walkability changed and no search can be woken the moment a path
+clears. Notifying the world of a terrain change is its own design, taken up when a
+consumer exists (#54). `World::stop` clears the failed goal too, so
+a withdrawn order followed by the same order is a real search
+(`stop_clears_a_failed_goal_so_the_next_order_searches`), and a different goal is
+never held up by a failed one
+(`a_failed_goal_does_not_hold_up_an_order_to_another_one`).
+
+What it saves is arithmetic over the measured search cost above: a creature whose
+goal is cut off by a wall column costs 4 searches over 240 ticks instead of 241
+(the test asserts the number), that is ≈37 ms against ≈2.2 s of one creature's
+worst operation over 14 s of game time.
+
+This is a modern-experience guard, not a recovered rule: how often the original
+retries an unreachable order has not been worked out, and the window is the
+engine's own `WorldRules` number, not a confirmed one. Its bound is one remembered
+goal: a loop that switches between two unreachable orders searches on every switch,
+inside the window (`alternating_unreachable_orders_each_search_inside_the_window`).
+That is left as it is on purpose — widening the memory to a set costs state for a
+caller that does not exist yet, and a rules layer that oscillates between two goals
+every tick is a bug in the rules, not something the engine should paper over
+(#36 part 3 owns the cadence).
 
 ### Decision: an occupied goal takes the nearest ring
 
@@ -272,8 +320,10 @@ engine's business.
 - **A crowd with no detour.** If a repath around a taken cell gives no route, the
   creature drops the order and stops (`Event::NoRoute`): the search does not repeat
   forever, but neither does it resume by itself — whoever sent the order has to
-  send it again. Whether to hold the goal and wait for the crowd to clear is a
-  question for part 3: it is about behavior, not mechanics.
+  send it again, and a repeat is throttled to one search per
+  `repath_cooldown_ticks` ("Decision: a failed goal is retried on a cooldown").
+  Whether to hold the goal and wait for the crowd to clear is a question for
+  part 3: it is about behavior, not mechanics.
 - **A blockage mid-route.** A creature notices a closed cell only once it reaches
   it, so a tree fallen in the middle of a route is worked around a few cells late.
   Revisiting every route whenever walkability changes costs more and produces more
@@ -321,8 +371,9 @@ map parse and 15% of a 60 ms tick.
 
 The upshot: an engine tick costs microseconds and the entire cost is in route
 search, which is why `World` calls it no more often than `repath_cooldown_ticks`.
-The search for an unreachable goal stays the most expensive operation: part 3 must
-not run it on a timer for every creature.
+The search for an unreachable goal stays the most expensive operation: a rules loop
+re-sending such an order now costs one search per creature per window, not one per
+tick (#54, "Decision: a failed goal is retried on a cooldown").
 
 ### Pose cost
 
