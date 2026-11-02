@@ -32,11 +32,21 @@ pub struct Creature {
     pub cell: (i16, i16),
     pub direction: u8,
     pub state: u8,
+    /// Byte 0x04 of the character record: class bits (work, dead flag, sprite source).
+    /// See docs/k1/formats/game-state.md, `Character` offset 0x04.
+    pub class_id: u8,
     pub group: usize,
+    /// Group kind byte from Game.N (`kind` field): 0x20 player, 0x41–0x50 roaming,
+    /// 0x53 lone NPC, 0x80–0x82 villagers. Used for behavior classification.
+    /// See docs/k1/formats/game-state.md, `Group` offset 0x1E.
+    pub group_kind: u8,
     pub roaming: bool,
     /// Rectangle the creature's group was put in the map for.
     pub spawn: Rect,
     pub workplace: Option<Workplace>,
+    /// Byte 0xD6 of the character record: sprite set selector (GRAPH.RES models 0–2 or
+    /// Objects.res dynamic objects 0–29). See docs/k1/formats/game-state.md, offset 0xD6.
+    pub sprite_set: u8,
 }
 
 /// Everyone standing on `map_number`, ordered by record number.
@@ -69,10 +79,13 @@ fn creature(character: &Character, group: &Group, places: &HashMap<usize, Workpl
         cell: (character.x, character.y),
         direction: character.direction,
         state: character.state,
+        class_id: character.class_id,
         group: group.slot,
+        group_kind: group.kind,
         roaming: group.is_roaming(),
         spawn: group.spawn,
         workplace: places.get(&character.slot).copied(),
+        sprite_set: character.sprite_set,
     }
 }
 

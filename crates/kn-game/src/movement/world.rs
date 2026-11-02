@@ -105,6 +105,10 @@ struct Actor {
     walker: Walker,
     /// The cell the creature was sent to; kept until it arrives.
     goal: Option<Cell>,
+    /// The last goal an order named, kept across arrival so a tick loop that
+    /// re-sends the same order is recognized as a no-op rather than a new
+    /// search (docs/rust.md, "Decision: a repeated order is idempotent").
+    last_commanded: Option<Cell>,
     /// A new order not yet turned into a route: it arrived while the creature
     /// was mid-step and will be executed at the cell border.
     pending: bool,
@@ -119,6 +123,7 @@ impl Actor {
         Actor {
             walker,
             goal: None,
+            last_commanded: None,
             pending: false,
             waiting_ticks: 0,
             last_search: 0,
@@ -226,6 +231,12 @@ impl<P: Passage, K: Pace> World<P, K> {
     /// given up, and `Ok(0)` is returned then. `Err(NoRoute)` — there is no
     /// route and the creature stays where it is.
     ///
+    /// A repeated order to the goal the creature was last sent to is idempotent:
+    /// it neither resets the waiting counter nor forces a new search, and
+    /// returns the steps the current route still has (or `0` once arrived). A
+    /// tick loop that re-sends the same order every tick must not disturb the
+    /// repath timing (docs/rust.md, "Decision: a repeated order is idempotent").
+    ///
     /// The search events (`RouteSet`/`NoRoute`) go into the world's shared
     /// channel and come out first on the next [`World::tick_step`] — outside a
     /// tick the engine emits no events, but it does not lose them either.
@@ -234,10 +245,17 @@ impl<P: Passage, K: Pace> World<P, K> {
         if !self.grid.contains(goal) {
             return Err(WorldError::OutsideGrid);
         }
+        if self.actors[index].last_commanded == Some(goal) {
+            return Ok(self.actors[index].walker.route_len());
+        }
         self.actors[index].goal = Some(goal);
         self.actors[index].pending = true;
         self.actors[index].waiting_ticks = 0;
         if self.actors[index].walker.is_walking() {
+            // Deferred to the cell border: remember the goal so a repeat during
+            // the step is a no-op. If the deferred search then fails,
+            // `search_route` clears this, so a later retry can re-search.
+            self.actors[index].last_commanded = Some(goal);
             return Ok(0);
         }
         let mut events = Vec::new();
@@ -247,9 +265,13 @@ impl<P: Passage, K: Pace> World<P, K> {
     }
 
     /// Withdraw the order: the creature finishes the step it started and stops.
+    ///
+    /// Clears the remembered goal too, so a later order to the same cell is a
+    /// real new order, not an idempotent no-op.
     pub fn stop(&mut self, creature: CreatureId) -> Result<(), WorldError> {
         let index = self.index(creature).ok_or(WorldError::UnknownCreature)?;
         self.actors[index].goal = None;
+        self.actors[index].last_commanded = None;
         self.actors[index].pending = false;
         self.actors[index].waiting_ticks = 0;
         self.actors[index].walker.clear_route();
@@ -446,6 +468,7 @@ impl<P: Passage, K: Pace> World<P, K> {
             Some(route) => {
                 let steps = route.len();
                 self.actors[index].pending = false;
+                self.actors[index].last_commanded = Some(goal);
                 self.actors[index].walker.set_route(&route);
                 events.push(Event::RouteSet { creature, steps });
                 Some(steps)
@@ -453,6 +476,10 @@ impl<P: Passage, K: Pace> World<P, K> {
             None => {
                 self.actors[index].pending = false;
                 self.actors[index].goal = None;
+                // Forget the goal so a later order to it re-searches: re-sending
+                // an unreachable goal is the only retry once a crowd clears, and
+                // a stale memory would make that retry a silent no-op.
+                self.actors[index].last_commanded = None;
                 self.actors[index].walker.clear_route();
                 events.push(Event::NoRoute { creature, goal });
                 None
@@ -675,6 +702,72 @@ mod tests {
         assert_eq!(
             world.move_to(creature, Cell::new(9, 9)),
             Err(WorldError::OutsideGrid)
+        );
+    }
+
+    /// Block every in-grid neighbour of `goal` so nothing can reach it, and
+    /// return the cells so the test can clear them again.
+    fn seal(world: &mut World<Map, Uniform>, goal: Cell) -> Vec<Cell> {
+        let sealed: Vec<Cell> = Direction::ALL
+            .into_iter()
+            .filter_map(|direction| goal.neighbour(direction))
+            .filter(|cell| world.grid().contains(*cell))
+            .collect();
+        for cell in &sealed {
+            world.passage_mut().blocked.insert(*cell);
+        }
+        sealed
+    }
+
+    fn unseal(world: &mut World<Map, Uniform>, sealed: &[Cell]) {
+        for cell in sealed {
+            world.passage_mut().blocked.remove(cell);
+        }
+    }
+
+    /// A deferred order whose search finds no route must not be remembered: the
+    /// creature has to retry the same goal once the path clears. Regression for
+    /// the `last_commanded` hang where a deferred NoRoute left the goal sticky.
+    #[test]
+    fn deferred_no_route_can_be_retried_after_the_path_clears() {
+        let mut world = world(8, 8);
+        let creature = world.add(Cell::new(1, 2)).unwrap();
+        // Start a real step so the next order is carried out at the cell border.
+        world.move_to(creature, Cell::new(3, 2)).unwrap();
+        world.tick_step();
+        assert!(
+            world.state(creature).unwrap().moving,
+            "the creature should be mid-step"
+        );
+
+        // Sealed new goal: the deferred search cannot reach it.
+        let goal = Cell::new(6, 2);
+        let sealed = seal(&mut world, goal);
+        // Change the goal while mid-step — this is the deferred path.
+        assert_eq!(world.move_to(creature, goal), Ok(0));
+
+        // Run until the deferred search for the sealed goal reports NoRoute.
+        let mut saw_no_route = false;
+        for _ in 0..10 {
+            let events = world.tick_step();
+            if events
+                .iter()
+                .any(|event| matches!(event, Event::NoRoute { goal: g, .. } if *g == goal))
+            {
+                saw_no_route = true;
+                break;
+            }
+        }
+        assert!(
+            saw_no_route,
+            "the deferred order to the sealed goal must report NoRoute"
+        );
+
+        // Free the path and re-send the same goal: it must be searched again.
+        unseal(&mut world, &sealed);
+        assert!(
+            matches!(world.move_to(creature, goal), Ok(steps) if steps > 0),
+            "a retry to a now-reachable goal must build a route, not be ignored"
         );
     }
 

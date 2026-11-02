@@ -7,5 +7,6 @@
 
 pub mod creatures;
 pub mod resources;
+pub mod rules;
 pub mod scene;
 pub mod textures;
