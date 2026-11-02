@@ -79,9 +79,11 @@ pub const ATTRIBUTE_NAMES: [&str; 9] = [
 /// (Slavik game_item.cpp:185); название — запись 30–33 таблицы снаряжения
 pub const QUIVER_ITEM_TYPE: i8 = 12;
 
-/// Виды отрядов (байт 0x1E); бродячих игра ставит в случайную клетку
-/// прямоугольника появления, остальных — на место из записи персонажа
+/// Group kinds (byte 0x1E). The game scatters a roaming group across random
+/// cells of its spawn rectangle and places everyone else at the record position.
 pub const PLAYER_GROUP: u8 = 0x20;
+pub const FIRST_ROAMING: u8 = 0x41;
+pub const LAST_ROAMING: u8 = 0x50;
 pub const FIRST_FIXED_GROUP: u8 = 0x51;
 pub const VILLAGE_GROUP_BIT: u8 = 0x80;
 
@@ -166,9 +168,14 @@ pub struct Group {
 }
 
 impl Group {
-    /// Бродячий отряд: игра расставляет его членов случайно в spawn.
+    /// Roaming group: the game scatters its members randomly inside `spawn`.
+    ///
+    /// A range, not `kind < FIRST_FIXED_GROUP`: Slavik's low bound at
+    /// `game.cpp:651` never sees the player group (that loop skips
+    /// `_mainMapChar`, `game.cpp:638`), while the respawn path with no such skip
+    /// uses the range (`game.cpp:708`). See `docs/k1/formats/game-state.md`.
     pub fn is_roaming(&self) -> bool {
-        self.kind < FIRST_FIXED_GROUP && self.kind & VILLAGE_GROUP_BIT == 0
+        (FIRST_ROAMING..=LAST_ROAMING).contains(&self.kind)
     }
 
     pub fn members(&self) -> impl Iterator<Item = usize> + Clone {
@@ -1156,6 +1163,37 @@ mod tests {
         item.type_id = 1;
         item.concentration = 1.5f32.to_le_bytes();
         assert_eq!(item.concentration_value(), Concentration::Weight(1.5));
+    }
+
+    #[test]
+    fn only_kinds_in_the_roaming_range_are_roaming() {
+        let roaming = |kind: u8| {
+            Group {
+                kind,
+                ..Default::default()
+            }
+            .is_roaming()
+        };
+        assert!(
+            !roaming(PLAYER_GROUP),
+            "the player group is placed from its record, not scattered"
+        );
+        for kind in FIRST_ROAMING..=LAST_ROAMING {
+            assert!(roaming(kind), "kind {kind:#04x} must be roaming");
+        }
+        for kind in [
+            0x00,
+            0x01,
+            0x40,
+            FIRST_FIXED_GROUP,
+            0x53,
+            0x80,
+            0x81,
+            0x82,
+            0xFF,
+        ] {
+            assert!(!roaming(kind), "kind {kind:#04x} must not be roaming");
+        }
     }
 
     #[test]
