@@ -3,8 +3,10 @@
 
 mod common;
 
+use std::ffi::OsString;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use common::game_dirs;
 
@@ -87,6 +89,30 @@ fn character_sprites_end_with_their_blocks() {
         for (block, sprites) in graph.character_blocks.iter().zip(sprites) {
             assert_eq!(last_byte(sprites), block.end, "{edition}: блок");
             assert!(frames_have_images(sprites), "{edition}: кадры без картинок");
+        }
+    }
+}
+
+/// Анимации 6–9 — те же 0–3 без оружия в руках (бит 0x04 байта 0x03): у каждого
+/// блока спрайтов кадры пар состояний совпадают числом, а блоков ровно десять.
+/// Подтверждение гипотезы — docs/k1/formats/graph-res.md, docs/k1/creatures.md.
+#[test]
+fn animations_six_to_nine_mirror_zero_to_three() {
+    for (edition, game) in game_dirs() {
+        let data = fs::read(find_name(&game, "graph.res")).unwrap();
+        let graph = graph_res::parse(&data).unwrap();
+        for sprites in graph.models.iter().chain(&graph.equipment) {
+            assert_eq!(sprites.sequences.len(), 10, "{edition}: анимаций в блоке");
+            for state in 0..4 {
+                for direction in 0..8 {
+                    assert_eq!(
+                        sprites.sequences[state][direction].len(),
+                        sprites.sequences[state + 6][direction].len(),
+                        "{edition}: состояния {state} и {}",
+                        state + 6
+                    );
+                }
+            }
         }
     }
 }
@@ -180,6 +206,128 @@ fn executable_tables_are_found() {
             executable::FLAME_KINDS,
             "{edition}: огни"
         );
+    }
+}
+
+/// Текстовые таблицы ищутся по строению и однозначно. Строки игры здесь не
+/// сравниваются: проверяются только число записей и то, какая запись пуста.
+#[test]
+fn text_tables_are_found_and_shaped() {
+    for (edition, game) in game_dirs() {
+        let data = fs::read(executable::find(game.root()).unwrap()).unwrap();
+        let texts = executable::parse_texts(&data).unwrap();
+        assert_eq!(
+            texts.monsters.len(),
+            executable::MONSTER_NAMES,
+            "{edition}: монстры"
+        );
+        assert_eq!(
+            texts.names.len(),
+            executable::PEOPLE_NAMES,
+            "{edition}: имена"
+        );
+        assert_eq!(
+            texts.nicknames.len(),
+            executable::NICKNAMES,
+            "{edition}: прозвища"
+        );
+        assert_eq!(texts.maps.len(), executable::MAP_NAMES, "{edition}: карты");
+        // У монстров заполнены первые 20 записей, хвост пуст (docs/k1/formats/executable.md)
+        assert!(
+            texts.monsters[..20].iter().all(|name| !name.is_empty()),
+            "{edition}: названия монстров"
+        );
+        assert!(
+            texts.monsters[20..].iter().all(String::is_empty),
+            "{edition}: хвост монстров"
+        );
+        // Имя 0 и прозвище 0 — пустые записи, остальные заполнены
+        assert!(texts.names[0].is_empty(), "{edition}: имя 0");
+        assert!(
+            texts.names[1..].iter().all(|name| !name.is_empty()),
+            "{edition}: имена людей"
+        );
+        assert!(texts.nicknames[0].is_empty(), "{edition}: прозвище 0");
+        assert!(
+            texts.nicknames[1..].iter().all(|nick| !nick.is_empty()),
+            "{edition}: прозвища"
+        );
+        assert!(
+            texts.maps.iter().all(|map| !map.is_empty()),
+            "{edition}: карты"
+        );
+        // Без таблиц разбор exe не падает: их отсутствие — None, а не ошибка
+        assert!(
+            executable::parse(&data).unwrap().texts.is_some(),
+            "{edition}: parse"
+        );
+    }
+}
+
+/// Имя по таблицам собирается для каждого расставленного на картах персонажа.
+///
+/// В каждом начальном состоянии один житель без имени и прозвища (номер 0 в
+/// обоих байтах) — так в данных, и это единственное исключение.
+#[test]
+fn every_placed_character_is_named() {
+    for (edition, game) in game_dirs() {
+        let data = fs::read(executable::find(game.root()).unwrap()).unwrap();
+        let texts = executable::parse_texts(&data).unwrap();
+        for hero in game.state_numbers(GAME_FILES).unwrap() {
+            let state = game_state::parse(&game.state_bytes(hero, GAME_FILES).unwrap()).unwrap();
+            let mut nameless = Vec::new();
+            let mut monsters = 0;
+            let mut with_nick = 0;
+            for number in game.map_numbers(GAME_FILES).unwrap() {
+                let entities = game_state::on_map(&state, number as usize, Some(hero as usize));
+                for (character, _, _) in characters::placed(&entities, &state) {
+                    let name = executable::character_name(
+                        Some(&texts),
+                        character.class_id,
+                        character.name_id,
+                        character.nick_id,
+                    );
+                    let kind = i32::from(character.class_id & 0x7F);
+                    let monster = character.class_id & executable::MONSTER_CLASS != 0
+                        && kind < i32::from(executable::FIRST_VILLAGER_CLASS);
+                    if monster {
+                        // Название вида берётся по `класс & 0x3F − 1`, а не по номеру записи
+                        monsters += 1;
+                        let view = kind - i32::from(executable::MONSTER_CLASS) - 1;
+                        let Ok(view) = usize::try_from(view) else {
+                            panic!(
+                                "{edition} game.{hero} konung.{number}: класс {:#x} вне таблицы видов",
+                                character.class_id
+                            );
+                        };
+                        assert!(
+                            name == texts.monsters[view] && !name.is_empty(),
+                            "{edition} game.{hero} konung.{number}: вид {view} без названия"
+                        );
+                    } else if character.nick_id != 0 {
+                        // Прозвище идёт через пробел вторым словом, и оно непустое
+                        with_nick += 1;
+                        assert!(
+                            name.split_once(' ')
+                                .is_some_and(|(given, nick)| !given.is_empty() && !nick.is_empty()),
+                            "{edition} game.{hero} konung.{number}: прозвище не в имени"
+                        );
+                    }
+                    if name.is_empty() {
+                        nameless.push((character.class_id, character.name_id, character.nick_id));
+                    }
+                }
+            }
+            assert_eq!(
+                nameless,
+                vec![(0x51, 0, 0)],
+                "{edition} game.{hero}: жители без имени"
+            );
+            assert!(
+                monsters > 0 && with_nick > 0,
+                "{edition} game.{hero}: на карте не расставлено ни монстра, ни жителя с прозвищем"
+            );
+        }
     }
 }
 
@@ -278,6 +426,157 @@ fn every_character_on_every_map_is_drawn() {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Дайджест списка строк — FNV-1a 64 по UTF-8, где строки разделены переводом
+/// строки. В сравнение и в вывод при расхождении попадает только он: строки игры
+/// не попадают ни в git, ни в лог теста.
+fn digest(strings: &[String]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for string in strings {
+        for &byte in string.as_bytes().iter().chain(std::iter::once(&b'\n')) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x1000_0000_0000_01b3);
+        }
+    }
+    hash
+}
+
+/// Python-эталон печатает число записей и дайджест каждой таблицы, а также
+/// дайджест имён всех персонажей из Game.N — того же, что считает Rust.
+const PYTHON_DIGEST: &str = r#"
+import sys
+from pathlib import Path
+from konung.k1 import executable, game_state
+
+def digest(strings):
+    hash = 0xCBF29CE484222325
+    for s in strings:
+        for b in (s + "\n").encode("utf-8"):
+            hash = ((hash ^ b) * 0x10000000000001B3) & 0xFFFFFFFFFFFFFFFF
+    return hash
+
+game = Path(sys.argv[1])
+texts = executable.load(game).texts
+if texts is None:
+    raise SystemExit("нет текстовых таблиц")
+print("monsters", len(texts.monsters), format(digest(texts.monsters), "016x"))
+print("names", len(texts.names), format(digest(texts.names), "016x"))
+print("nicknames", len(texts.nicknames), format(digest(texts.nicknames), "016x"))
+print("maps", len(texts.maps), format(digest(texts.maps), "016x"))
+names = [
+    executable.character_name(texts, c.class_id, c.name_id, c.nick_id)
+    for number in game_state.numbers(game)
+    for c in game_state.load(game, number).characters
+    if c
+]
+print("characters", len(names), format(digest(names), "016x"))
+"#;
+
+/// Интерпретатор с установленным пакетом: переменная KONUNG_PYTHON, затем
+/// `.venv` проекта, затем `uv run python` (создаст окружение сам), затем python3.
+fn interpreters(repo: &Path) -> Vec<(OsString, Vec<OsString>)> {
+    let mut out = Vec::new();
+    if let Some(python) = std::env::var_os("KONUNG_PYTHON") {
+        out.push((python, Vec::new()));
+    }
+    let venv = if cfg!(windows) {
+        repo.join(".venv").join("Scripts").join("python.exe")
+    } else {
+        repo.join(".venv").join("bin").join("python")
+    };
+    if venv.is_file() {
+        out.push((venv.into_os_string(), Vec::new()));
+    }
+    out.push((
+        OsString::from("uv"),
+        vec![OsString::from("run"), OsString::from("python")],
+    ));
+    out.push((OsString::from("python3"), Vec::new()));
+    out
+}
+
+/// (имя таблицы, число записей, шестнадцатеричный дайджест) из Python-эталона.
+fn parse_digest_line(line: &str) -> (String, usize, String) {
+    let mut fields = line.split(' ');
+    let (Some(name), Some(count), Some(hash)) = (fields.next(), fields.next(), fields.next())
+    else {
+        panic!("не разобралась строка дайджеста: {line}");
+    };
+    let count = count
+        .parse()
+        .unwrap_or_else(|error| panic!("{line}: {error}"));
+    (name.to_owned(), count, hash.to_owned())
+}
+
+fn python_digests(game_root: &Path) -> Vec<(String, usize, String)> {
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut failures = Vec::new();
+    for (program, prefix) in interpreters(&repo) {
+        let mut command = Command::new(&program);
+        command
+            .args(&prefix)
+            .args(["-c", PYTHON_DIGEST])
+            .arg(game_root)
+            .current_dir(&repo);
+        let outcome = match command.output() {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+                return stdout
+                    .lines()
+                    .filter(|line| !line.is_empty())
+                    .map(parse_digest_line)
+                    .collect();
+            }
+            Ok(output) => format!(
+                "{}: {}",
+                program.to_string_lossy(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+            Err(error) => format!("{}: {error}", program.to_string_lossy()),
+        };
+        failures.push(outcome);
+    }
+    panic!(
+        "не удалось получить дайджесты у Python-эталона (нужен uv sync или KONUNG_PYTHON):\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn text_tables_match_the_python_reference() {
+    for (edition, game) in game_dirs() {
+        let data = fs::read(executable::find(game.root()).unwrap()).unwrap();
+        let texts = executable::parse_texts(&data).unwrap();
+        let mut names = Vec::new();
+        for hero in game.state_numbers(GAME_FILES).unwrap() {
+            let state = game_state::parse(&game.state_bytes(hero, GAME_FILES).unwrap()).unwrap();
+            names.extend(state.characters.iter().flatten().map(|character| {
+                executable::character_name(
+                    Some(&texts),
+                    character.class_id,
+                    character.name_id,
+                    character.nick_id,
+                )
+            }));
+        }
+        for (name, count, hash) in python_digests(game.root()) {
+            let (rust_count, rust_hash) = match name.as_str() {
+                "monsters" => (texts.monsters.len(), digest(&texts.monsters)),
+                "names" => (texts.names.len(), digest(&texts.names)),
+                "nicknames" => (texts.nicknames.len(), digest(&texts.nicknames)),
+                "maps" => (texts.maps.len(), digest(&texts.maps)),
+                "characters" => (names.len(), digest(&names)),
+                other => panic!("неизвестная таблица {other}"),
+            };
+            assert_eq!(rust_count, count, "{edition}: число записей {name}");
+            assert_eq!(
+                format!("{rust_hash:016x}"),
+                hash,
+                "{edition}: дайджест {name} — состав или порядок строк разошёлся с Python"
+            );
         }
     }
 }
