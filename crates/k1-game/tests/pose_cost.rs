@@ -79,16 +79,25 @@ fn pose_assembly_cost() {
                 // One pose: the layers and frames of one state and direction.
                 let clock = Instant::now();
                 for _ in 0..REPEATS {
-                    let pose = scene::pose_in(character, px, py, &state, &graphics, 1, 4).unwrap();
+                    let pose = scene::pose_in(
+                        character,
+                        px,
+                        py,
+                        &state,
+                        &graphics,
+                        &scene::PoseKind::start(1, 4),
+                    )
+                    .unwrap();
                     black_box(pose.expect("the creature has no pose"));
                 }
                 report("one pose (state 1, direction 4)", REPEATS, clock.elapsed());
 
                 // A creature that turns its head or starts to walk: the pose the
                 // display asks for when state or direction changes. All sixteen of
-                // them, so the number is what one change costs on average.
+                // them per round, so the iterations counted are the poses built.
+                let changes = (REPEATS / 16) * 16;
                 let clock = Instant::now();
-                for _ in 0..REPEATS / 16 {
+                for _ in 0..changes / 16 {
                     for direction in 0..8u8 {
                         for state_value in [0u8, 1] {
                             let pose = scene::pose_in(
@@ -97,8 +106,7 @@ fn pose_assembly_cost() {
                                 py,
                                 &state,
                                 &graphics,
-                                state_value,
-                                direction,
+                                &scene::PoseKind::start(state_value, direction),
                             )
                             .unwrap();
                             black_box(pose);
@@ -107,7 +115,7 @@ fn pose_assembly_cost() {
                 }
                 report(
                     "a pose per state and direction change",
-                    REPEATS,
+                    changes,
                     clock.elapsed(),
                 );
 
@@ -124,8 +132,11 @@ fn pose_assembly_cost() {
                             py,
                             &state,
                             &graphics,
-                            0,
-                            creature.direction,
+                            &scene::PoseKind {
+                                state: 0,
+                                direction: creature.direction,
+                                frame: None,
+                            },
                         )
                         .unwrap()
                         {

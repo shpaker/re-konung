@@ -312,8 +312,8 @@ not run it on a timer for every creature.
 
 ### Pose cost
 
-Release build, Apple M4 Pro, `konung.1` of both editions (25 creatures), measured by
-the `k1-game/tests/pose_cost.rs` test under `#[ignore]`:
+Release build, Apple M4 Pro, `konung.1` of both editions (25 creatures), the spread
+of three runs, measured by the `k1-game/tests/pose_cost.rs` test under `#[ignore]`:
 
 ```bash
 cargo test --release --manifest-path crates/Cargo.toml -p k1-game \
@@ -322,17 +322,17 @@ cargo test --release --manifest-path crates/Cargo.toml -p k1-game \
 
 | Operation | Time |
 |---|---|
-| parsing `GRAPH.RES` and `Objects.res` | 19–26 ms |
-| one pose: the layers and frames of one state and direction | 56–57 µs |
-| rebuilding a pose when state or direction changes | 61 µs |
-| every creature of the map in its resting pose | 0.92 ms |
+| parsing `GRAPH.RES` and `Objects.res` | 16–25 ms |
+| one pose: the layers and frames of one state and direction | 57–61 µs |
+| rebuilding a pose when state or direction changes | 66–72 µs |
+| every creature of the map in its resting pose (25 of them) | 0.95–1.06 ms |
 
 **Decision (issue #36, whether lazily built poses are affordable):** a pose is built
 when it is needed and kept until the creature changes its state or direction. One
-assembly is a hundredth of the 60 ms tick, and a whole map of creatures costs 37 µs
+assembly is a hundredth of the 60 ms tick, and a whole map of creatures costs 38–42 µs
 per creature, so preloading every state and every direction for a map would multiply
 the work by dozens to show what nobody asked for. The part worth caching is the
-parsed resources, not the poses: one parse is worth 300–500 poses, which is why
+parsed resources, not the poses: one parse is worth 250–450 poses, which is why
 `Resources::with_graphics` hands the tables to a closure instead of returning them,
 and `k1_game::scene::Graphics` holds them while poses are built.
 

@@ -1,6 +1,7 @@
 //! Тесты сцены на реальных данных из `original/` (без них пропускаются).
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use k1_data::{
@@ -583,19 +584,29 @@ fn map_plus_poses_gives_the_same_draw_list() {
                                 py,
                                 &state,
                                 &graphics,
-                                character.state,
-                                character.direction,
+                                &scene::PoseKind::of_record(character),
                             )
                             .ok()
                             .flatten()
                         })
                         .collect::<Vec<_>>();
+                    let whole =
+                        scene::draw_list(&input, graph, Some(objects), &resources.tables).unwrap();
+                    // Two implementations of the same order: `assemble` moves the
+                    // map, `ordered` borrows it and can be asked again. Comparing
+                    // the borrowed one with the built list is not the list compared
+                    // with itself — the pre-split reference does that job elsewhere
                     let map =
                         scene::map_scene(&input, graph, Some(objects), &resources.tables).unwrap();
                     assert_eq!(
-                        scene::draw_list(&input, graph, Some(objects), &resources.tables).unwrap(),
-                        scene::assemble(map, &poses),
-                        "{edition} konung.{number}: map plus poses do not rebuild the same list"
+                        map.ordered(&poses).into_iter().cloned().collect::<Vec<_>>(),
+                        whole,
+                        "{edition} konung.{number}: the borrowed order is not the built list"
+                    );
+                    assert_eq!(
+                        map.ordered(&poses).into_iter().cloned().collect::<Vec<_>>(),
+                        whole,
+                        "{edition} konung.{number}: a second question to the same map changed its answer"
                     );
                     if !poses.is_empty() {
                         reached += 1;
@@ -653,15 +664,8 @@ fn poses_build_for_every_direction_and_both_locomotion_states() {
                         for state_value in [REST, WALK] {
                             let mut layers = None;
                             for direction in 0..8u8 {
-                                let pose = scene::pose_in(
-                                    character,
-                                    px,
-                                    py,
-                                    &state,
-                                    &graphics,
-                                    state_value,
-                                    direction,
-                                )
+                                let pose = scene::pose_in(character, px, py, &state, &graphics,
+    &scene::PoseKind::start(state_value, direction))
                                 .unwrap()
                                 .unwrap_or_else(|| {
                                     panic!(
@@ -705,4 +709,308 @@ fn poses_build_for_every_direction_and_both_locomotion_states() {
             })
             .unwrap();
     }
+}
+
+/// FNV-1a over the debug form of every piece: composition, order, position, size,
+/// group and each animation frame with its own offsets and tick count. Written by
+/// hand so the number does not depend on a hashing implementation, and identical to
+/// the one that produced [`PRE_SPLIT_DIGESTS`].
+fn digest(pieces: &[scene::DrawPiece]) -> u64 {
+    let mut text = String::with_capacity(pieces.len() * 96);
+    for piece in pieces {
+        writeln!(&mut text, "{piece:?}").unwrap();
+    }
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// The draw list of every map of both editions as the code on `main` **before** the
+/// map/poses split produced it (`a84da9d`, all overlays, `Game.0`).
+///
+/// Criterion 8 needs a reference that does not share its fate with the code under
+/// review: comparing `draw_list` with `assemble` compares one implementation with
+/// itself, so a regression in the shared helpers would pass. These digests came
+/// from the old implementation, run over the same maps.
+const PRE_SPLIT_DIGESTS: &[(&str, u32, u64)] = &[
+    // RUS: konung.<map> -> digest of the whole draw list
+    ("rus", 1, 5749883684937406443),
+    ("rus", 2, 9161472304994093849),
+    ("rus", 3, 15441249324165904371),
+    ("rus", 4, 10310950892279433450),
+    ("rus", 5, 7865325501130524335),
+    ("rus", 6, 1220244666432478341),
+    ("rus", 7, 3606969751509788418),
+    ("rus", 8, 12187214553015334689),
+    ("rus", 10, 17998478349977806281),
+    ("rus", 11, 15738468660808415919),
+    ("rus", 12, 11506854818216821933),
+    ("rus", 14, 2599733937630678180),
+    ("rus", 15, 14665066190776868239),
+    ("rus", 16, 16933600115205983393),
+    ("rus", 17, 11451060058494973695),
+    ("rus", 19, 17568150206872617557),
+    ("rus", 20, 7472022925656013005),
+    ("rus", 21, 7310076132161249349),
+    ("rus", 22, 3781409832599483759),
+    ("rus", 23, 2516170089819141946),
+    ("rus", 24, 11739767581096017853),
+    ("rus", 25, 14963309209168605188),
+    ("rus", 27, 16318292348713827363),
+    ("rus", 28, 12553299292801783248),
+    ("rus", 29, 9291741145341910911),
+    ("rus", 30, 3020644430475566515),
+    ("rus", 32, 16641061535675611849),
+    ("rus", 33, 6697558674563883508),
+    ("rus", 35, 7017169008861186178),
+    ("rus", 36, 2487565378183083243),
+    ("rus", 37, 887267549316916178),
+    ("rus", 38, 14709114758235585212),
+    ("rus", 39, 16483379676538354137),
+    ("rus", 40, 15931316204313533989),
+    ("rus", 42, 5740726217271924841),
+    ("rus", 43, 14536132049177961780),
+    ("rus", 44, 8543204414698186456),
+    ("rus", 45, 9558525583742928606),
+    ("rus", 46, 7151706124225445335),
+    ("rus", 47, 10500731466997366681),
+    ("rus", 48, 1681298281485412061),
+    ("rus", 49, 13226154613141434537),
+    ("rus", 50, 12476644280498086465),
+    // ENG: konung.<map> -> digest of the whole draw list
+    ("eng", 1, 12562467986253598706),
+    ("eng", 2, 12522008781678676449),
+    ("eng", 3, 15441249324165904371),
+    ("eng", 4, 3403604186159680504),
+    ("eng", 5, 7865325501130524335),
+    ("eng", 6, 1220244666432478341),
+    ("eng", 7, 360051675474091955),
+    ("eng", 8, 12187214553015334689),
+    ("eng", 10, 17998478349977806281),
+    ("eng", 11, 7851809796508020556),
+    ("eng", 12, 16859731634212215923),
+    ("eng", 14, 2599733937630678180),
+    ("eng", 15, 14665066190776868239),
+    ("eng", 16, 11705496971328505016),
+    ("eng", 17, 11451060058494973695),
+    ("eng", 19, 12069145880203745133),
+    ("eng", 20, 7472022925656013005),
+    ("eng", 21, 7310076132161249349),
+    ("eng", 22, 4896757579899622059),
+    ("eng", 23, 2516170089819141946),
+    ("eng", 24, 12387401690749881455),
+    ("eng", 25, 14963309209168605188),
+    ("eng", 27, 3725805137010609191),
+    ("eng", 28, 12553299292801783248),
+    ("eng", 29, 12566428361159402877),
+    ("eng", 30, 3020644430475566515),
+    ("eng", 32, 16641061535675611849),
+    ("eng", 33, 5559463842684049742),
+    ("eng", 35, 11458689056935783505),
+    ("eng", 36, 2487565378183083243),
+    ("eng", 37, 14061130096415377861),
+    ("eng", 38, 14709114758235585212),
+    ("eng", 39, 5892485684375647732),
+    ("eng", 40, 15931316204313533989),
+    ("eng", 42, 5740726217271924841),
+    ("eng", 43, 14536132049177961780),
+    ("eng", 44, 8543204414698186456),
+    ("eng", 45, 9558525583742928606),
+    ("eng", 46, 7151706124225445335),
+    ("eng", 47, 10500731466997366681),
+    ("eng", 48, 1681298281485412061),
+    ("eng", 49, 13226154613141434537),
+    ("eng", 50, 12476644280498086465),
+];
+
+#[test]
+fn draw_list_matches_the_digest_taken_before_the_split() {
+    for (edition, game) in game_dirs() {
+        let resources = Resources::load(&game).unwrap();
+        let data = game.state_bytes(0, GAME_FILES).unwrap();
+        let state = game_state::parse(&data).unwrap();
+        let mut compared = 0;
+        for number in game.map_numbers(GAME_FILES).unwrap() {
+            let pieces = draw_with_state(&game, &resources, number, EVERY_SWITCH, &state, 0);
+            let expected = PRE_SPLIT_DIGESTS
+                .iter()
+                .find(|(name, map, _)| *name == edition && *map == number)
+                .map(|(_, _, digest)| *digest)
+                .unwrap_or_else(|| panic!("{edition} konung.{number}: no reference digest"));
+            assert_eq!(
+                digest(&pieces),
+                expected,
+                "{edition} konung.{number}: the draw list changed against the pre-split reference"
+            );
+            compared += 1;
+        }
+        let reference = PRE_SPLIT_DIGESTS
+            .iter()
+            .filter(|(name, _, _)| *name == edition)
+            .count();
+        assert_eq!(
+            compared, reference,
+            "{edition}: the reference holds {reference} maps, the test walked {compared}"
+        );
+    }
+}
+
+/// Finding 1 of the review: the map must stay usable after its list was taken, so
+/// that #37 can reorder it on every change of a pose without rebuilding it.
+#[test]
+fn a_map_scene_is_reusable_for_another_set_of_poses() {
+    for (edition, game) in game_dirs() {
+        let resources = Resources::load(&game).unwrap();
+        let data = game.state_bytes(0, GAME_FILES).unwrap();
+        let state = game_state::parse(&data).unwrap();
+        let map_bytes = game.map_bytes(1, GAME_FILES).unwrap();
+        let konung_map = map::parse(&map_bytes).unwrap();
+        let lights_bytes = game.lights_bytes(1, GAME_FILES).unwrap();
+        let lights = lights_bytes
+            .as_ref()
+            .map(|bytes| map::parse_lights(bytes).unwrap());
+        let entities = game_state::on_map(&state, 1, Some(0));
+        let input = SceneInput {
+            map: &konung_map,
+            lights: lights.as_ref(),
+            entities: Some(entities),
+            state: Some(&state),
+            overlays: EVERY_SWITCH,
+        };
+        resources
+            .with_graphics(|graph, objects| {
+                let graphics = scene::Graphics::new(graph, objects, &resources.tables);
+                let map =
+                    scene::map_scene(&input, graph, Some(objects), &resources.tables).unwrap();
+                let recorded =
+                    scene::creature_poses(&input, graph, Some(objects), &resources.tables).unwrap();
+                let static_stacks = map.stacks().len();
+                assert!(
+                    static_stacks > 0,
+                    "{edition} konung.1: the map holds no object to sort creatures among"
+                );
+
+                // The same map, asked twice: the first answer is the list the
+                // single pass builds, the second is a map where everyone turned to
+                // face east and started to walk.
+                let first: Vec<scene::DrawPiece> =
+                    map.ordered(&recorded).into_iter().cloned().collect();
+                assert_eq!(
+                    first,
+                    scene::draw_list(&input, graph, Some(objects), &resources.tables).unwrap(),
+                    "{edition} konung.1: a reused map orders something other than the full pass"
+                );
+                let turned = characters::placed(input.entities.as_ref().unwrap(), &state)
+                    .into_iter()
+                    .filter_map(|(character, x, y)| {
+                        let (px, py) = game_state::character_position(x, y);
+                        scene::pose_in(
+                            character,
+                            px,
+                            py,
+                            &state,
+                            &graphics,
+                            &scene::PoseKind::start(1, 4),
+                        )
+                        .ok()
+                        .flatten()
+                    })
+                    .collect::<Vec<_>>();
+                let second: Vec<scene::DrawPiece> =
+                    map.ordered(&turned).into_iter().cloned().collect();
+                assert_eq!(
+                    map.stacks().len(),
+                    static_stacks,
+                    "{edition} konung.1: asking for a new list changed the map itself"
+                );
+                assert!(
+                    second != first,
+                    "{edition} konung.1: turning every creature left the list untouched"
+                );
+            })
+            .unwrap();
+    }
+}
+
+/// Finding 2 of the review: a pose of another animation must not inherit the frame
+/// index of the record, and the recorded frame stays the default.
+#[test]
+fn a_pose_frame_is_the_recorded_one_unless_asked_otherwise() {
+    for (edition, game) in game_dirs() {
+        let resources = Resources::load(&game).unwrap();
+        let data = game.state_bytes(0, GAME_FILES).unwrap();
+        let state = game_state::parse(&data).unwrap();
+        let entities = game_state::on_map(&state, 1, Some(0));
+        resources
+            .with_graphics(|graph, objects| {
+                let graphics = scene::Graphics::new(graph, objects, &resources.tables);
+                let (character, x, y) = characters::placed(&entities, &state)
+                    .into_iter()
+                    .find(|(creature, _, _)| !creature.has_dynamic_sprite())
+                    .expect("konung.1 holds no human");
+                let (px, py) = game_state::character_position(x, y);
+                let record = scene::PoseKind::of_record(character);
+                let frames = characters::frame_count(character, graph, objects);
+
+                let recorded = scene::pose_in(character, px, py, &state, &graphics, &record)
+                    .unwrap()
+                    .expect("the creature has no pose");
+                let base = animation_of(&recorded).base;
+                assert_eq!(
+                    base,
+                    usize::from(character.frame).min(frames.saturating_sub(1)),
+                    "{edition}: the recorded pose lost its own frame"
+                );
+
+                // A fresh animation starts at its first frame, whatever the record
+                // said about the old one.
+                let started = scene::pose_in(
+                    character,
+                    px,
+                    py,
+                    &state,
+                    &graphics,
+                    &scene::PoseKind::start(record.state, record.direction),
+                )
+                .unwrap()
+                .expect("the creature has no walking pose");
+                assert_eq!(animation_of(&started).base, 0, "{edition}");
+
+                // An explicit frame beyond the animation is clamped, not wrapped:
+                // the original's own sequence lookup falls back to the first frame
+                // (docs/k1/formats/graph-res.md), never to an index outside it.
+                let clamped = scene::pose_in(
+                    character,
+                    px,
+                    py,
+                    &state,
+                    &graphics,
+                    &scene::PoseKind {
+                        state: record.state,
+                        direction: record.direction,
+                        frame: Some(u8::MAX),
+                    },
+                )
+                .unwrap()
+                .expect("the creature has no pose");
+                assert_eq!(
+                    animation_of(&clamped).base,
+                    frames - 1,
+                    "{edition}: frame {frames} - 1 is the last one of this animation"
+                );
+            })
+            .unwrap();
+    }
+}
+
+/// The first piece of a pose that really animates: a layer of one frame carries no
+/// animation at all.
+fn animation_of(pose: &scene::Pose) -> &scene::DrawAnimation {
+    pose.pieces
+        .iter()
+        .find_map(|piece| piece.animation.as_ref())
+        .expect("a pose of a twelve-frame animation holds no animated layer")
 }
