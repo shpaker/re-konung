@@ -1,0 +1,4 @@
+# Пустого issue нет: выбор между Bug report и Feature request обязателен.
+# Прав сопровождающим это не отнимает — тикет не по шаблону создают через
+# `gh issue create`, сохранив те же разделы и перевод (CONTRIBUTING.md).
+blank_issues_enabled: false

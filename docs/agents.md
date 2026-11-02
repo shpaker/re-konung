@@ -34,7 +34,7 @@ Claude получает плагин из `.claude/settings.json` (`extraKnownMa
 - на сообщении коммита — Conventional Commits, запрет `Co-authored-by` от агентов и упоминаний ИИ;
 - перед push — `just test`.
 
-Шимы ставит `just setup`; `just check` прогоняет всё вручную. CI (`.github/workflows/ci.yml`) повторяет ruff и тесты; тесты на данных игры там пропускаются, потому что оригиналов в репозитории нет. Форму PR проверяет `.github/workflows/pr.yml`.
+Шимы ставит `just setup`; `just check` прогоняет всё вручную. CI (`.github/workflows/ci.yml`) повторяет ruff и тесты; тесты на данных игры там пропускаются, потому что оригиналов в репозитории нет. Форму PR проверяет `.github/workflows/pr.yml` скриптом `.github/scripts/contrib_form.py` — тот же скрипт в `tests/test_contrib_form.py` держит в порядке шаблоны issues и PR. Язык и разделы описаний — [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Данные игры
 

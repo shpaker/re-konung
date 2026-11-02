@@ -1,4 +1,6 @@
-# Форма PR по CONTRIBUTING.md: заголовок, разделы описания, без упоминаний ИИ
+# Форма PR по CONTRIBUTING.md: заголовок Conventional Commits, английские разделы описания,
+# перевод последним сворачиваемым блоком, без запрещённых упоминаний. Логика проверки —
+# .github/scripts/contrib_form.py, она же покрыта tests/test_contrib_form.py.
 name: pr
 
 on:
@@ -6,12 +8,15 @@ on:
     types: [opened, edited, reopened, synchronize]
 
 permissions:
+  contents: read
   pull-requests: read
 
 jobs:
   form:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
+
       - uses: amannn/action-semantic-pull-request@v6.1.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -29,16 +34,10 @@ jobs:
             style
             revert
 
-      - uses: actions/github-script@v9.0.0
-        with:
-          script: |
-            const { title, body } = context.payload.pull_request
-            const text = body ?? ''
-            const problems = []
-            for (const section of ['## Что', '## Зачем', '## Имеет отношение к', '## Как проверить', '## Как делать ревью', '## Риски', '## Окружение']) {
-              if (!text.includes(section)) problems.push(`в описании нет раздела «${section}»`)
-            }
-            // Пути вроде .claude/skills — не упоминание: перед именем точка или слэш
-            const ai = /(?<![.\/\w])(claude|qwen)|co-authored-by|generated with|(^|[^\p{L}])ИИ([^\p{L}]|$)|нейросет|\bai\//iu
-            if (ai.test(`${title}\n${text}`)) problems.push('в заголовке или описании упоминается ИИ')
-            if (problems.length > 0) core.setFailed(`PR не по CONTRIBUTING.md:\n${problems.join('\n')}`)
+      # Тело PR берут из события, скрипт читает его из переменных окружения:
+      # многострочный текст через аргумент командной строки передавать нельзя.
+      - name: Форма описания PR
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 .github/scripts/contrib_form.py
