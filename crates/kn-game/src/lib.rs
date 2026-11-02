@@ -6,9 +6,9 @@
 //! Специфика «Князя 1» спрятана в `k1-game` и `k1-data`; при появлении K2
 //! добавится второй бэкенд, не меняя этот API.
 //!
-//! [movement] — общий движок перемещения: он не зависит ни от K1, ни от
-//! отображения и строит сетку, маршруты и шаг по тикам над данными, которые
-//! ему приносят снаружи.
+//! [movement] — the shared movement engine: it depends on neither K1 nor the
+//! display, and builds the grid, the routes and the per-tick step from data
+//! brought to it from outside.
 
 pub mod movement;
 

@@ -1,78 +1,82 @@
-//! Движение по маршруту: существо идёт шаг за шагом, шаг длится заданное
-//! число тиков.
+//! Walking a route: the creature goes step by step, each step lasting a given
+//! number of ticks.
 //!
-//! Поиском маршрута этот код не занимается и про A\*, проходимость и занятость
-//! ничего не знает — он потребляет готовый маршрут ([`super::route::Route`]) и
-//! отвечает на один вопрос: в какой клетке существо стоит сейчас и куда идёт
-//! шагом (issue #35: «поиск маршрута и движение по нему — разные части кода»).
+//! This code searches nothing and knows nothing of A\*, walkability or
+//! occupancy — it consumes a finished route ([`super::route::Route`]) and
+//! answers one question: which cell the creature stands in now and which one it
+//! is stepping to (issue #35: "route search and walking a route are different
+//! parts of the code").
 
 use super::CreatureId;
 use super::grid::{Cell, Direction};
 use super::route::Route;
 
-/// Шаг существа: в какую клетку оно идёт и сколько тиков это длится.
+/// A creature's step: the cell it is entering and how many ticks that takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Step {
     pub to: Cell,
     pub direction: Direction,
-    /// Сколько тиков длится шаг — ровно столько, сколько сказал поставщик данных.
+    /// Step duration in ticks — exactly as many as the data supplier said.
     pub ticks: u32,
-    /// Сколько тиков шага прошло, включая тот, на котором шаг начался.
+    /// Ticks of the step already spent, including the one it started on.
     pub elapsed: u32,
 }
 
-/// Состояние одного существа: где стоит, куда идёт и какой анимацией занято.
+/// One creature's state: where it stands, where it is going, and which
+/// animation it is busy with.
 ///
-/// Ровно это нужно внешнему миру, чтобы поставить спрайт в клетку и выбрать
-/// анимацию; как спрайт рисуют, движок не знает.
+/// This is exactly what the outer world needs to put a sprite in a cell and
+/// pick an animation; how a sprite is drawn is not the engine's business.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WalkState {
     pub creature: CreatureId,
-    /// Клетка, в которой существо стоит.
+    /// The cell the creature stands in.
     pub cell: Cell,
-    /// Клетка, из которой пришли в текущую: по ней визуализация сортирует
-    /// спрайты и досчитывает скольжение.
+    /// The cell it came from into this one: the viewer sorts sprites by it and
+    /// finishes the glide.
     pub entered_from: Option<Cell>,
-    /// Куда существо просили идти; `None` — дошло или идёт без цели.
+    /// Where the creature was told to go; `None` — it arrived, or moves with no
+    /// goal.
     pub goal: Option<Cell>,
-    /// Пиксельная точка клетки, где существо стоит.
+    /// The pixel point of the cell it stands in.
     pub pixel: (i32, i32),
-    /// Направление, к которому существо повёрнуто: меняется на границе клетки.
+    /// The direction it faces: it changes at the cell border.
     pub direction: Option<Direction>,
-    /// Идёт ли сейчас шаг.
+    /// Whether a step is in progress right now.
     pub moving: bool,
-    /// Клетка, в которую идёт шаг.
+    /// The cell the step is entering.
     pub step_to: Option<Cell>,
     pub step_ticks: u32,
     pub step_elapsed: u32,
 }
 
 impl WalkState {
-    /// Сколько тиков осталось до конца текущего шага.
+    /// Ticks left before the current step ends.
     pub fn ticks_left_in_step(&self) -> u32 {
         self.step_ticks.saturating_sub(self.step_elapsed)
     }
 }
 
-/// Существо, идущее по маршруту.
+/// A creature walking a route.
 ///
-/// Маршрут потребляется по одному шагу: шаг идёт `ticks` тиков, после чего
-/// существо переходит в следующую клетку. Во время шага существо занимает
-/// прежнюю клетку и резервирует новую; направление меняется только на границе
-/// клетки (issue #35, критерий 4).
+/// The route is consumed one step at a time: a step lasts `ticks` ticks, then
+/// the creature moves into the next cell. While stepping it still occupies the
+/// old cell and reserves the new one; direction changes only at the cell border
+/// (issue #35, criterion 4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Walker {
     pub creature: CreatureId,
     cell: Cell,
     entered_from: Option<Cell>,
     goal: Option<Cell>,
-    /// Оставшиеся шаги; первый — куда существо идёт сейчас или собирается.
+    /// Steps left; the first one is where the creature is going now, or is
+    /// about to go.
     route: Vec<Direction>,
     step: Option<Step>,
 }
 
 impl Walker {
-    /// Существо без маршрута, стоящее в клетке.
+    /// A creature with no route, standing in a cell.
     pub fn new(creature: CreatureId, cell: Cell) -> Walker {
         Walker {
             creature,
@@ -92,8 +96,8 @@ impl Walker {
         self.entered_from
     }
 
-    /// Клетка, куда существо просили идти (после обхода занятой цели — фактическая
-    /// конечная клетка маршрута).
+    /// The cell the creature was told to reach (after routing around a taken
+    /// goal, the route's actual last cell).
     pub fn goal(&self) -> Option<Cell> {
         self.goal
     }
@@ -106,20 +110,21 @@ impl Walker {
         self.step.is_some()
     }
 
-    /// Идёт ли существо к цели — шагом или между шагами.
+    /// Whether the creature is heading for its goal — mid-step or between
+    /// steps.
     pub fn is_moving(&self) -> bool {
         !self.route.is_empty() || self.step.is_some()
     }
 
-    /// Ждёт ли существо на месте с несъеденным маршрутом: клетка впереди
-    /// занята или стала непроходимой.
+    /// Whether it stands still with a route it cannot start: the cell ahead is
+    /// taken or has become impassable.
     pub fn is_waiting(&self) -> bool {
         self.step.is_none() && !self.route.is_empty()
     }
 
-    /// Направление, к которому существо повёрнуто: направление шага, а стоя —
-    /// направление следующего шага маршрута, а после прихода — направление,
-    /// откуда оно пришло.
+    /// The direction it faces: the step's direction while walking, otherwise
+    /// the next step of the route, and after arriving the direction it came
+    /// from.
     pub fn facing(&self) -> Option<Direction> {
         if let Some(step) = self.step {
             return Some(step.direction);
@@ -131,7 +136,7 @@ impl Walker {
             .and_then(|from| Direction::between(from, self.cell))
     }
 
-    /// Клетка, в которую смотрит следующий шаг.
+    /// The cell the next step points at.
     pub fn next_cell(&self) -> Option<Cell> {
         let direction = *self.route.first()?;
         self.cell.neighbour(direction)
@@ -141,19 +146,20 @@ impl Walker {
         self.step
     }
 
-    /// Сколько тиков остаётся до конца текущего шага.
+    /// Ticks left before the current step ends.
     pub fn ticks_left_in_step(&self) -> u32 {
         self.step
             .map(|step| step.ticks.saturating_sub(step.elapsed))
             .unwrap_or(0)
     }
 
-    /// Взять маршрут: существо пойдёт по нему из своей текущей клетки.
+    /// Take a route: the creature walks it from the cell it is in now.
     ///
-    /// Маршрут заменяется целиком и только когда существо не идёт шагом:
-    /// посреди шага клетку уже не отменить, поэтому пересчёт ждут на границе
-    /// клетки (docs/rust.md, «Решение: пересчёт без дрожи»).
-    /// `false` — шаг идёт, маршрут остался прежним.
+    /// The route replaces the old one whole, and only while the creature is not
+    /// mid-step: a cell already given up cannot be taken back during a step, so
+    /// a repath is waited for at the cell border (docs/rust.md, "Decision:
+    /// repathing without thrash"). `false` — a step is running and the route
+    /// stayed as it was.
     pub fn set_route(&mut self, route: &Route) -> bool {
         if self.step.is_some() {
             return false;
@@ -163,18 +169,18 @@ impl Walker {
         true
     }
 
-    /// Отменить маршрут; существо остаётся там, где стоит.
+    /// Drop the route; the creature stays where it stands.
     pub fn clear_route(&mut self) {
         self.route.clear();
         self.goal = None;
     }
 
-    /// Начать следующий шаг длительностью `ticks` тиков.
+    /// Start the next step, `ticks` ticks long.
     ///
-    /// Клетку назначения существо уже зарезервировало за собой — это забота
-    /// [`super::world`], здесь только учёт времени. `None` — идти некуда или шаг
-    /// уже идёт. Длительность 0 считается одним тиком: нулевого шага не бывает,
-    /// а паниковать из-за данных нельзя.
+    /// The creature has already reserved the destination cell — that is
+    /// [`super::world`]'s job, here only time is accounted. `None` — nowhere to
+    /// go, or a step is already running. A duration of 0 counts as one tick: a
+    /// zero-length step does not exist, and data must not panic the engine.
     pub fn start_step(&mut self, ticks: u32) -> Option<Direction> {
         if self.step.is_some() {
             return None;
@@ -190,11 +196,11 @@ impl Walker {
         Some(direction)
     }
 
-    /// Продвинуть существо на тик. `true` — на этом тике шаг закончился и
-    /// существо встало в новую клетку.
+    /// Advance the creature by one tick. `true` — the step ended on this tick
+    /// and the creature is in the new cell.
     ///
-    /// Шаг длительностью `d` тиков завершается на `d`-м тике после начала:
-    /// ровно `d` тиков занято ходьбой, и паузы между шагами нет.
+    /// A step `d` ticks long finishes on the `d`-th tick after it started:
+    /// exactly `d` ticks are spent walking, and there is no pause between steps.
     pub fn tick(&mut self) -> bool {
         let Some(step) = self.step else {
             return false;
@@ -207,8 +213,9 @@ impl Walker {
             return false;
         }
         self.step = None;
-        // Маршрут мог быть снят посреди шага (`clear_route`): цель шага живёт в
-        // самом шаге, поэтому съедание маршрута от него не зависит.
+        // The route may have been dropped mid-step (`clear_route`): the step's
+        // destination lives in the step, so consuming the route does not depend
+        // on it.
         if !self.route.is_empty() {
             self.route.remove(0);
         }
@@ -217,14 +224,15 @@ impl Walker {
         true
     }
 
-    /// Прервать начатый шаг: существо остаётся в прежней клетке, маршрут не
-    /// сдвигается. Так мир откатывает шаг, клетка назначения которого стала
-    /// непроходима, пока существо шёл.
+    /// Interrupt a started step: the creature stays in the old cell and the
+    /// route does not advance. This is how the world rolls back a step whose
+    /// destination became impassable while the creature was walking.
     pub fn cancel_step(&mut self) -> Option<Step> {
         self.step.take()
     }
 
-    /// Снять цель, когда маршрут съеден целиком. `true` — существо дошло.
+    /// Drop the goal once the route is spent entirely. `true` — the creature
+    /// arrived.
     pub fn finish(&mut self) -> bool {
         if self.step.is_none() && self.route.is_empty() && self.goal.is_some() {
             self.goal = None;
@@ -233,7 +241,8 @@ impl Walker {
         false
     }
 
-    /// Что нужно наружу, чтобы поставить спрайт в клетку и выбрать анимацию.
+    /// What the outside needs to place the sprite in a cell and pick an
+    /// animation.
     pub fn state(&self) -> WalkState {
         WalkState {
             creature: self.creature,
@@ -249,7 +258,8 @@ impl Walker {
         }
     }
 
-    /// Клетки, которые существо держит: под собой и зарезервированную шагом.
+    /// The cells the creature holds: the one under it and the one its step
+    /// reserves.
     pub fn held_cells(&self) -> Vec<Cell> {
         let mut cells = vec![self.cell];
         if let Some(step) = self.step {
@@ -267,7 +277,8 @@ mod tests {
         CreatureId::new(id)
     }
 
-    /// Маршрут из направлений — так же, как его строит поиск, но без поиска.
+    /// A route from directions — the same shape search builds, minus the
+    /// search.
     fn route_from(from: Cell, directions: &[Direction]) -> Route {
         let mut cells = vec![from];
         let mut current = from;
@@ -292,7 +303,7 @@ mod tests {
                     break;
                 }
             }
-            assert_eq!(finished_at, Some(ticks - 1), "шаг в {ticks} тиков");
+            assert_eq!(finished_at, Some(ticks - 1), "a step of {ticks} ticks");
             assert_eq!(walker.cell(), from.neighbour(Direction::East).unwrap());
         }
     }
@@ -307,7 +318,7 @@ mod tests {
         assert_eq!(
             walker.next_cell(),
             Some(first),
-            "маршрут сдвинулся раньше времени"
+            "the route advanced too early"
         );
         assert_eq!(walker.ticks_left_in_step(), 1);
         assert!(!walker.tick());
@@ -323,7 +334,8 @@ mod tests {
         assert_eq!(walker.goal(), None);
     }
 
-    /// Направление меняется на границе клетки: середина шага его не трогает.
+    /// Direction changes at the cell border: the middle of a step leaves it
+    /// alone.
     #[test]
     fn direction_changes_only_at_the_cell_border() {
         let from = Cell::new(6, 6);
@@ -333,14 +345,18 @@ mod tests {
         for _ in 0..3 {
             assert!(!walker.tick());
             assert_eq!(walker.facing(), Some(Direction::East));
-            assert_eq!(walker.cell(), from, "клетка сменилась до конца шага");
+            assert_eq!(
+                walker.cell(),
+                from,
+                "the cell changed before the step ended"
+            );
         }
         assert!(walker.tick());
         assert_eq!(walker.cell(), from.neighbour(Direction::East).unwrap());
         assert_eq!(
             walker.facing(),
             Some(Direction::SouthEast),
-            "не повернулось к следующему шагу"
+            "not turned to the next step"
         );
         assert_eq!(walker.ticks_left_in_step(), 0);
     }
@@ -355,14 +371,18 @@ mod tests {
         assert_eq!(
             walker.facing(),
             Some(Direction::East),
-            "поворот остался после прихода"
+            "the turn persisted after arriving"
         );
         assert_eq!(walker.entered_from(), Some(from));
-        assert_eq!(walker.held_cells(), vec![walker.cell()], "резерв не снят");
+        assert_eq!(
+            walker.held_cells(),
+            vec![walker.cell()],
+            "the reservation was not dropped"
+        );
         assert!(!walker.is_moving());
         assert!(walker.next_cell().is_none());
         assert!(walker.start_step(3).is_none());
-        assert!(!walker.tick(), "пустой тик после остановки");
+        assert!(!walker.tick(), "an idle tick after stopping");
         assert!(walker.finish());
         assert!(!walker.finish());
     }
@@ -377,7 +397,7 @@ mod tests {
             from.neighbour(Direction::East).unwrap(),
             &[Direction::North],
         );
-        assert!(!walker.set_route(&other), "маршрут заменён посреди шага");
+        assert!(!walker.set_route(&other), "the route was replaced mid-step");
         assert!(!walker.is_waiting());
         assert_eq!(walker.facing(), Some(Direction::East));
     }
@@ -417,11 +437,8 @@ mod tests {
         let mut walker = Walker::new(creature(1), from);
         assert!(!walker.is_waiting());
         walker.set_route(&route_from(from, &[Direction::North; 2]));
-        assert!(
-            walker.is_waiting(),
-            "маршрут есть, шага нет — существо ждёт"
-        );
+        assert!(walker.is_waiting(), "a route but no step means waiting");
         walker.start_step(2).unwrap();
-        assert!(!walker.is_waiting(), "во время шага существо не ждёт");
+        assert!(!walker.is_waiting(), "a creature mid-step is not waiting");
     }
 }

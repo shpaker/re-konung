@@ -1,14 +1,15 @@
-//! Длительность шага: её задаёт поставщик данных, а не движок.
+//! Step duration: the data supplier sets it, not the engine.
 
 use super::grid::Direction;
 
-/// Сколько тиков идёт шаг существа в этом направлении.
+/// How many ticks a creature's step lasts in this direction.
 pub trait Pace {
-    /// Длительность шага в тиках игры.
+    /// Step duration in game ticks.
     ///
-    /// Для K1 это число кадров анимации ходьбы в соответствующем направлении
-    /// (Slavik `game_play.cpp:3727-3740`): движок не знает ни числа кадров, ни
-    /// того, что это анимация. Значение 0 движок считает как один тик — шага
-    /// нулевой длины не бывает, а паниковать из-за данных нельзя.
+    /// For K1 this is the number of walk-animation frames in that direction
+    /// (Slavik `game_play.cpp:3727-3740`): the engine knows neither the frame
+    /// count nor that it is an animation at all. A duration of 0 is counted as
+    /// one tick — a zero-length step does not exist, and data must not be able
+    /// to panic the engine.
     fn step_ticks(&self, creature: super::CreatureId, direction: Direction) -> u32;
 }

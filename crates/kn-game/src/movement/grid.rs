@@ -1,46 +1,42 @@
-//! Изометрическая сетка мелкой решётки: клетки, 8 направлений, перевод в пиксели.
+//! The isometric fine grid: cells, 8 directions, conversion to pixels.
 //!
-//! Движок знает только геометрию. Проходимость и занятость клеток приходят
-//! извне ([`super::passage::Passage`] и [`super::occupancy::Occupancy`]);
-//! данные карты поставщику известны, а не движку: здесь нет ни форматов, ни
-//! Bevy, ни специфики части серии.
+//! Geometry only. Walkability and occupancy arrive from outside
+//! ([`super::passage::Passage`] and [`super::occupancy::Occupancy`]): map data
+//! belongs to the supplier, not to the engine, so there are no formats, no
+//! Bevy and no specifics of any part of the series here.
 //!
-//! Формулы пиксельной позиции согласованы с `k1_data::game_state`
-//! (`character_position` и `character_cell`): общей зависимости от K1 движку не
-//! нужно, поэтому константы живут здесь, а сверку держит тест
-//! `fine_grid_matches_k1_data` (см. `tests/movement_grid.rs`).
+//! The pixel formulas are agreed with `k1_data::game_state`
+//! (`character_position` and `character_cell`). The engine needs no dependency
+//! on K1, so the constants live here and the cross-check lives in the
+//! `fine_grid_matches_k1_data` test (`tests/movement_grid.rs`).
 
-/// Шаг клетки мелкой решётки по x, пикселей: половина шага тайловой сетки.
+/// Fine-grid horizontal step in pixels: half of the tile grid's step.
 pub const STEP_X: i32 = 58;
-/// Шаг строки мелкой решётки по y, пикселей: половина шага строки тайлов.
+/// Fine-grid vertical step in pixels: half of a tile row step.
 pub const STEP_Y: i32 = 16;
-/// Нечётные строки сдвинуты вправо на половину шага по x.
+/// Odd rows are shifted right by half the horizontal step.
 pub const ODD_ROW_SHIFT: i32 = STEP_X / 2;
 
-/// Ширина мелкой сетки карты «Князя 1» (`k1_data::map::FINE_WIDTH`).
+/// Columns of the K1 map's fine grid (`k1_data::map::FINE_WIDTH`).
 pub const FINE_WIDTH: u32 = 160;
-/// Высота мелкой сетки карты «Князя 1» (`k1_data::map::FINE_HEIGHT`).
+/// Rows of the K1 map's fine grid (`k1_data::map::FINE_HEIGHT`).
 pub const FINE_HEIGHT: u32 = 320;
 
-/// Единицы стоимости шага ([`Direction::cost`]): 1/8 пикселя.
+/// Unit of [`Direction::cost`]: 1/8 of a pixel.
 pub const COST_UNITS_PER_PIXEL: u32 = 8;
 
-/// Самое длинное смещение в пикселях за один шаг — восток или запад. Нужно для
-/// оценки расстояния до окрестности занятой цели ([`super::route`]).
-pub const MAX_STEP_PX: i32 = STEP_X;
-
-/// Клетка мелкой решётки: столбец и строка, отсчёт от левого верхнего угла
-/// карты; строки идут вниз по пикселям.
+/// A fine-grid cell: column and row counted from the map's top-left corner;
+/// rows grow downward in pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Cell {
     pub column: u32,
     pub row: u32,
 }
 
-/// Направление шага. Порядок значений — тот же, что в таблице смещений
-/// оригинала (Slavik `game.cpp:2918-2947`), поэтому индекс направления служит
-/// ключом к кадрам анимации ходьбы. Имена описывают экран: y в пикселях карты
-/// растёт вниз.
+/// Step direction. The variant order is the order of the original's offset
+/// table (Slavik `game.cpp:2918-2947`), so a direction index is also the key
+/// into walk-animation frames. Names describe the screen: map pixel y grows
+/// downward.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Direction {
     West,
@@ -54,7 +50,7 @@ pub enum Direction {
 }
 
 impl Direction {
-    /// Все направления в порядке таблицы оригинала.
+    /// Every direction, in the order of the original's table.
     pub const ALL: [Direction; 8] = [
         Direction::West,
         Direction::NorthWest,
@@ -66,7 +62,7 @@ impl Direction {
         Direction::SouthWest,
     ];
 
-    /// Индекс направления в таблице оригинала: 0 — запад, далее по часовой.
+    /// Index in the original's table: 0 is west, then clockwise.
     pub const fn index(self) -> usize {
         match self {
             Direction::West => 0,
@@ -80,8 +76,8 @@ impl Direction {
         }
     }
 
-    /// Смещение клетки-соседа `(столбец, строка)`. Оно зависит от чётности
-    /// строки, потому что нечётные строки сдвинуты вправо.
+    /// Neighbour offset `(column, row)`. It depends on row parity because odd
+    /// rows are shifted right.
     pub const fn offset(self, odd_row: bool) -> (i32, i32) {
         match (self, odd_row) {
             (Direction::West, _) => (-1, 0),
@@ -99,8 +95,8 @@ impl Direction {
         }
     }
 
-    /// Смещение пиксельной точки клетки: от чётности строки не зависит — сдвиг
-    /// строк как раз компенсирует разницу двух таблиц смещений.
+    /// Offset of the cell's pixel point: independent of row parity — the row
+    /// shift exactly cancels the difference between the two offset tables.
     pub const fn pixel_offset(self) -> (i32, i32) {
         match self {
             Direction::West => (-STEP_X, 0),
@@ -114,21 +110,22 @@ impl Direction {
         }
     }
 
-    /// Направление шага из клетки в соседнюю, или `None`, если клетки не
-    /// соседние.
+    /// Direction of the step from a cell to its neighbour, or `None` if the
+    /// two cells are not neighbours.
     pub fn between(from: Cell, to: Cell) -> Option<Direction> {
         Direction::ALL
             .into_iter()
             .find(|&dir| from.neighbour(dir) == Some(to))
     }
 
-    /// Восток, запад, север и юг: соседняя клетка касается текущей только
-    /// углом (общая вершина ромбов). Такой шаг проходит сквозь вершину, где
-    /// сходятся четыре клетки, поэтому разрешён, лишь когда обе клетки вдоль
-    /// пути проходимы и свободны, — иначе существо срезало бы угол.
+    /// East, west, north and south: the neighbour touches the current cell at
+    /// one corner only (the rhombi share a vertex). Such a step crosses the
+    /// vertex where four cells meet, so it is allowed only when both cells
+    /// alongside the path are walkable — otherwise the creature would cut a
+    /// corner.
     ///
-    /// Шаги «по диагонали экрана» (северо-восток и дальше) делят с текущей
-    /// клеткой целое ребро: срезать угол им негде.
+    /// Screen-diagonal steps (north-east and onward) share a whole edge with
+    /// the current cell: there is no corner left for them to cut.
     pub const fn corner_flanks(self) -> Option<[Direction; 2]> {
         match self {
             Direction::East => Some([Direction::NorthEast, Direction::SouthEast]),
@@ -139,13 +136,13 @@ impl Direction {
         }
     }
 
-    /// Стоимость шага для поиска маршрута, в единицах
-    /// [`COST_UNITS_PER_PIXEL`] (1/8 пикселя): 8·58 на восток и запад, 8·32 на
-    /// север и юг и 8·√(29² + 16²) по диагонали, округлённая вверх.
+    /// Step cost for route search, in [`COST_UNITS_PER_PIXEL`] (1/8 pixel)
+    /// units: 8·58 east and west, 8·32 north and south, and 8·√(29² + 16²)
+    /// rounded up along the diagonals.
     ///
-    /// Округление вверх принципиально: стоимость шага никогда не меньше его
-    /// настоящей длины, поэтому эвристика поиска остаётся допустимой
-    /// (docs/rust.md, «Решение: стоимость шага и эвристика A*»).
+    /// Rounding up is deliberate: a step must never cost less than its real
+    /// length, which is what keeps the search heuristic admissible
+    /// (docs/rust.md, "Decision: step cost and the A* heuristic").
     pub const fn cost(self) -> u32 {
         match self {
             Direction::East | Direction::West => COST_UNITS_PER_PIXEL * STEP_X as u32,
@@ -155,8 +152,8 @@ impl Direction {
     }
 }
 
-/// `ceil(8 · √(29² + 16²))` — стоимость диагонального шага; число сверяет тест
-/// `diagonal_cost_matches_pixel_length`.
+/// `ceil(8 · √(29² + 16²))` — the diagonal step's cost; the
+/// `diagonal_cost_matches_pixel_length` test checks the number.
 const COST_DIAGONAL: u32 = 265;
 
 impl Cell {
@@ -164,9 +161,10 @@ impl Cell {
         Cell { column, row }
     }
 
-    /// Пиксельная точка клетки — центр её ромба, туда встаёт спрайт.
+    /// The cell's pixel point — the centre of its rhombus, where the sprite
+    /// is placed.
     ///
-    /// Формула совпадает с `k1_data::game_state::character_position`.
+    /// The formula matches `k1_data::game_state::character_position`.
     pub fn centre(self) -> (i32, i32) {
         let column = self.column as i64;
         let row = self.row as i64;
@@ -177,8 +175,8 @@ impl Cell {
         )
     }
 
-    /// Клетка-сосед в этом направлении, или `None` за левым верхним краем
-    /// координат. Границы сетки знает [`Grid::neighbour`].
+    /// The neighbour in this direction, or `None` past the top-left edge of
+    /// the coordinate space. The grid's bounds are [`Grid::neighbour`]'s job.
     pub fn neighbour(self, direction: Direction) -> Option<Cell> {
         let (dc, dr) = direction.offset(self.row & 1 == 1);
         let column = self.column as i64 + i64::from(dc);
@@ -191,21 +189,21 @@ impl Cell {
         Some(Cell::new(column, row))
     }
 
-    /// Координаты в решётке без сдвига строк.
+    /// Coordinates in the lattice without the row shift.
     ///
-    /// Клетки мелкой решётки — обычная квадратная сетка в базисе шагов
-    /// «юго-восток» и «северо-восток»: четыре шага, которые на экране идут по
-    /// диагонали, в этих координатах ортогональные, а восток, запад, север и
-    /// юг — наоборот, диагональные. Соседство, расстояние в клетках и запрет
-    /// срезания углов описываются тогда без ветвления по чётности строки.
+    /// Fine-grid cells form an ordinary square lattice in the basis of the
+    /// south-east and north-east steps: the four steps that look diagonal on
+    /// screen are orthogonal here, and east, west, north and south become the
+    /// diagonals. Adjacency, cell distance and the corner-cutting rule then
+    /// need no branch on row parity.
     pub fn lattice(self) -> (i64, i64) {
         let column = self.column as i64;
         let row = self.row as i64;
         (column + row / 2, column - (row + 1) / 2)
     }
 
-    /// Обратный перевод из решётки без сдвига строк, или `None`, если паре
-    /// координат клетка не соответствует — она лежит за левым верхним краем.
+    /// Back from the unshifted lattice, or `None` when the pair matches no
+    /// cell — it lies past the top-left edge.
     pub fn from_lattice(u: i64, v: i64) -> Option<Cell> {
         let row = u - v;
         let column = (u + v + (row & 1)) / 2;
@@ -215,18 +213,19 @@ impl Cell {
         Some(Cell::new(column as u32, row as u32))
     }
 
-    /// Минимальное число шагов до другой клетки без учёта проходимости —
-    /// расстояние Чебышёва в координатах решётки.
+    /// Fewest steps to another cell, ignoring walkability — Chebyshev distance
+    /// in lattice coordinates.
     pub fn lattice_distance(self, other: Cell) -> u32 {
         let (a, b) = self.lattice();
         let (c, d) = other.lattice();
         i64::abs_diff(a, c).max(i64::abs_diff(b, d)) as u32
     }
 
-    /// Расстояние между точками клеток в единицах [`Direction::cost`] —
-    /// прямая линия в пикселях, умноженная на 8, округлённая вниз.
+    /// Distance between two cells' pixel points in [`Direction::cost`] units:
+    /// the straight line in pixels times 8, rounded down.
     ///
-    /// Округление вниз нужно эвристике A*: она обязана не переоценивать.
+    /// Rounding down is what the A* heuristic requires: it must not
+    /// overestimate.
     pub fn cost_distance(self, other: Cell) -> u32 {
         let (ax, ay) = self.centre();
         let (bx, by) = other.centre();
@@ -239,7 +238,7 @@ impl Cell {
     }
 }
 
-/// Размер сетки, в которой ищутся соседи.
+/// Size of the grid that neighbour lookups run in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Grid {
     pub columns: u32,
@@ -251,7 +250,7 @@ impl Grid {
         Grid { columns, rows }
     }
 
-    /// Мелкая сетка карты «Князя 1»: 160×320.
+    /// The K1 map's fine grid: 160×320.
     pub const fn fine() -> Grid {
         Grid::new(FINE_WIDTH, FINE_HEIGHT)
     }
@@ -260,17 +259,17 @@ impl Grid {
         cell.column < self.columns && cell.row < self.rows
     }
 
-    /// Соседняя клетка внутри сетки, иначе `None`.
+    /// The neighbour inside the grid, otherwise `None`.
     pub fn neighbour(self, cell: Cell, direction: Direction) -> Option<Cell> {
         let next = cell.neighbour(direction)?;
         self.contains(next).then_some(next)
     }
 
-    /// Ближайшая клетка к пиксельной точке карты.
+    /// The cell closest to a map pixel point.
     ///
-    /// Округление половинок — к чётному, как `round()` в Python-этлоне и в
-    /// `k1_data::game_state::character_cell`: иначе обратный перевод расходился
-    /// бы с прямым на границах клеток.
+    /// Halves round to even, as `round()` does in the Python reference and in
+    /// `k1_data::game_state::character_cell`: otherwise the reverse conversion
+    /// would disagree with the forward one on cell borders.
     pub fn cell_at(self, x: i32, y: i32) -> Option<Cell> {
         let row = round_half_even(i64::from(y) - i64::from(STEP_Y), i64::from(STEP_Y));
         let shift = i64::from(2 - (row & 1) as i32) * i64::from(ODD_ROW_SHIFT);
@@ -283,7 +282,7 @@ impl Grid {
     }
 }
 
-/// Деление с округлением половинок к чётному — так же, как `round()` в Python.
+/// Division rounding halves to even, the way Python's `round()` does.
 fn round_half_even(numerator: i64, denominator: i64) -> i64 {
     let floor = numerator.div_euclid(denominator);
     let twice = 2 * numerator.rem_euclid(denominator);
@@ -311,8 +310,8 @@ mod tests {
         }
     }
 
-    /// Соседи: таблица смещений и пиксельные шаги согласованы и на чётной, и
-    /// на нечётной строке — все 8 направлений.
+    /// Neighbours: the offset table and the pixel steps agree on even and on
+    /// odd rows alike — all 8 directions.
     #[test]
     fn neighbour_offsets_match_pixel_offsets() {
         for odd_row in [false, true] {
@@ -339,9 +338,10 @@ mod tests {
         }
     }
 
-    /// Клетки, стоящие поперёк шага «через угол», — его ортогональные соседи:
-    /// шаг идёт через вершину ромба, где сходятся ровно четыре клетки, и каждая
-    /// боковая клетка лежит от этой вершины на полшага по оси картинки.
+    /// The cells alongside a step "through a corner" are its orthogonal
+    /// neighbours: the step crosses a rhombus vertex where exactly four cells
+    /// meet, and every flank sits half a step from that vertex along a screen
+    /// axis.
     #[test]
     fn corner_flanks_stand_across_the_step() {
         let from = Cell::new(10, 10);
@@ -365,18 +365,18 @@ mod tests {
                 from.neighbour(flanks[0]).unwrap(),
                 from.neighbour(flanks[1]).unwrap(),
             ] {
-                // Боковая клетка соседна и с началом, и с концом шага.
+                // A flank neighbours both the start and the end of the step.
                 assert!(Direction::between(from, flank).is_some());
                 assert!(Direction::between(to, flank).is_some());
                 let (fx, fy) = flank.centre();
                 let offset = (fx - mid_x, fy - mid_y);
                 assert!(
                     half.contains(&offset),
-                    "{direction:?}: {flank:?} стоит от вершины шага как {offset:?}"
+                    "{direction:?}: {flank:?} sits off the step's vertex as {offset:?}"
                 );
                 seen.push(offset);
             }
-            assert_ne!(seen[0], seen[1], "{direction:?}: боковые клетки совпали");
+            assert_ne!(seen[0], seen[1], "{direction:?}: flanks coincide");
         }
     }
 
@@ -410,11 +410,11 @@ mod tests {
             let cost = f64::from(direction.cost());
             assert!(
                 (cost - scaled).abs() < 8.0,
-                "{direction:?}: стоимость {cost} далека от {scaled}"
+                "{direction:?}: cost {cost} is far from {scaled}"
             );
             assert!(
                 cost >= scaled,
-                "{direction:?}: стоимость {cost} дешевле шага {scaled}"
+                "{direction:?}: cost {cost} is cheaper than the step's {scaled}"
             );
         }
         assert_eq!(Direction::SouthEast.cost(), COST_DIAGONAL);
@@ -433,8 +433,9 @@ mod tests {
         }
     }
 
-    /// Точка решётки за левым верхним краем не должна превращаться в клетку:
-    /// иначе окрестность цели у края карты ловила бы клетки из другого угла.
+    /// A lattice point past the top-left corner must not become a cell:
+    /// otherwise a goal neighbourhood near the map edge would pick up cells
+    /// from the opposite corner.
     #[test]
     fn lattice_point_outside_the_corner_is_not_a_cell() {
         assert_eq!(Cell::from_lattice(-1, 0), None);
@@ -463,8 +464,8 @@ mod tests {
                 let cell = Cell::new(column, row);
                 let (x, y) = cell.centre();
                 assert_eq!(grid.cell_at(x, y), Some(cell));
-                // Точки ближе к этой клетке, чем к соседним: ±(28, 7) с
-                // запасом до половины ромба (29, 8).
+                // Points nearer this cell than its neighbours: ±(28, 7), with
+                // margin inside half a rhombus (29, 8).
                 assert_eq!(grid.cell_at(x + 28, y + 7), Some(cell));
                 assert_eq!(grid.cell_at(x - 28, y - 7), Some(cell));
             }

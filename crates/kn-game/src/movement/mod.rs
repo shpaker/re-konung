@@ -1,26 +1,28 @@
-//! Общий движок перемещения: изометрическая сетка мелкой решётки, проходимость
-//! и занятость клеток, поиск маршрута, движение по маршруту и игровой тик.
+//! Shared movement engine: the isometric fine grid, cell walkability and
+//! occupancy, route search, walking a route and the game tick.
 //!
-//! Слой не знает ни о Bevy, ни о специфике «Князя 1»: механика перемещения в
-//! K1 и K2 предположительно почти одинакова (AGENTS.md, «Приоритет: современный
-//! опыт»), поэтому она живёт здесь, а сведения части приходят извне:
+//! The layer knows neither Bevy nor anything specific to K1: movement mechanics
+//! in K1 and K2 are presumably nearly identical (AGENTS.md, "Priority: modern
+//! experience"), so the mechanics live here and the part's knowledge arrives
+//! from outside:
 //!
-//! - проходимость клетки — [`passage::Passage`] (данные карты, объекты);
-//! - длительность шага в тиках — [`pace::Pace`] (число кадров анимации);
-//! - занятость клеток — состояние движка ([`occupancy::Occupancy`]): только он
-//!   знает, кто куда идёт шагом.
+//! - cell walkability — [`passage::Passage`] (map data, objects);
+//! - step duration in ticks — [`pace::Pace`] (number of animation frames);
+//! - cell occupancy — engine state ([`occupancy::Occupancy`]): only the engine
+//!   knows who is mid-step and where.
 //!
-//! Часов движок не ведёт: он считает тики, а сколько в тике миллисекунд знает
-//! внешний мир — для K1 это 60 мс, [`crate::TICK_MS`] (Slavik `game.h:30`).
+//! The engine keeps no clock: it counts ticks, and how many milliseconds a tick
+//! is belongs to the outer world — 60 ms for K1, [`crate::TICK_MS`] (Slavik
+//! `game.h:30`).
 //!
-//! Правила игры — кто куда идёт и почему — не здесь: их добавляет часть 3
-//! эпика #33. Выдуманных правил движок не содержит: всё, что не подтверждено по
-//! оригиналу, либо отдаётся поставщику данных, либо оформлено решением проекта с
-//! обоснованием в `docs/rust.md`.
+//! Game rules — who goes where and why — are not here: epic #33 part 3 adds
+//! them, and the engine contains no invented ones. Anything not confirmed
+//! against the original is either handed to a data supplier or written up as a
+//! project decision with its reason in `docs/rust.md`.
 //!
-//! Поиск маршрута ([`route`]) и движение по нему ([`walk`]) разведены по
-//! разным модулям: у поиска нет понятия тика, у движения — знания о том, как
-//! маршрут искался. [`world`] сводит их вместе на одном тике.
+//! Searching ([`route`]) and walking ([`walk`]) are deliberately split: search
+//! has no notion of a tick, walking has no idea how its route was found.
+//! [`world`] is the only place they meet, on one tick.
 
 pub mod grid;
 pub mod occupancy;
@@ -31,11 +33,11 @@ pub mod route;
 pub mod walk;
 pub mod world;
 
-/// Существо движка: его номер, выданный [`world::World::add`].
+/// A creature of the engine: the number issued by [`world::World::add`].
 ///
-/// Номер — это и порядок обхода на тике: он детерминирован, и спор за клетку
-/// решает тот, кто раньше по номеру (docs/rust.md, «Решение: кто уступает
-/// клетку»).
+/// The number is also the order creatures are visited in on a tick, so a
+/// dispute over a cell is settled by the lower number, deterministically
+/// (docs/rust.md, "Decision: who yields a cell").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CreatureId(u32);
 

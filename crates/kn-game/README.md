@@ -20,29 +20,29 @@
   `TGame.N` для обучения), а ошибка одной карты попадает в её строку отчёта,
   не прерывая проверку остальных.
 
-## Перемещение
+## Movement
 
-`kn_game::movement` — общий движок перемещения: изометрическая сетка мелкой
-решётки, проходимость и занятость клеток, поиск маршрута, движение по маршруту и
-игровой тик. Он не знает ни о Bevy, ни о K1: в `kn-game` этот слой живёт потому,
-что механика перемещения K1 и K2 предположительно одинакова
-([docs/k1/movement.md](../../docs/k1/movement.md) — факты,
-[docs/rust.md](../../docs/rust.md) — решения проекта).
+`kn_game::movement` — the shared movement engine: the isometric fine grid, cell
+walkability and occupancy, route search, walking a route and the game tick. It
+knows neither Bevy nor K1: the layer lives in `kn-game` because the movement
+mechanics of K1 and K2 are presumably the same
+([docs/k1/movement.md](../../docs/k1/movement.md) — the facts,
+[docs/rust.md](../../docs/rust.md) — the project decisions).
 
-- `Grid`/`Cell`/`Direction` — сетка, восемь направлений, клетка ↔ пиксели.
-- `Passage` — чей трейт: проходимость клетки приносит поставщик данных.
-- `Pace` — чей трейт: длительность шага в тиках тоже приносит поставщик.
-- `find_route(request, rng)` — A\* по сетке; `Route` — шаги до цели или до
-  ближайшей свободной клетки рядом, `None` — маршрута нет.
-- `Walker` — движение по готовому маршруту: `start_step`, `tick`, `state`.
-- `World::add` / `move_to` / `tick_step` — несколько существ, тик, конфликты за
-  клетки и пересчёт маршрута; наружу `WalkState` и `Event`.
+- `Grid`/`Cell`/`Direction` — the grid, eight directions, cell ↔ pixels.
+- `Passage` — whose trait: a data supplier brings cell walkability.
+- `Pace` — whose trait: the supplier brings the step duration in ticks too.
+- `find_route(request, rng)` — A\* over the grid; `Route` — steps to the goal, or
+  to the nearest free cell beside it; `None` — there is no route.
+- `Walker` — walking a finished route: `start_step`, `tick`, `state`.
+- `World::add` / `move_to` / `tick_step` — several creatures, the tick, disputes
+  over cells and repathing; outward `WalkState` and `Event`.
 
-Правил игры (кто куда идёт и почему) здесь нет — их добавляет часть 3 эпика #33.
+No game rules here (who goes where, and why) — epic #33 part 3 adds them.
 
-Фасад и модель сцены существуют для `kn-io` и бинарников; «общих игровых
-правил» в крейте нет и не появляется: движок умеет ходить туда, куда ему
-прикажут, и не решает, куда надо (AGENTS.md, docs/rust.md).
+The facade and the scene model exist for `kn-io` and the binaries; the crate has
+no "shared game rules" and gains none: the engine walks where it is told and
+never decides where to go (AGENTS.md, docs/rust.md).
 
 ## Проверки
 

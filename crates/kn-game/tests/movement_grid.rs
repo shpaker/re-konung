@@ -1,8 +1,8 @@
-//! Сетка мелкого движка сверяется с Python-эталоном и `k1-data`: обратный
-//! перевод пикселей в клетку согласован с прямым (issue #35, критерий 1).
+//! The engine's grid is checked against the Python reference and `k1-data`: the
+//! pixels-to-cell conversion agrees with the forward one (issue #35, criterion 1).
 //!
-//! Это единственный тест движка, который знает о `k1-data`: сверка формул, а не
-//! зависимость — движок K1 не использует.
+//! The only engine test that knows about `k1-data`: a comparison of formulas,
+//! not a layer dependency — the engine never uses K1.
 
 use kn_game::movement::grid::{Cell, Direction, FINE_HEIGHT, FINE_WIDTH, Grid};
 
@@ -15,17 +15,17 @@ fn fine_grid_matches_k1_data() {
             let cell = Cell::new(column, row);
             let ours = cell.centre();
             let theirs = k1_data::game_state::character_position(column as i32, row as i32);
-            assert_eq!(ours, theirs, "клетка {cell:?}");
+            assert_eq!(ours, theirs, "cell {cell:?}");
             let (x, y) = ours;
             assert_eq!(
                 grid.cell_at(x, y),
                 Some(cell),
-                "обратный перевод не совпал для {cell:?}"
+                "the reverse conversion disagrees for {cell:?}"
             );
             assert_eq!(
                 k1_data::game_state::character_cell(f64::from(x), f64::from(y)),
                 (column as i32, row as i32),
-                "эталон и движок по-разному думают о точке {x},{y}"
+                "reference and engine read the point {x},{y} differently"
             );
         }
     }
@@ -34,8 +34,8 @@ fn fine_grid_matches_k1_data() {
 #[test]
 fn neighbours_on_the_fine_grid_match_the_original_table() {
     let grid = Grid::fine();
-    // Таблица смещений оригинала (Slavik game.cpp:2918-2947): строки разной
-    // чётности сдвинуты, поэтому сосед зависит от чётности строки.
+    // The original's offset table (Slavik game.cpp:2918-2947): rows of different
+    // parity are shifted, so a neighbour depends on the row's parity.
     let expected_even = [
         (-1, 0),
         (0, -1),
@@ -80,8 +80,8 @@ fn neighbours_on_the_fine_grid_match_the_original_table() {
                 (dx, dy),
                 "{direction:?} odd_row={odd_row}"
             );
-            // Пиксельное расстояние до соседа: 58 px на восток и запад, 32 px
-            // на север и юг, √(29² + 16²) ≈ 33,1 px по диагоналям экрана.
+            // Pixel distance to a neighbour: 58 px east and west, 32 px north
+            // and south, √(29² + 16²) ≈ 33.1 px along the screen diagonals.
             let expected = match direction {
                 Direction::East | Direction::West => 58 * 58,
                 Direction::North | Direction::South => 32 * 32,

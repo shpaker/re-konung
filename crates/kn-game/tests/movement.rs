@@ -1,6 +1,6 @@
-//! Синтетические тесты движка перемещения (issue #35): маршруты, пересчёт,
-//! движение по маршруту, одновременные существа и детерминизм. Данных игры и
-//! Bevy тут нет — всё проверяется headless.
+//! Synthetic tests of the movement engine (issue #35): routes, repathing,
+//! walking a route, simultaneous creatures and determinism. No game data and no
+//! Bevy here — everything runs headless.
 
 use std::collections::{HashMap, HashSet};
 
@@ -10,7 +10,7 @@ use kn_game::movement::pace::Pace;
 use kn_game::movement::passage::Passage;
 use kn_game::movement::world::{Event, World, WorldError, WorldRules};
 
-/// Проходимость как множество закрытых клеток: движку всё равно, откуда они.
+/// Walkability as a set of blocked cells: the engine does not care where they come from.
 #[derive(Default, Clone)]
 struct Map {
     blocked: HashSet<Cell>,
@@ -22,9 +22,8 @@ impl Passage for Map {
     }
 }
 
-/// Длительность шага по направлениям — как таблица кадров анимации у поставщика
-/// данных: запад, северо-запад, север, северо-восток, восток, юго-восток, юг,
-/// юго-запад.
+/// Step duration per direction — the supplier's animation-frame table: west,
+/// north-west, north, north-east, east, south-east, south, south-west.
 #[derive(Clone, Copy)]
 struct Table([u32; 8]);
 
@@ -52,7 +51,7 @@ fn world(columns: u32, rows: u32, pace: Table) -> World<Map, Table> {
     World::new(Grid::new(columns, rows), Map::default(), pace, rules(), 1)
 }
 
-/// Кто где стоит: клетка → существа. Двух существ в одной клетке быть не должно.
+/// Who stands where: cell to creatures. No cell may hold two creatures.
 fn occupants(world: &World<Map, Table>) -> HashMap<Cell, Vec<CreatureId>> {
     let mut map: HashMap<Cell, Vec<CreatureId>> = HashMap::new();
     for state in world.states() {
@@ -61,39 +60,42 @@ fn occupants(world: &World<Map, Table>) -> HashMap<Cell, Vec<CreatureId>> {
     map
 }
 
-/// Инварианты движения, которые проверяются на каждом тике.
+/// Movement invariants checked on every tick.
 fn assert_invariants(world: &World<Map, Table>) {
     for (cell, list) in occupants(world) {
-        assert!(list.len() < 2, "в клетке {cell:?} стоят {list:?}");
+        assert!(list.len() < 2, "cell {cell:?} holds {list:?}");
         assert!(
             world.passage().is_walkable(cell) && world.grid().contains(cell),
-            "существо стоит в непроходимой клетке {cell:?}"
+            "a creature stands in an impassable cell {cell:?}"
         );
         assert_eq!(
             world.creature_at(cell),
             Some(*list.first().unwrap()),
-            "клетка {cell:?} не помечена занятой"
+            "cell {cell:?} is not marked as taken"
         );
     }
     for state in world.states() {
         if let Some(goal) = state.goal {
-            assert!(world.grid().contains(goal), "цель {goal:?} вне сетки");
+            assert!(
+                world.grid().contains(goal),
+                "goal {goal:?} is outside the grid"
+            );
         }
         if state.moving {
-            let step_to = state.step_to.expect("шаг без клетки назначения");
-            assert!(state.step_ticks > 0, "шаг нулевой длины: {state:?}");
+            let step_to = state.step_to.expect("a step with no destination cell");
+            assert!(state.step_ticks > 0, "a step of zero length: {state:?}");
             assert!(
                 state.step_elapsed <= state.step_ticks,
-                "шаг длиннее, чем обещали: {state:?}"
+                "a step longer than promised: {state:?}"
             );
             assert!(
                 world.passage().is_walkable(step_to),
-                "существо идёт в непроходимую клетку {step_to:?}"
+                "a creature walks into an impassable cell {step_to:?}"
             );
         } else {
             assert_eq!(
                 state.step_to, None,
-                "остановившееся существо идёт: {state:?}"
+                "a stopped creature is walking: {state:?}"
             );
         }
     }
@@ -121,7 +123,7 @@ fn arrived(events: &[Event], creature: CreatureId) -> bool {
         .any(|event| matches!(event, Event::Arrived { creature: c, .. } if *c == creature))
 }
 
-// --- критерий 2: маршруты ---------------------------------------------------
+// --- criterion 2: routes ----------------------------------------------------
 
 #[test]
 fn routes_straight_and_around_an_obstacle() {
@@ -135,7 +137,7 @@ fn routes_straight_and_around_an_obstacle() {
         assert!(arrived(&events, creature), "{events:?}");
     }
 
-    // Препятствие на пути — существо идёт в обход и доходит.
+    // An obstacle in the way: the creature goes around it and still arrives.
     let mut world = world(24, 24, Table::uniform(1));
     let creature = world.add(Cell::new(4, 10)).unwrap();
     for column in 8..=10 {
@@ -146,7 +148,7 @@ fn routes_straight_and_around_an_obstacle() {
     let steps = world.move_to(creature, Cell::new(14, 10)).unwrap();
     assert!(
         steps > 10,
-        "обход должен быть длиннее прямых 10 шагов: {steps}"
+        "the detour must be longer than the straight 10 steps: {steps}"
     );
     let events = run(&mut world, steps + 4);
     assert_eq!(world.cell_of(creature), Some(Cell::new(14, 10)));
@@ -158,7 +160,7 @@ fn route_is_longer_than_the_original_32_step_limit() {
     let mut world = world(160, 320, Table::uniform(1));
     let creature = world.add(Cell::new(1, 10)).unwrap();
     let steps = world.move_to(creature, Cell::new(121, 10)).unwrap();
-    assert_eq!(steps, 120, "лимит оригинала вернулся");
+    assert_eq!(steps, 120, "the original's limit came back");
     run(&mut world, steps + 2);
     assert_eq!(world.cell_of(creature), Some(Cell::new(121, 10)));
 }
@@ -175,14 +177,14 @@ fn unreachable_goal_is_refused_not_a_panic() {
     assert_eq!(
         world.move_to(creature, goal),
         Err(WorldError::NoRoute),
-        "свободная, но недостижимая цель не подменяется соседней клеткой"
+        "a free but unreachable goal is not swapped for a neighbouring cell"
     );
     assert_eq!(world.cell_of(creature), Some(Cell::new(2, 10)));
-    // движения нет, но отказ доходит до потребителя одним событием на первом тике
+    // no movement, but the refusal reaches the consumer as one event on the first tick
     assert_eq!(
         run(&mut world, 50),
         vec![Event::NoRoute { creature, goal }],
-        "отказ породил движение"
+        "the refusal produced movement"
     );
 }
 
@@ -194,7 +196,11 @@ fn occupied_goal_routes_to_a_free_cell_nearby() {
     let steps = world.move_to(walker, Cell::new(8, 10)).unwrap();
     assert!(steps > 0);
     let goal = world.state(walker).unwrap().goal.unwrap();
-    assert_ne!(goal, Cell::new(8, 10), "маршрут ведёт в занятую клетку");
+    assert_ne!(
+        goal,
+        Cell::new(8, 10),
+        "the route leads into an occupied cell"
+    );
     assert_eq!(goal.lattice_distance(Cell::new(8, 10)), 1);
     let events = run(&mut world, steps + 4);
     assert_eq!(world.cell_of(walker), Some(goal));
@@ -202,16 +208,16 @@ fn occupied_goal_routes_to_a_free_cell_nearby() {
     assert!(arrived(&events, walker), "{events:?}");
 }
 
-// --- критерий 3: пересчёт ---------------------------------------------------
+// --- criterion 3: repathing -------------------------------------------------
 
-/// Клетка впереди стала непроходима: существо пересчитывает маршрут, доходит и
-/// не пересчитывает его каждый тик.
+/// The cell ahead became impassable: the creature repaths, arrives, and does
+/// not repath on every tick.
 #[test]
 fn blocked_route_is_repathed_once_and_the_creature_arrives() {
     let mut world = world(24, 24, Table::uniform(1));
     let creature = world.add(Cell::new(2, 10)).unwrap();
     world.move_to(creature, Cell::new(18, 10)).unwrap();
-    // Один шаг сделан, следующий перекрыт.
+    // One step taken, the next one blocked.
     world.tick_step();
     world.passage_mut().blocked.insert(Cell::new(3, 10));
 
@@ -232,18 +238,21 @@ fn blocked_route_is_repathed_once_and_the_creature_arrives() {
             }),
         "{events:?}"
     );
-    assert!(arrived(&events, creature), "существо застряло: {events:?}");
+    assert!(
+        arrived(&events, creature),
+        "the creature got stuck: {events:?}"
+    );
     assert_eq!(world.cell_of(creature), Some(Cell::new(18, 10)));
-    // Дрожи нет: за 200 тиков при cooldown в 10 тиков — единицы пересчётов.
+    // No thrash: over 200 ticks with a 10-tick cooldown, repaths are counted in units.
     assert!(
         route_sets(&events) <= 3,
-        "пересчётов слишком много ({}): {events:?}",
+        "too many repaths ({}): {events:?}",
         route_sets(&events)
     );
 }
 
-/// Клетку впереди держит другое существо: первый по номеру проходит, второй
-/// подождать, пересчитать и дойти следом.
+/// Another creature holds the cell ahead: the one with the lower number gets
+/// through, the second waits, repaths and follows.
 #[test]
 fn creature_ahead_frees_the_cell_and_the_second_follows() {
     let mut world = world(24, 24, Table::uniform(2));
@@ -251,7 +260,7 @@ fn creature_ahead_frees_the_cell_and_the_second_follows() {
     let second = world.add(Cell::new(1, 10)).unwrap();
     let goal = Cell::new(9, 10);
     assert_eq!(world.move_to(first, goal), Ok(7));
-    // Впереди стоит первое существо, поэтому второму нужно его обойти.
+    // The first creature stands ahead, so the second has to go around it.
     assert!(world.move_to(second, goal).unwrap() >= 8);
 
     let mut events = Vec::new();
@@ -269,24 +278,24 @@ fn creature_ahead_frees_the_cell_and_the_second_follows() {
     let end = world.cell_of(second).unwrap();
     assert!(
         end.lattice_distance(goal) <= 1,
-        "второй встал слишком далеко от цели: {end:?}"
+        "the second ended up too far from the goal: {end:?}"
     );
     assert_eq!(
         world.occupancy().holder(Cell::new(2, 10)),
         None,
-        "клетка не освобождена, когда существо её покинуло"
+        "the cell was not freed once the creature left it"
     );
     assert!(
         events.iter().any(
             |event| matches!(event, Event::Waiting { creature: c, blocked_by, .. }
                 if *c == second && *blocked_by == first)
         ),
-        "второй не ждал первого: {events:?}"
+        "the second never waited for the first: {events:?}"
     );
 }
 
-/// Встречные приказы: ни одно существо не входит в клетку, куда уже идёт
-/// другое, и оба в конце концов останавливаются.
+/// Head-on orders: no creature enters a cell another is already stepping into,
+/// and both stop in the end.
 #[test]
 fn head_on_exchange_never_shares_a_cell() {
     let mut world = world(24, 24, Table::uniform(1));
@@ -304,22 +313,22 @@ fn head_on_exchange_never_shares_a_cell() {
             break;
         }
     }
-    assert!(arrived(&events, a), "не разошлись: {events:?}");
-    assert!(arrived(&events, b), "не разошлись: {events:?}");
+    assert!(arrived(&events, a), "they never parted: {events:?}");
+    assert!(arrived(&events, b), "they never parted: {events:?}");
     assert_ne!(world.cell_of(a), world.cell_of(b));
     assert!(
         events
             .iter()
             .any(|event| matches!(event, Event::Waiting { .. })),
-        "встречный приказ не породил ожидания: {events:?}"
+        "the head-on order produced no waiting: {events:?}"
     );
 }
 
-// --- критерий 4: движение ---------------------------------------------------
+// --- criterion 4: movement --------------------------------------------------
 
 #[test]
 fn step_takes_exactly_the_ticks_the_supplier_gave() {
-    // Восток — 5 тиков, юг — 3, остальное — 1: длительность задаёт поставщик.
+    // East takes 5 ticks, south 3, the rest 1: the supplier sets the duration.
     let mut world = world(24, 24, Table([5, 5, 1, 1, 5, 3, 3, 3]));
     let creature = world.add(Cell::new(4, 10)).unwrap();
     world.move_to(creature, Cell::new(5, 10)).unwrap();
@@ -334,7 +343,7 @@ fn step_takes_exactly_the_ticks_the_supplier_gave() {
         cells.push(state.cell);
         directions.push(state.direction);
     }
-    // Шаг начат на тике 1, существо в новой клетке на тике 6 — ровно 5 тиков.
+    // Step started on tick 1, the creature is in the new cell on tick 6 — exactly 5 ticks.
     assert_eq!(cells[0], Cell::new(4, 10));
     assert_eq!(cells[4], Cell::new(4, 10));
     assert_eq!(cells[5], Cell::new(5, 10));
@@ -355,7 +364,7 @@ fn direction_changes_only_on_the_cell_border() {
         if state.cell == previous_cell {
             assert_eq!(
                 state.direction, previous_direction,
-                "направление изменилось в середине клетки: {state:?}"
+                "direction changed in the middle of a cell: {state:?}"
             );
         }
         previous_cell = state.cell;
@@ -387,7 +396,7 @@ fn route_is_consumed_step_by_step_and_the_creature_stops() {
             Cell::new(5, 6),
             Cell::new(6, 6)
         ],
-        "маршрут съедается не по шагу"
+        "the route is not consumed one step at a time"
     );
     assert_eq!(world.cell_of(creature), Some(Cell::new(6, 6)));
     assert_eq!(world.state(creature).unwrap().goal, None);
@@ -395,11 +404,11 @@ fn route_is_consumed_step_by_step_and_the_creature_stops() {
     assert_eq!(
         world.tick_step(),
         Vec::new(),
-        "остановившееся существо шумит"
+        "a stopped creature makes noise"
     );
 }
 
-// --- критерий 5: несколько существ ------------------------------------------
+// --- criterion 5: several creatures -----------------------------------------
 
 #[test]
 fn dozens_of_creatures_move_in_the_same_ticks() {
@@ -409,8 +418,8 @@ fn dozens_of_creatures_move_in_the_same_ticks() {
         let cell = Cell::new(2 + (index % 4) as u32, 4 + index as u32);
         crowd.push(world.add(cell).unwrap());
     }
-    // У каждого своя цель в восточном квартале: маршруты пересекаются, и
-    // существа мешают друг другу без необходимости.
+    // Each has its own goal in the eastern quarter: routes cross and the
+    // creatures get in each other's way for no reason.
     for (index, &creature) in crowd.iter().enumerate() {
         let goal = Cell::new(14 + (index % 5) as u32, 8 + (index / 5) as u32);
         world.move_to(creature, goal).unwrap();
@@ -426,11 +435,14 @@ fn dozens_of_creatures_move_in_the_same_ticks() {
         }
     }
     for &creature in &crowd {
-        assert!(arrived(&events, creature), "не все дошли: {creature:?}");
+        assert!(
+            arrived(&events, creature),
+            "not everyone arrived: {creature:?}"
+        );
     }
     let cells: Vec<Cell> = world.states().iter().map(|state| state.cell).collect();
     assert_eq!(cells.iter().collect::<HashSet<_>>().len(), cells.len());
-    // Каждый держит ровно свою клетку: никаких висящих резервов.
+    // Each holds exactly its own cell: no reservation is left dangling.
     assert_eq!(world.occupancy().len(), crowd.len());
 }
 
@@ -441,10 +453,10 @@ fn freed_cell_is_taken_by_another_creature() {
     let second = world.add(Cell::new(4, 10)).unwrap();
     world.move_to(first, Cell::new(10, 8)).unwrap();
     let vacated = Cell::new(4, 8);
-    // Первый сходит с клетки, а её уже занимает цель второго.
+    // The first leaves its cell, and the second is already heading for it.
     run(&mut world, 2);
     assert_eq!(world.cell_of(first), Some(Cell::new(5, 8)));
-    assert_eq!(world.creature_at(vacated), None, "клетка не освобождена");
+    assert_eq!(world.creature_at(vacated), None, "the cell was not freed");
     world.move_to(second, vacated).unwrap();
     run(&mut world, 8);
     assert_eq!(world.cell_of(second), Some(vacated));
@@ -454,8 +466,8 @@ fn freed_cell_is_taken_by_another_creature() {
 
 #[test]
 fn creatures_do_not_occupy_the_same_cell_in_the_same_ticks() {
-    // Узкий дворик: шесть существ идут в одну клетку и не налезают друг на
-    // друга ни на одном тике.
+    // A narrow yard: six creatures head for one cell and never overlap on any
+    // tick.
     let mut world = world(16, 16, Table::uniform(1));
     let mut crowd = Vec::new();
     for index in 0..6 {
@@ -470,20 +482,20 @@ fn creatures_do_not_occupy_the_same_cell_in_the_same_ticks() {
     assert_eq!(
         cells.iter().collect::<HashSet<_>>().len(),
         cells.len(),
-        "двое встали в одну клетку: {cells:?}"
+        "two stood in one cell: {cells:?}"
     );
     assert!(
         world.states().iter().all(|state| !state.moving),
-        "толпа не устоялась"
+        "the crowd never settled"
     );
 }
 
-// --- критерий 6: детерминизм ------------------------------------------------
+// --- criterion 6: determinism ------------------------------------------------
 
-/// Трасса: тик, номер существа, его клетка и направление.
+/// A trace: tick, creature number, its cell and direction.
 type Trace = Vec<(u64, u32, Cell, Option<Direction>)>;
 
-/// Один и тот же скрипт прогона: трасса зависит от seed и повторяется при нём.
+/// One fixed script: the trace depends on the seed and repeats under it.
 fn trace(seed: u64) -> Trace {
     let mut world = World::new(
         Grid::new(24, 24),
@@ -520,20 +532,20 @@ fn trace(seed: u64) -> Trace {
 fn same_seed_replays_the_same_trace() {
     assert_eq!(trace(7), trace(7));
     assert_eq!(trace(u64::MAX), trace(u64::MAX));
-    // Один и тот же seed из разных прогонов — одна и та же трасса.
+    // The same seed across separate runs gives the same trace.
     for seed in 0..6 {
-        assert_eq!(trace(seed), trace(seed), "seed {seed} воспроизводится");
+        assert_eq!(trace(seed), trace(seed), "seed {seed} replays");
     }
 }
 
-/// Seed развязывает равные маршруты: на симметричной карте разные seed дают
-/// разные трассы. Там, где выбор не равный, маршрут один и тот же — иначе
-/// детерминизм был бы недостижим.
+/// The seed breaks ties: on a symmetric map different seeds give different
+/// traces. Where the choice is not a tie the route is the same under any seed —
+/// otherwise determinism would be out of reach.
 #[test]
 fn other_seed_changes_the_trace() {
     let traces: HashSet<Trace> = (0..6).map(trace).collect();
     assert!(
         traces.len() > 1,
-        "seed ни на что не влияет: все трассы совпали"
+        "the seed changes nothing: every trace matched"
     );
 }

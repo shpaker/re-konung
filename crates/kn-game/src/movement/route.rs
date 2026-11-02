@@ -1,12 +1,13 @@
-//! Поиск маршрута: от клетки до клетки по проходимым и свободным клеткам.
+//! Route search: cell to cell over walkable and free cells.
 //!
-//! Здесь только поиск. Движение по найденному маршруту — [`super::walk`], и
-//! смешивать их нельзя (issue #35): у поиска нет ни понятия тика, ни длительности
-//! шага, а у движения нет знания о том, как маршрут искался.
+//! Search only. Walking a finished route is [`super::walk`], and the two must
+//! not be mixed (issue #35): search has neither a notion of a tick nor a step
+//! duration, and walking has no idea how its route was found.
 //!
-//! Маршрут ищется готовым A\* (`pathfinding::astar`); оригинальный алгоритм не
-//! портируется, и лимита в 32 шага у нас нет — это осознанное отступление от
-//! оригинала (docs/rust.md, «Решение: маршрут без лимита в 32 шага»).
+//! The route comes from an off-the-shelf A\* (`pathfinding::astar`); the
+//! original's algorithm is not ported and we have no 32-step limit — a
+//! deliberate departure from the original (docs/rust.md, "Decision: routes
+//! without the 32-step limit").
 
 use std::collections::HashSet;
 
@@ -18,20 +19,20 @@ use super::occupancy::Occupancy;
 use super::passage::Passage;
 use super::rng::Rng;
 
-/// Правила поиска маршрута — числа, которые движок не выдумывает о правилах
-/// игры, но которые обязан выбрать сам.
+/// Route-search rules: numbers the engine must not invent about game rules,
+/// yet has to pick itself.
 #[derive(Debug, Clone, Copy)]
 pub struct RouteRules {
-    /// На каком расстоянии от занятой цели искать свободную клетку, в клетках
-    /// решётки ([`Cell::lattice_distance`]).
+    /// How far from a taken goal to look for a free cell, in lattice cells
+    /// ([`Cell::lattice_distance`]).
     ///
-    /// Цель занята — существо идёт в **самую близкую** свободную клетку рядом,
-    /// а не в ту, до которой дешевле дойти: поиск перебирает кольца окрестности
-    /// от центра наружу и останавливается на первом, до которого есть маршрут.
-    /// Ограничение нужно, чтобы занятая цель в глухом углу не заставила обойти
-    /// всю карту: колец перебирается не больше `radius`, но каждое кольцо —
-    /// отдельный поиск (при свободной цели поиск один). `0` означает «только сама
-    /// цель»: стоящее на ней существо не обойдёшь.
+    /// With the goal taken, the creature goes to the **nearest** free cell
+    /// beside it, not to the one cheapest to reach: search walks the rings of
+    /// the neighbourhood outward from the centre and stops at the first ring it
+    /// can route to. The cap exists so a taken goal in a dead end does not
+    /// force a sweep of the whole map: at most `radius` rings, and each ring is
+    /// a separate search (a free goal is one search). `0` means "the goal cell
+    /// only": a goal another creature stands on then has no route at all.
     pub goal_fallback_radius: u32,
 }
 
@@ -43,14 +44,14 @@ impl Default for RouteRules {
     }
 }
 
-/// Один шаг маршрута: клетка, в которую входят, и направление шага.
+/// One step of a route: the cell entered and the direction of the step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Leg {
     pub cell: Cell,
     pub direction: Direction,
 }
 
-/// Найденный маршрут: шаги от текущей клетки до цели.
+/// A found route: the steps from the current cell to the goal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Route {
     legs: Vec<Leg>,
@@ -58,18 +59,18 @@ pub struct Route {
 }
 
 impl Route {
-    /// Шаги маршрута по порядку.
+    /// The route's steps, in order.
     pub fn legs(&self) -> &[Leg] {
         &self.legs
     }
 
-    /// Клетки маршрута без направлений.
+    /// The route's cells, without directions.
     pub fn cells(&self) -> Vec<Cell> {
         self.legs.iter().map(|leg| leg.cell).collect()
     }
 
-    /// Клетка, которой маршрут кончается: запрошенная цель или — если она была
-    /// занята или непроходима — ближайшая свободная рядом с ней.
+    /// The cell the route ends at: the goal that was asked for or — if it was
+    /// taken or impassable — the nearest free cell beside it.
     pub fn goal(&self) -> Cell {
         self.goal
     }
@@ -82,7 +83,7 @@ impl Route {
         self.legs.is_empty()
     }
 
-    /// Стоимость маршрута в единицах [`Direction::cost`].
+    /// Route cost in [`Direction::cost`] units.
     pub fn cost(&self) -> u32 {
         self.legs.iter().map(|leg| leg.direction.cost()).sum()
     }
@@ -101,11 +102,11 @@ impl Route {
     }
 }
 
-/// В клетку можно войти: она в сетке, проходима по данным поставщика и не занята
-/// чужим существом.
+/// A cell may be entered: inside the grid, walkable per the supplier's data,
+/// and not held by another creature.
 ///
-/// Своя клетка существа не мешает: на время поиска она временно освобождается,
-/// как в оригинале (Slavik `game.cpp:2889-2895`).
+/// The mover's own cells do not block it: they are given up for the duration of
+/// the search, as in the original (Slavik `game.cpp:2889-2895`).
 pub(super) fn is_enterable<P: Passage>(
     grid: &Grid,
     passage: &P,
@@ -116,11 +117,11 @@ pub(super) fn is_enterable<P: Passage>(
     grid.contains(cell) && passage.is_walkable(cell) && !occupancy.blocks(cell, mover)
 }
 
-/// Шаг разрешён: обе клетки вдоль его угла проходимы.
+/// A step is allowed when both cells alongside its corner are walkable.
 ///
-/// Занятость боковых клеток здесь ни при чём: срезание угла — правило
-/// проходимости, а чужое существо в боковой клетке мешает войти в клетку
-/// назначения, и это проверяет [`is_enterable`].
+/// Flank occupancy is not this rule's business: corner cutting is a walkability
+/// rule, while another creature in a flank cell only keeps the destination cell
+/// from being entered, which [`is_enterable`] checks.
 pub(super) fn is_open_corner<P: Passage>(
     grid: &Grid,
     passage: &P,
@@ -136,14 +137,13 @@ pub(super) fn is_open_corner<P: Passage>(
     })
 }
 
-/// Всё, что нужно поиску: мир, по которому идут, и кто куда идёт.
+/// Everything search needs: the world being walked, and who is going where.
 pub struct RouteRequest<'a, P: Passage> {
     pub grid: &'a Grid,
     pub passage: &'a P,
     pub occupancy: &'a Occupancy,
     pub rules: &'a RouteRules,
-    /// Существо, для которого ищут маршрут: его собственные клетки ему не
-    /// мешают.
+    /// The creature the route is searched for: its own cells do not block it.
     pub mover: CreatureId,
     pub from: Cell,
     pub goal: Cell,
@@ -154,7 +154,8 @@ impl<P: Passage> RouteRequest<'_, P> {
         is_enterable(self.grid, self.passage, self.occupancy, self.mover, cell)
     }
 
-    /// Следующая клетка шага и его стоимость, или `None`, если шаг запрещён.
+    /// The next cell of a step and its cost, or `None` when the step is
+    /// forbidden.
     fn step(&self, from: Cell, direction: Direction) -> Option<(Cell, u32)> {
         let to = self.grid.neighbour(from, direction)?;
         if !self.enterable(to) || !is_open_corner(self.grid, self.passage, from, direction) {
@@ -164,18 +165,20 @@ impl<P: Passage> RouteRequest<'_, P> {
     }
 }
 
-/// Ищет кратчайший маршрут из `from` в `goal`.
+/// Finds the shortest route from `from` to `goal`.
 ///
-/// `None` — маршрута нет: цель недоступна, заперта со всех сторон или лежит вне
-/// сетки. Это значение, а не паника: существо без маршрута стоит на месте.
+/// `None` means there is no route: the goal is unreachable, walled in, or
+/// outside the grid. That is a value, not a panic — a creature without a route
+/// stays where it is.
 ///
-/// Занятая или непроходимая цель обходится по кольцам её окрестности от центра
-/// наружу, поэтому существо идёт в ближайшую свободную клетку рядом, а не в ту,
-/// до которой дешевле дойти ([`RouteRules::goal_fallback_radius`]).
+/// A taken or impassable goal is approached through the rings of its
+/// neighbourhood, centre outward, so the creature walks to the nearest free
+/// cell beside it rather than the cheapest one to reach
+/// ([`RouteRules::goal_fallback_radius`]).
 ///
-/// Порядок перебора направлений сдвинут на величину из `rng`, поэтому выбор
-/// между маршрутами равной стоимости зависит от seed и повторяется при том же
-/// seed (issue #35, критерий 6).
+/// The order directions are tried in is rotated by a value taken from `rng`, so
+/// a choice between routes of equal cost depends on the seed and replays the
+/// same way under the same seed (issue #35, criterion 6).
 pub fn find_route<P: Passage>(request: &RouteRequest<'_, P>, rng: &mut Rng) -> Option<Route> {
     let grid = *request.grid;
     if !grid.contains(request.from) || !grid.contains(request.goal) {
@@ -183,10 +186,10 @@ pub fn find_route<P: Passage>(request: &RouteRequest<'_, P>, rng: &mut Rng) -> O
     }
     let turn = rng.below(8) as usize;
     let (u, v) = request.goal.lattice();
-    // Кольца окрестности — только для цели, в которую нельзя войти: занятой или
-    // непроходимой. Свободная, но недостижимая цель остаётся недостижимой —
-    // иначе существо вставало бы рядом и сообщало `Arrived` вместо `NoRoute`
-    // (docs/rust.md, «Решение: занятая цель — ближайшее кольцо»).
+    // Rings apply only to a goal that cannot be entered: taken or impassable. A
+    // free but unreachable goal stays unreachable — otherwise the creature
+    // would stand beside it and report `Arrived` instead of `NoRoute`
+    // (docs/rust.md, "Decision: an occupied goal takes the nearest ring").
     let rings = if request.enterable(request.goal) {
         0
     } else {
@@ -208,8 +211,8 @@ pub fn find_route<P: Passage>(request: &RouteRequest<'_, P>, rng: &mut Rng) -> O
     None
 }
 
-/// A* до одного кольца клеток вокруг цели: кольцо задаёт и критерий успеха, и
-/// оценку.
+/// A* to one ring of cells around the goal: the ring is both the success test
+/// and the anchor of the estimate.
 fn astar_to<P: Passage>(
     request: &RouteRequest<'_, P>,
     candidates: &[Cell],
@@ -217,10 +220,10 @@ fn astar_to<P: Passage>(
 ) -> Option<Route> {
     let chosen: HashSet<Cell> = candidates.iter().copied().collect();
     let from = request.from;
-    // Одна клетка-цель — оценка ровно до неё. Кольцо из нескольких клеток:
-    // оценка до центра кольца минус самое длинное смещение кольца, иначе она
-    // переоценивала бы путь до дальней клетки (docs/rust.md, «Решение: стоимость
-    // шага и эвристика A*»).
+    // One goal cell: the estimate is exactly to it. A ring of several cells:
+    // the estimate is to the ring's centre minus the ring's longest offset,
+    // or it would overestimate the way to the farthest cell (docs/rust.md,
+    // "Decision: step cost and the A* heuristic").
     let anchor = if candidates.len() == 1 {
         candidates[0]
     } else {
@@ -252,8 +255,8 @@ fn astar_to<P: Passage>(
     Route::from_cells(&cells, last)
 }
 
-/// Клетки решётки на расстоянии `radius` от `(u, v)` — все пары со сдвигом
-/// `(a, b)`, у которых `max(|a|, |b|) == radius`. Нулевое кольцо — сама клетка.
+/// Lattice cells at distance `radius` from `(u, v)`: every offset `(a, b)` with
+/// `max(|a|, |b|) == radius`. A zero ring is the cell itself.
 fn ring(u: i64, v: i64, radius: i64) -> Vec<(i64, i64)> {
     if radius == 0 {
         return vec![(u, v)];
@@ -350,7 +353,7 @@ mod tests {
             if let Some(from) = previous {
                 assert!(
                     is_open_corner(grid, map, from, leg.direction),
-                    "шаг {from:?} → {:?} срезает угол",
+                    "step {from:?} → {:?} cuts a corner",
                     leg.cell
                 );
             }
@@ -369,14 +372,14 @@ mod tests {
             Cell::new(4, 10),
             Cell::new(14, 10),
         )
-        .expect("прямой маршрут");
+        .expect("a straight route");
         assert_eq!(route.len(), 10);
         assert!(
             route
                 .legs()
                 .iter()
                 .all(|leg| leg.direction == Direction::East),
-            "восток дешевле зигзага по диагоналям: {:?}",
+            "east is cheaper than a zigzag of diagonals: {:?}",
             route.cells()
         );
         assert_eq!(route.cost(), 10 * Direction::East.cost());
@@ -394,19 +397,19 @@ mod tests {
         }
         let from = Cell::new(10, 10);
         let goal = Cell::new(14, 10);
-        let route = search(&grid, &map, &Occupancy::new(), from, goal).expect("обходной маршрут");
+        let route = search(&grid, &map, &Occupancy::new(), from, goal).expect("a detour route");
         let cells = route.cells();
         assert!(
             cells.iter().all(|cell| !map.blocked.contains(cell)),
-            "маршрут идёт по непроходимым: {cells:?}"
+            "the route runs over impassable cells: {cells:?}"
         );
         assert!(
             cells.iter().any(|cell| cell.row < 8 || cell.row > 14),
-            "не обошёл препятствие: {cells:?}"
+            "did not go around the obstacle: {cells:?}"
         );
         assert!(
             route.len() > 4,
-            "обход должен быть длиннее прямой: {cells:?}"
+            "the detour must be longer than the straight line: {cells:?}"
         );
         every_step_respects_corners(&grid, &map, &route);
     }
@@ -417,12 +420,12 @@ mod tests {
         let mut map = Map::default();
         let from = Cell::new(10, 10);
         let goal = Cell::new(11, 10);
-        // Единственный короткий шаг — на восток через вершину ромба; одна из
-        // боковых клеток закрыта, и пройти можно только в обход.
+        // The only short step is east, through the rhombus vertex; one flank
+        // cell is closed, so the way in goes around.
         map.blocked
             .insert(from.neighbour(Direction::NorthEast).unwrap());
-        let route = search(&grid, &map, &Occupancy::new(), from, goal).expect("маршрут в обход");
-        assert!(route.len() > 1, "срезал угол: {:?}", route.cells());
+        let route = search(&grid, &map, &Occupancy::new(), from, goal).expect("a detour route");
+        assert!(route.len() > 1, "cut a corner: {:?}", route.cells());
         every_step_respects_corners(&grid, &map, &route);
     }
 
@@ -432,8 +435,8 @@ mod tests {
         let from = Cell::new(3, 4);
         let goal = Cell::new(4, 4);
         let mut map = Map::default();
-        // Вокруг цели закрыты все соседние клетки, кроме той, где стоим: войти
-        // в неё можно только шагом на восток, а он идёт через угол.
+        // Every neighbour of the goal is closed except the one we stand on: the
+        // only way in is a step east, and that step goes through a corner.
         for direction in Direction::ALL {
             if let Some(cell) = goal.neighbour(direction)
                 && cell != from
@@ -445,14 +448,14 @@ mod tests {
             goal_fallback_radius: 0,
         };
         let find_in = |map: &Map| search_with(&grid, map, &Occupancy::new(), from, goal, &rules);
-        assert_eq!(find_in(&map), None, "угол прорезали");
-        // Откроем обе боковые клетки — и тот же самый шаг становится возможен.
+        assert_eq!(find_in(&map), None, "cut through the corner");
+        // Open both flanks and that very same step becomes possible.
         let mut open = Map::default();
         for direction in [Direction::NorthEast, Direction::SouthEast] {
             let cell = from.neighbour(direction).unwrap();
             open.blocked.remove(&cell);
         }
-        let route = find_in(&open).expect("маршрут через открытую вершину");
+        let route = find_in(&open).expect("a route through the open vertex");
         assert_eq!(route.len(), 1);
         assert_eq!(route.legs()[0].direction, Direction::East);
     }
@@ -468,11 +471,11 @@ mod tests {
             Cell::new(1, 10),
             Cell::new(121, 10),
         )
-        .expect("маршрут через полкарты");
+        .expect("a route across half the map");
         assert_eq!(route.len(), 120);
         assert!(
             route.len() > 32,
-            "лимит оригинала вернулся: {:?}",
+            "the original's limit came back: {:?}",
             route.len()
         );
     }
@@ -498,7 +501,7 @@ mod tests {
             ),
             None
         );
-        // Цель вне сетки — тоже отсутствие маршрута.
+        // A goal outside the grid is no route either.
         assert_eq!(
             search(
                 &grid,
@@ -519,13 +522,13 @@ mod tests {
         let mut occupancy = Occupancy::new();
         occupancy.stand(goal, OTHER);
         let route = search(&grid, &map, &occupancy, Cell::new(4, 12), goal)
-            .expect("маршрут к занятой цели");
+            .expect("a route to a taken goal");
         assert_ne!(route.goal(), goal);
         assert_eq!(route.cells().last(), Some(&route.goal()));
         assert_eq!(
             goal.lattice_distance(route.goal()),
             1,
-            "ближайшая свободная клетка не на первом кольце: {:?}",
+            "the nearest free cell is not on the first ring: {:?}",
             route.goal()
         );
         assert!(!occupancy.blocks(route.goal(), MOVER));
@@ -534,18 +537,18 @@ mod tests {
 
     #[test]
     fn a_free_but_unreachable_goal_does_not_take_a_ring_cell() {
-        // Цель проходима и свободна, но все восемь соседей в стене: в неё нельзя
-        // войти, и соседняя клетка вместо неё — это не ответ «дойди до цели»,
-        // а подмена цели. Кольца окрестности работают только для занятой или
-        // непроходимой цели (docs/rust.md, «Решение: занятая цель — ближайшее
-        // кольцо»), здесь же ответа нет.
+        // The goal is walkable and free, but all eight neighbours are wall: it
+        // cannot be entered, and a neighbouring cell in its place is not the
+        // answer to "go to the goal" — it is a substituted goal. The rings
+        // apply only to a taken or impassable goal (docs/rust.md, "Decision: an
+        // occupied goal takes the nearest ring"); here there is no answer.
         let grid = Grid::new(24, 24);
         let mut map = Map::default();
         let goal = Cell::new(12, 12);
         for direction in Direction::ALL {
             map.blocked.insert(goal.neighbour(direction).unwrap());
         }
-        assert!(map.is_walkable(goal), "сама цель свободна");
+        assert!(map.is_walkable(goal), "the goal itself stays free");
         for (index, from) in [Cell::new(4, 12), Cell::new(20, 2), Cell::new(12, 3)]
             .into_iter()
             .enumerate()
@@ -553,7 +556,7 @@ mod tests {
             assert_eq!(
                 search(&grid, &map, &Occupancy::new(), from, goal),
                 None,
-                "случай {index}: вместо недостижимой цели подставлена соседняя клетка"
+                "case {index}: a neighbour was substituted for the unreachable goal"
             );
         }
     }
@@ -597,7 +600,7 @@ mod tests {
         occupancy.stand(from, MOVER);
         assert!(
             search(&grid, &map, &occupancy, from, Cell::new(12, 4)).is_some(),
-            "собственная клетка помешала поиску"
+            "the creature's own cell got in the way of the search"
         );
     }
 
@@ -611,14 +614,15 @@ mod tests {
         let straight = from.cost_distance(goal);
         assert!(
             route.cost() >= straight,
-            "стоимость {:?} дешевле прямой линии {:?}",
+            "cost {:?} is cheaper than a straight line {:?}",
             route.cost(),
             straight
         );
-        // Сетка не даёт идти точно по прямой, но и в обход по кругу не гонит.
+        // The grid does not allow an exact straight line, but this is no detour
+        // around the field either.
         assert!(
             route.cost() <= straight + 2 * Direction::East.cost(),
-            "маршрут слишком далёк от прямого: {:?} против {:?}",
+            "route strays from the straight line: {:?} against {:?}",
             route.cost(),
             straight
         );
@@ -640,9 +644,9 @@ mod tests {
         );
     }
 
-    /// Кратчайшая стоимость пути до клетки без эвристики — Чистый Дейкстра по
-    /// тем же шагам. Нужна как независимая проверка того, что оценка не
-    /// переоценивает.
+    /// Cheapest cost to a cell without a heuristic — plain Dijkstra over the
+    /// same steps. It is the independent check that the estimate does not
+    /// overestimate.
     fn optimal_cost(
         grid: &Grid,
         map: &Map,
@@ -665,10 +669,10 @@ mod tests {
         .map(|(_path, cost)| cost)
     }
 
-    /// Эвристика обязана смотреть на фактическую клетку маршрута, а не только на
-    /// запрошенную цель: иначе она переоценивает, и A\* отдаёт маршрут длиннее
-    /// кратчайшего. Проверка — стоимость найденного маршрута против стоимости
-    /// того же пути, посчитанной без эвристики.
+    /// The estimate must look at the cell the route actually ends at, not only
+    /// at the goal that was asked for: otherwise it overestimates and A\*
+    /// returns a route longer than the shortest. The check is the found route's
+    /// cost against the same path costed without a heuristic.
     #[test]
     fn route_never_costs_more_than_the_shortest_path() {
         let grid = Grid::new(24, 24);
@@ -682,7 +686,7 @@ mod tests {
             }
         }
         let mut field = Map::default();
-        // Стена из шести столбцов с широким проходом: маршрут обязан его найти.
+        // A wall of six columns with one wide gap: the route has to find it.
         for column in 8..14 {
             for row in 0..24 {
                 if !(4..=8).contains(&row) {
@@ -690,8 +694,9 @@ mod tests {
                 }
             }
         }
-        // Карман: вокруг цели свободно ровно одно место — кольцо кандидатов из
-        // одной клетки, и оценка обязана смотреть на неё, а не на занятый центр.
+        // Pocket: exactly one free spot around the goal, so the candidate ring
+        // is a single cell and the estimate must look at it, not at the taken
+        // centre.
         let mut pocket = Map::default();
         let goal = Cell::new(12, 12);
         let keep = goal.neighbour(Direction::East).unwrap();
@@ -701,15 +706,17 @@ mod tests {
                 pocket.blocked.insert(cell);
             }
         }
-        // Карман без свободной клетки в первом кольце: кандидаты только во
-        // втором, и оценка тоже обязана смотреть на кольцо, а не на центр.
+        // A pocket with no free cell on the first ring: candidates only on the
+        // second, and the estimate must again look at the ring, not at the
+        // centre.
         let mut wide = Map::default();
         let wide_goal = Cell::new(12, 12);
         for direction in Direction::ALL {
             wide.blocked.insert(wide_goal.neighbour(direction).unwrap());
         }
-        // Цель, закрытая самой картой (не занята существом): fallback тоже обязан
-        // работать, и кольцо кандидатов у неё — первое кольцо вокруг клетки карты.
+        // A goal blocked by the map itself rather than by a creature: the
+        // fallback has to work here too, and its candidate ring is the first
+        // ring around a map cell.
         let impassable_goal = Cell::new(3, 3);
         wide.blocked.insert(impassable_goal);
         let mut occupancy = Occupancy::new();
@@ -734,7 +741,8 @@ mod tests {
                 Cell::new(22, 12),
             ),
             (&field, Occupancy::new(), Cell::new(22, 1), Cell::new(1, 21)),
-            // Цель непроходима по данным карты — маршрут до свободной рядом.
+            // The goal is impassable per the map data — route to a free cell
+            // beside it.
             (&wide, Occupancy::new(), Cell::new(2, 12), impassable_goal),
             (&pocket, occupancy.clone(), Cell::new(2, 12), goal),
             (&pocket, occupancy.clone(), Cell::new(12, 2), goal),
@@ -743,13 +751,13 @@ mod tests {
         ];
         for (index, (map, places, from, target)) in cases.iter().enumerate() {
             let route = search(&grid, map, places, *from, *target)
-                .unwrap_or_else(|| panic!("случай {index}: маршрута нет"));
+                .unwrap_or_else(|| panic!("case {index}: no route"));
             let optimum = optimal_cost(&grid, map, places, *from, route.goal())
-                .unwrap_or_else(|| panic!("случай {index}: без эвристики пути нет"));
+                .unwrap_or_else(|| panic!("case {index}: no path without a heuristic"));
             assert_eq!(
                 route.cost(),
                 optimum,
-                "случай {index}: маршрут к {:?} дороже кратчайшего: {:?} против {:?}",
+                "case {index}: the route to {:?} costs more than the shortest: {:?} against {:?}",
                 route.goal(),
                 route.cost(),
                 optimum
@@ -758,9 +766,10 @@ mod tests {
         }
     }
 
-    /// Тот же контроль на случайных полях: если бы оценка где-то переоценивала,
-    /// на одном из полей A\* выдал бы маршрут дороже кратчайшего. Поля заданы
-    /// детерминированно, чтобы прогон повторялся.
+    /// The same control over random fields: if the estimate overestimated
+    /// anywhere, one of the fields would make A\* return a route costing more
+    /// than the shortest. The fields are generated deterministically so the run
+    /// repeats.
     #[test]
     fn heuristic_is_admissible_on_random_fields() {
         let grid = Grid::new(20, 20);
@@ -794,7 +803,8 @@ mod tests {
                 continue;
             }
             let mut occupancy = Occupancy::new();
-            // Половина случаев — занятая цель: кольцо кандидатов вместо центра.
+            // Half the cases have a taken goal: a candidate ring instead of the
+            // centre.
             if next() % 2 == 0 {
                 occupancy.stand(target, OTHER);
             }
@@ -805,21 +815,21 @@ mod tests {
             assert_eq!(
                 Some(route.cost()),
                 optimum,
-                "оценка переоценивает: {from:?} → {:?} на поле со {target:?}",
+                "the estimate overestimates: {from:?} → {:?} on the field with {target:?}",
                 route.goal()
             );
             every_step_respects_corners(&grid, &map, &route);
             checked += 1;
         }
-        assert!(checked > 10, "случаев с маршрутом слишком мало: {checked}");
+        assert!(checked > 10, "too few cases produced a route: {checked}");
     }
 
     #[test]
     fn seeds_break_ties_deterministically() {
         let grid = Grid::new(24, 24);
         let mut map = Map::default();
-        // Стена поперёк с двумя симметричными брешами: маршрутов ровно два, и
-        // они равной стоимости.
+        // A wall across the field with two symmetric gaps: exactly two routes,
+        // and they cost the same.
         for column in 0..24 {
             if column != 6 && column != 18 {
                 map.blocked.insert(Cell::new(column, 12));
@@ -832,13 +842,17 @@ mod tests {
         };
         let mut distinct = HashSet::new();
         for seed in 0..12 {
-            let route = route_with(seed).expect("маршрут через брешь");
-            assert_eq!(route, route_with(seed).unwrap(), "seed {seed} непостоянен");
+            let route = route_with(seed).expect("a route through a gap");
+            assert_eq!(
+                route,
+                route_with(seed).unwrap(),
+                "seed {seed} is not stable"
+            );
             distinct.insert(route);
         }
         assert!(
             distinct.len() > 1,
-            "seed ни на что не влияет: все маршруты одинаковы"
+            "the seed changes nothing: every route is the same"
         );
     }
 }

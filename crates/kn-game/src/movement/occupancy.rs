@@ -1,27 +1,28 @@
-//! Занятость клеток: в одной клетке стоит одно существо.
+//! Cell occupancy: one creature per cell.
 
 use std::collections::HashMap;
 
 use super::CreatureId;
 use super::grid::Cell;
 
-/// Кто держит клетку.
+/// Who holds a cell.
 ///
-/// Существо владеет клеткой, на которой стоит, и на время шага резервирует ту,
-/// куда идёт (docs/rust.md, «Решение: кто уступает клетку»). Резерв и есть
-/// ответ на встречный обмен: клетка, в которую кто-то уже идёт, занята, и в
-/// неё не войдут.
+/// A creature owns the cell it stands on and reserves the one it is stepping
+/// into for the duration of the step (docs/rust.md, "Decision: who yields a
+/// cell"). The reservation is the answer to a head-on exchange: a cell someone
+/// is already stepping into is taken, and nobody else enters it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Holder {
     pub creature: CreatureId,
-    /// `true` — существо стоит в клетке, `false` — только резервирует её шагом.
+    /// `true` — the creature stands here, `false` — a step only reserves it.
     pub standing: bool,
 }
 
-/// Клетки, занятые существами движка.
+/// Cells held by the engine's creatures.
 ///
-/// Это состояние движка, а не поставщика: только движок знает, кто куда идёт
-/// шагом, и только ему освобождать клетки при приходе и отмене маршрута.
+/// Engine state, not supplier state: only the engine knows who is mid-step and
+/// where, so only the engine releases cells on arrival and on a cancelled
+/// route.
 #[derive(Debug, Clone, Default)]
 pub struct Occupancy {
     holders: HashMap<Cell, Holder>,
@@ -32,34 +33,34 @@ impl Occupancy {
         Occupancy::default()
     }
 
-    /// Кто держит клетку — стоя или резервом.
+    /// Who holds the cell, standing or by reservation.
     pub fn holder(&self, cell: Cell) -> Option<Holder> {
         self.holders.get(&cell).copied()
     }
 
-    /// Кто стоит в клетке.
+    /// Who stands in the cell.
     pub fn occupant(&self, cell: Cell) -> Option<CreatureId> {
         self.holder(cell)
             .filter(|holder| holder.standing)
             .map(|holder| holder.creature)
     }
 
-    /// Мешает ли клетка существу: чужая — да, своя (клетка под ногами или
-    /// резерв своего шага) — нет.
+    /// Whether the cell gets in a creature's way: another creature's does, its
+    /// own (the cell under it or its own step reservation) does not.
     ///
-    /// На время поиска пути свои клетки существо временно освобождает — так же
-    /// делает оригинал (Slavik `game.cpp:2889-2895`).
+    /// During a route search a creature temporarily gives up its own cells, as
+    /// the original does (Slavik `game.cpp:2889-2895`).
     pub fn blocks(&self, cell: Cell, creature: CreatureId) -> bool {
         self.holder(cell)
             .is_some_and(|holder| holder.creature != creature)
     }
 
-    /// Занять клетку стоя. `false` — клетку держит кто-то другой.
+    /// Take a cell to stand in. `false` — someone else holds it.
     pub fn stand(&mut self, cell: Cell, creature: CreatureId) -> bool {
         self.hold(cell, creature, true)
     }
 
-    /// Зарезервировать клетку за шагом. `false` — клетку держит кто-то другой.
+    /// Reserve a cell for a step. `false` — someone else holds it.
     pub fn reserve(&mut self, cell: Cell, creature: CreatureId) -> bool {
         self.hold(cell, creature, false)
     }
@@ -75,7 +76,7 @@ impl Occupancy {
         true
     }
 
-    /// Перестать держать клетку (своей записи).
+    /// Stop holding a cell (only one's own record).
     pub fn release(&mut self, cell: Cell, creature: CreatureId) {
         if self
             .holder(cell)
@@ -85,7 +86,7 @@ impl Occupancy {
         }
     }
 
-    /// Все клетки, которыми существо что-то держит: клетку под ногами и резерв.
+    /// Every cell a creature holds: the one under it plus any reservation.
     pub fn cells_of(&self, creature: CreatureId) -> Vec<Cell> {
         let mut cells: Vec<Cell> = self
             .holders
@@ -137,7 +138,10 @@ mod tests {
         assert!(occupancy.reserve(cell, A));
         assert_eq!(occupancy.occupant(cell), None);
         assert!(occupancy.blocks(cell, B));
-        assert!(!occupancy.blocks(cell, A), "свой резерв не мешает себе");
+        assert!(
+            !occupancy.blocks(cell, A),
+            "one's own reservation does not block oneself"
+        );
         assert!(!occupancy.stand(cell, B));
         occupancy.release(cell, A);
         assert!(!occupancy.blocks(cell, B));

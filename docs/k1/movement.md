@@ -1,141 +1,143 @@
-# Перемещение по карте: мелкая сетка, направления, шаг
+# Movement on the map: fine grid, directions, step
 
-Что известно о том, как существо передвигается по локации в «Князе: Легенды
-Лесной страны». Раскладка файлов — [formats/map.md](formats/map.md) (проходимость
-клеток) и [formats/game-state.md](formats/game-state.md) (клетка персонажа).
-Общий движок и все решения проекта — [../rust.md](../rust.md), раздел «Движок
-перемещения».
+What is known about how a creature moves around a location in the first part of
+the series. File layout — [formats/map.md](formats/map.md) (cell walkability) and
+[formats/game-state.md](formats/game-state.md) (a character's cell). The shared
+engine and every project decision — [../rust.md](../rust.md), the section
+"Movement engine".
 
-**Статус:** геометрия сетки, восемь направлений, условие непроходимости,
-занятость клетки, длительность шага и величина тика — **подтверждено** по Slavik и
-на файлах обоих изданий. Правила, *кто* куда идёт и *почему* (приказы, поведение
-жителей, бой), здесь не восстановлены: это часть 3 эпика #33. Что не
-подтверждается, не выдумывается.
+**Status:** the grid geometry, the eight directions, the condition that makes a
+cell impassable, cell occupancy, step duration and the length of a tick are
+**confirmed** against Slavik and over the files of both editions. The rules for
+*who* goes *where* and *why* (orders, villager behavior, combat) are not
+recovered here: that is epic #33 part 3. What is not confirmed is not invented.
 
-## Мелкая сетка
+## Fine grid
 
-Движение идёт по мелкой сетке проходимости, а не по тайловой: 160 столбцов ×
-320 строк, ромб клетки 58×32 пикселя, шаг по x — 58, шаг строки — 16, нечётные
-строки сдвинуты вправо на 29. Ромбы клеток покрывают плоскость без щелей и без
-наложений: фундаментальная область решётки центров — ровно 928 пикселей²,
-площадь ромба.
+Movement runs over the fine walkability grid, not the tile grid: 160 columns ×
+320 rows, a cell rhombus of 58×32 pixels, a column step of 58, a row step of 16,
+odd rows shifted right by 29. Cell rhombi tile the plane with no gaps and no
+overlap: the fundamental domain of the centre lattice is exactly 928 px², the
+area of one rhombus.
 
-- Точка персонажа или клада в клетке `(x, y)`:
-  `(58·x + (2 − y%2)·29, 16·y + 16)` — центр её ромба.
-- Обратный перевод: ближайшая клетка к точке, половинки округляются к чётному —
-  как `round()` в Python-эталоне.
+- A character's or a cache's point in cell `(x, y)`:
+  `(58·x + (2 − y%2)·29, 16·y + 16)` — the centre of its rhombus.
+- The reverse conversion: the cell nearest a point, halves rounded to even — as
+  `round()` does in the Python reference.
 
-**Подтверждено**: формула и обратный перевод сверяются на всех 51 200 клетках, а
-прямая формула — с Python-эталоном (`konung/k1/game_state.py`,
-`character_position`) и с `k1-data` (`game_state::character_position`,
-`character_cell`). Держит тест `fine_grid_matches_k1_data`
-(`crates/kn-game/tests/movement_grid.rs`).
+**Confirmed**: the formula and the reverse conversion are checked over all
+51 200 cells, and the forward formula against the Python reference
+(`konung/k1/game_state.py`, `character_position`) and against `k1-data`
+(`game_state::character_position`, `character_cell`). The test
+`fine_grid_matches_k1_data` (`crates/kn-game/tests/movement_grid.rs`) holds this.
 
-В базисе шагов «юго-восток» и «северо-восток» (`u = x + y//2`,
-`v = x − (y+1)//2`) сетка становится обычным квадратным полем: восемь соседей —
-`(±1, 0)`, `(0, ±1)` и `(±1, ±1)`, а расстояние в клетках — расстояние Чебышёва.
-Это видно из пиксельных смещений: восток = северо-восток + юго-восток, юг =
-юго-восток + юго-запад, север = северо-восток + северо-запад. Поэтому четыре
-«экранно-диагональных» шага в этих координатах ортогональные, а запад, восток,
-север и юг — диагональные.
+In the basis of the south-east and north-east steps (`u = x + y//2`,
+`v = x − (y+1)//2`) the grid becomes an ordinary square field: the eight
+neighbours are `(±1, 0)`, `(0, ±1)` and `(±1, ±1)`, and the distance in cells is
+the Chebyshev distance. The pixel offsets show this: east = north-east +
+south-east, south = south-east + south-west, north = north-east + north-west. So
+the four steps that look diagonal on screen are orthogonal in these coordinates,
+while west, east, north and south become the diagonals.
 
-## Восемь направлений
+## Eight directions
 
-| Индекс | Направление экрана | Клетка, чётная строка | Клетка, нечётная строка | Пиксели |
+| Index | Screen direction | Cell, even row | Cell, odd row | Pixels |
 |---|---|---|---|---|
-| 0 | запад | (−1, 0) | (−1, 0) | (−58, 0) |
-| 1 | северо-запад | (0, −1) | (−1, −1) | (−29, −16) |
-| 2 | север | (0, −2) | (0, −2) | (0, −32) |
-| 3 | северо-восток | (1, −1) | (0, −1) | (29, −16) |
-| 4 | восток | (1, 0) | (1, 0) | (58, 0) |
-| 5 | юго-восток | (1, 1) | (0, 1) | (29, 16) |
-| 6 | юг | (0, 2) | (0, 2) | (0, 32) |
-| 7 | юго-запад | (0, 1) | (−1, 1) | (−29, 16) |
+| 0 | west | (−1, 0) | (−1, 0) | (−58, 0) |
+| 1 | north-west | (0, −1) | (−1, −1) | (−29, −16) |
+| 2 | north | (0, −2) | (0, −2) | (0, −32) |
+| 3 | north-east | (1, −1) | (0, −1) | (29, −16) |
+| 4 | east | (1, 0) | (1, 0) | (58, 0) |
+| 5 | south-east | (1, 1) | (0, 1) | (29, 16) |
+| 6 | south | (0, 2) | (0, 2) | (0, 32) |
+| 7 | south-west | (0, 1) | (−1, 1) | (−29, 16) |
 
-**Подтверждено** по Slavik `game.cpp:2918-2947` — таблица `d[8][2]`, колонка
-выбирается по `tilepos.y & 1`, границы проверяются на `0..160 × 0..320`. Повторено
-в `crates/kn-game/src/movement/grid.rs`, обе строки таблицы сверяет тест
-`neighbour_offsets_match_pixel_offsets`. Индекс направления — ключ к кадрам
-анимации ходьбы, поэтому порядок сохранён.
+**Confirmed** against Slavik `game.cpp:2918-2947` — the table `d[8][2]`, the
+column chosen by `tilepos.y & 1`, bounds checked over `0..160 × 0..320`. Repeated
+in `crates/kn-game/src/movement/grid.rs`; the test
+`neighbour_offsets_match_pixel_offsets` checks both rows of the table. A
+direction index is the key into walk-animation frames, so the order is kept.
 
-Пиксельная длина шага разная: 58 px на запад и восток, 32 px на север и юг,
-≈33,1 px по диагоналям. Шаг на север и юг меняет строку на две, поэтому
-соседство зависит от чётности строки, а смещение в пикселях — нет.
+The pixel length of a step differs: 58 px west and east, 32 px north and south,
+≈33.1 px along the diagonals. A step north or south changes the row by two, so
+neighbourhood depends on row parity while the pixel offset does not.
 
-Запад, восток, север и юг — шаги **через вершину** ромба: соседняя клетка
-касается текущей одной точкой, и в этой точке сходятся ровно четыре клетки, две
-из которых стоят поперёк пути. Северо-восток и остальные диагонали экрана делят с
-текущей клеткой целое ребро.
+West, east, north and south are steps **through a vertex** of the rhombus: the
+neighbour touches the current cell at one point, and exactly four cells meet
+there, two of them standing across the path. North-east and the other screen
+diagonals share a whole edge with the current cell.
 
-## Проходимость клетки
+## Cell walkability
 
-Клетка непроходима, если в её байте `foot` младшие 4 бита равны `0xF`; старшие
-четыре — флаги (0x40 — предположительно место, где застревают стрелы).
-**Подтверждено**: Slavik `game.cpp:1672-1692`, проверка на всех картах обоих
-изданий (`tests/k1/test_maps.py`), код — `k1_data::map::is_blocked`. Подробнее —
-[formats/map.md](formats/map.md), «Проходимость».
+A cell is impassable when the low 4 bits of its `foot` byte equal `0xF`; the
+high four are flags (0x40 — hypothesis: where arrows get stuck).
+**Confirmed**: Slavik `game.cpp:1672-1692`, checked over every map of both
+editions (`tests/k1/test_maps.py`), code — `k1_data::map::is_blocked`. Details in
+the walkability part of [formats/map.md](formats/map.md).
 
-Движок перемещения про `foot` не знает: проходимость клетки ему приносит
-поставщик данных — трейт `kn_game::movement::passage::Passage`.
+The movement engine knows nothing of `foot`: a data supplier brings it cell
+walkability — the trait `kn_game::movement::passage::Passage`.
 
-## Занятость клетки
+## Cell occupancy
 
-Клетку занимает одно существо: в структуре клетки стоит номер персонажа, и на
-время поиска пути существо снимает метку со своей клетки, чтобы она не мешала
-маршруту, а по окончании ставит её обратно — Slavik `game.cpp:2889-2895`,
-`game_play.cpp:1951-1973`. **Подтверждено** по Slavik; в движке —
-`movement::occupancy::Occupancy`.
+One creature occupies a cell: the cell structure holds the character's number,
+and while a route is being searched the creature takes its own marker off so the
+cell does not block the route, putting it back afterwards — Slavik
+`game.cpp:2889-2895`, `game_play.cpp:1951-1973`. **Confirmed** against Slavik; in
+the engine — `movement::occupancy::Occupancy`.
 
-Что делает игра, когда на одну клетку претендуют два существа одновременно, кто
-уступает и есть ли защита от взаимной блокировки, — **неизвестно**: разбирать это
-надо поведению, а не механике. Как у нас — решение проекта в
-[../rust.md](../rust.md), «Решение: кто уступает клетку».
+What the game does when two creatures claim one cell at the same time, who
+yields, and whether anything guards against a mutual deadlock — **unknown**: that
+has to be worked out from behavior, not from mechanics. How we do it is a project
+decision in [../rust.md](../rust.md), "Decision: who yields a cell".
 
-## Длительность шага
+## Step duration
 
-Шаг на соседнюю клетку длится фиксированное число тиков — число кадров анимации
-ходьбы в направлении, а не величину, которую выбирает код: Slavik
-`game_play.cpp:3727-3740` ведёт `Frame` до `FrameCount`. **Подтверждено** по
-Slavik; у нас длительность приносит поставщик — `movement::pace::Pace`.
-Числа кадров по направлениям из `GRAPH.RES` и `Objects.res` пока не разобраны: их
-доставляет часть 3.
+A step to a neighbouring cell lasts a fixed number of ticks — the number of
+walk-animation frames in that direction, not a value the code picks: Slavik
+`game_play.cpp:3727-3740` counts `Frame` up to `FrameCount`. **Confirmed**
+against Slavik; with us the duration comes from a supplier — `movement::pace::Pace`.
+The per-direction frame counts in `GRAPH.RES` and `Objects.res` are not parsed
+yet: part 3 delivers them.
 
-Скольжение между клетками зашито в смещениях кадров анимации ходьбы, а не в коде:
-пиксельная позиция доскикивает к новой клетке в конце анимации — Slavik
-`game.cpp:2884-2908`, `game_play.cpp:798-800` и наш эксперимент над `GRAPH.RES` и
-`Objects.res`. **Подтверждено**. Поэтому движок отдаёт наружу клетку, точку
-клетки, направление и число тиков шага, а не интерполированную позицию.
+The glide between cells lives in the offsets of the walk-animation frames, not in
+code: the pixel position slides the rest of the way into the new cell at the end
+of the animation — Slavik `game.cpp:2884-2908`, `game_play.cpp:798-800` and our
+own experiment over `GRAPH.RES` and `Objects.res`. **Confirmed**. That is why the
+engine hands out the cell, the cell's point, the direction and the step's tick
+count, rather than an interpolated position.
 
-## Тик
+## Tick
 
-Тик игры — 60 мс: Slavik `game.h:30` (`FrameTime = 60`). **Подтверждено**; в Rust
-— `k1_data::objects_res::TICK_MS`, наружу — `kn_game::TICK_MS`. Сам движок
-считает только тики, миллисекунды его не касаются.
+A game tick is 60 ms: Slavik `game.h:30` (`FrameTime = 60`). **Confirmed**; in
+Rust — `k1_data::objects_res::TICK_MS`, outward — `kn_game::TICK_MS`. The engine
+itself counts only ticks; milliseconds are none of its business.
 
-## Лимит маршрута: 32 шага в оригинале
+## Route limit: 32 steps in the original
 
-Оригинальный поиск маршрута ограничен 32 шагами: дальше существо не идёт, а
-`dist` в конце поиска обрезается до 31 — Slavik `game_pathfind.cpp:105-107`,
-`game_pathfind.cpp:495-508`. **Подтверждено** по Slavik.
+The original's route search is capped at 32 steps: a creature goes no farther,
+and `dist` is clipped to 31 at the end of the search — Slavik
+`game_pathfind.cpp:105-107`, `game_pathfind.cpp:495-508`. **Confirmed** against
+Slavik.
 
-**Мы этот лимит не воспроизводим — осознанное отступление** (AGENTS.md,
-«Priority: modern experience», решение эпика #33): лимит был платой за память
-1999 года и никак не отражён в данных карты или состояния. Наш маршрут ищется A\*
-без ограничения длины и держится тестом
-`route_is_not_limited_to_32_steps` (120 клеток за один поиск); стоимость поиска
-измерена — 0,2–0,4 мс на всю мелкую сетку в release, см. «Цена движка» в
-[../rust.md](../rust.md). Ограничение имело бы смысл, если бы экономия была
-заметна: на наших числах она не заметна.
+**We do not reproduce this limit — a deliberate departure** (AGENTS.md,
+"Priority: modern experience", the decision of epic #33): the limit was the price
+of memory in 1999 and is reflected nowhere in map or state data. Our route is
+searched with A* without a length cap, held by the test
+`route_is_not_limited_to_32_steps` (120 cells in one search); the cost of the
+search is measured — 0.2–0.4 ms over the whole fine grid in release, see "Engine
+cost" in [../rust.md](../rust.md). A cap would only make sense if the saving were
+visible: on our numbers it is not.
 
-## Что не подтверждено и не реализовано
+## What is not confirmed and not implemented
 
-- Кто куда идёт: приказы игрока, патрули, поведение жителей, преследование —
-  неизвестно, часть 3. Правила не выдумываются.
-- Длительности шагов по направлениям из ресурсов не разобраны — их приносит
-  поставщик данных; до разборки движок принимает любые числа.
-- Бег и другие отличия «Князя 2» — по [games.md](games.md) движок предположительно
-  общий; в перемещении отличие умещается в длительность шага, а она приходит из
-  данных.
-- Одновременная претензия двух существ на клетку, встречный обмен, взаимная
-  блокировка — фактов об оригинале нет, наше поведение описано как решение
-  проекта, а не как правило игры.
+- Who goes where: player orders, patrols, villager behavior, pursuit — unknown,
+  part 3. The rules are not invented.
+- Per-direction step durations from the resources are not parsed — a data
+  supplier brings them; until they are parsed the engine accepts any numbers.
+- Running and the other differences in K2 — per [games.md](games.md) the engine
+  is presumably shared; in movement the difference fits inside the step duration,
+  and that comes from data.
+- Two creatures claiming a cell at once, a head-on exchange, a mutual deadlock —
+  there are no facts about the original, so our behavior is written down as a
+  project decision, not as a game rule.

@@ -1,14 +1,14 @@
-//! Детерминированный генератор случайных чисел движка.
+//! The engine's deterministic random generator.
 //!
-//! Свой и лёгкий: тяжёлая зависимость ради нескольких бит на тик не нужна, а
-//! разнородные `random`-крейты не дают того, что здесь важно, — одинаковый seed
-//! обязан давать одинаковую последовательность событий (issue #35).
+//! Our own and small: a heavy dependency is not worth a few bits per tick, and
+//! the usual `random` crates do not buy what matters here — the same seed must
+//! replay the same sequence of events (issue #35).
 //!
-//! Генератор трогает только выбор среди равноценных вариантов: порядок
-//! перебора направлений при поиске маршрута. Правил игры он не задаёт — там,
-//! где оригинал выбирает по данным, данные и приходят.
+//! The generator only breaks ties between equally good options: the order
+//! directions are tried in during route search. It sets no game rule — where
+//! the original chooses by data, the data is what arrives.
 
-/// splitmix64: два умножения и три XOR на состояние в 64 бита.
+/// splitmix64: two multiplies and three XORs over a 64-bit state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rng {
     state: u64,
@@ -19,7 +19,7 @@ impl Rng {
         Rng { state: seed }
     }
 
-    /// Следующее 64-битное значение.
+    /// Next 64-bit value.
     pub fn next_u64(&mut self) -> u64 {
         self.state = self.state.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = self.state;
@@ -28,11 +28,11 @@ impl Rng {
         z ^ (z >> 31)
     }
 
-    /// Равномерное значение от 0 до `limit` (не включая), без остатка от
-    /// взятия по модулю: старшие биты широкого произведения.
+    /// Uniform value in `0..limit`, taken without `%`: the high bits of a
+    /// widened product, so there is no modulo bias.
     ///
-    /// `limit == 0` даёт 0 — вызывать его бессмысленно, но и паники тут не
-    /// нужно: значение всё равно ни на что не влияет.
+    /// `limit == 0` gives 0 — calling it is pointless, but there is no reason
+    /// to panic either: the value influences nothing.
     pub fn below(&mut self, limit: u64) -> u64 {
         if limit == 0 {
             return 0;
@@ -65,7 +65,7 @@ mod tests {
             seen[value as usize] += 1;
         }
         for count in seen {
-            assert!(count > 0, "значение не выпало ни разу за 800 тяг");
+            assert!(count > 0, "value never came up in 800 draws");
         }
         assert_eq!(rng.below(0), 0);
     }
