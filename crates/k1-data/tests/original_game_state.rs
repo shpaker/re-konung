@@ -35,9 +35,14 @@ fn serialize_returns_every_state_byte_for_byte() {
 fn references_between_blocks_match() {
     for (edition, game) in game_dirs() {
         for files in [GAME_FILES, TUTORIAL_FILES] {
+            let numbers = game.state_numbers(files).unwrap();
+            // An edition may hold no tutorial states at all: RUS has none, see docs/k1/editions.md
+            if numbers.is_empty() {
+                continue;
+            }
             let maps: HashSet<u32> = game.map_numbers(files).unwrap().into_iter().collect();
             assert!(!maps.is_empty(), "{edition}: нет карт набора {files:?}");
-            for number in game.state_numbers(files).unwrap() {
+            for number in numbers {
                 let state = game_state::parse(&game.state_bytes(number, files).unwrap()).unwrap();
                 let mut owners: HashMap<usize, usize> = HashMap::new();
                 for group in state.groups.iter().flatten() {
