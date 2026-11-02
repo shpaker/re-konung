@@ -49,6 +49,10 @@ pub enum Direction {
     SouthWest,
 }
 
+/// How many directions a step has: the length of the original's offset table, and
+/// of one row of a caller's step-duration table.
+pub const DIRECTION_COUNT: usize = 8;
+
 impl Direction {
     /// Every direction, in the order of the original's table.
     pub const ALL: [Direction; 8] = [

@@ -11,6 +11,7 @@
 //! brought to it from outside.
 
 pub mod movement;
+pub mod step_durations;
 
 use std::path::PathBuf;
 

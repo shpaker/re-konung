@@ -11,13 +11,17 @@ from dataclasses import dataclass
 from konung import rle
 from konung.k1 import executable, game_state
 from konung.k1.executable import Executable
-from konung.k1.graph_res import GraphRes, SpriteFrame, Sprites
+from konung.k1.graph_res import DIRECTIONS, GraphRes, SpriteFrame, Sprites
 from konung.k1.objects_res import ObjectsRes
 
 COLORS_PER_PALETTE = 256
 # У динамических объектов 6 анимаций; состояния 6–9 игра сводит к 0–3
 # (Slavik game_character.cpp:147)
 DYNAMIC_ANIMATIONS = 6
+
+# Walking is animation 1 of a sprite table: state 1 and state 7 (a weapon in hand)
+# share its frame count (docs/k1/creatures.md, "Состояния анимации 0–9")
+WALK_ANIMATION = 1
 
 
 @dataclass
@@ -66,6 +70,21 @@ def frame_count(character: game_state.Character, graph: GraphRes, objects: Objec
     if sprites is None:
         return 0
     return len(sprites.sequences[animation][character.direction])
+
+
+def walk_frame_counts(
+    character: game_state.Character, graph: GraphRes, objects: ObjectsRes
+) -> list[int]:
+    """Frame counts of the walk animation in all eight directions.
+
+    A step to a neighbouring cell lasts this many ticks (docs/k1/movement.md), so
+    a duration supplier reads it once per creature instead of once per step. A
+    creature with no walk frames answers 0 in every direction.
+    """
+    sprites, _ = _sprites(character, graph, objects)
+    if sprites is None:
+        return [0] * DIRECTIONS
+    return [len(sequence) for sequence in sprites.sequences[WALK_ANIMATION]]
 
 
 def compose(
