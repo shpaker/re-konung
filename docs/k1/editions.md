@@ -65,7 +65,7 @@ just k1-unpack eng
 
 **Confirmed** over both unpacked editions: the files are one length and differ over about 10–11.5 thousand bytes, and only in `characters` (attributes, equipment) and `items`/`loot` — `groups`, `exits` and `villages` match byte for byte, so the maps, transitions and villages are the same while ENG keeps more filled item slots (1448 against 1405 in `Game.1`). Maps stay interchangeable between the editions; the content of `Game.N` is compared edition by edition.
 
-The difference reaches the picture: `just check-maps` counts differ on 14 of the 43 maps in pieces, visible pieces, textures, animations and frames, while objects, decorations, characters and errors match on all of them and the three maps without characters match entirely. Worn equipment is a layer of its own, so a check of the scene against both editions compares two separate baselines. **Confirmed** by measurement.
+The difference reaches the picture. With the creature layer hidden, the draw lists of the two editions are identical on all 43 maps; with it on, they differ on 16. On 14 of those the `just check-maps` counters move as well (pieces, visible pieces, textures, animations, frames), while maps 2 and 12 keep every counter and differ only in which equipment set a layer draws and in one pixel of its place. So everything the editions disagree about comes from worn equipment — a layer per item — and a scene baseline is one per edition: counters alone would miss two of the sixteen. **Confirmed** over both unpacked trees.
 
 ## Чего нет
 
