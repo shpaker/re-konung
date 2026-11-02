@@ -5,6 +5,12 @@
 //! с непрозрачными ключами текстур, [Game::textures] декодирует их в RGBA.
 //! Специфика «Князя 1» спрятана в `k1-game` и `k1-data`; при появлении K2
 //! добавится второй бэкенд, не меняя этот API.
+//!
+//! [movement] — the shared movement engine: it depends on neither K1 nor the
+//! display, and builds the grid, the routes and the per-tick step from data
+//! brought to it from outside.
+
+pub mod movement;
 
 use std::path::PathBuf;
 

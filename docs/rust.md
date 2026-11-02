@@ -8,7 +8,7 @@ Cargo-workspace в `crates/` (edition 2024). Повторяет Python-паке�
 |---|---|---|
 | `k1-data` | данные игры K1: репозиторий (`repo`), форматы карт и состояния (`map`, `game_state`), правки состава (`game_edit`) и графика (`rle`, `palette`, `graph_res`, `objects_res`, `lights_res`, `flames_res`, `executable`, `characters`) | `Konung.N`, `LIGHTS.N`, `Game.N`: разбор и побайтно точная запись; добавление/удаление персонажей сохраняют укладку; `GRAPH.RES`, `Objects.res`, `LIGHTS.RES`, `FLAMES.RES` и таблицы из EXE читаются; кадры персонажей собираются; тесты на `original/` |
 | `k1-game` | специфика K1: ресурсы (`resources`), ключи текстур и RGBA-декодирование (`textures`), список отрисовки карты с группами кусков (`scene`) | сцена строится по эталону `konung/k1/render.py` (порядок, сортировка по нижнему краю, тени, огни, персонажи, оверлеи); каждый кусок помечен группой, какой слой её переключает; кадры анимаций собираются из `OBJECTS.RES`, таблицы огней EXE и последовательностей персонажа; headless, без Bevy; тесты на `original/` |
-| `kn-game` | общий фасад: `Game` (открыть каталог, карты, сцена, текстуры, headless-`check`), Bevy-независимая модель `Scene`/`Piece`/`TextureId`, `Animation`/`AnimationFrame`, `PieceGroup` и `group_is_shown` | скрывает K1 за общим API; сейчас в нём фасад и модель сцены, а общий движок перемещения появится здесь же — механика перемещения K1 и K2 предположительно почти одинакова ([AGENTS.md](../AGENTS.md), «Приоритет: современный опыт»); `CheckReport` сериализуется в JSON |
+| `kn-game` | the shared facade: `Game` (open a game directory, maps, scene, textures, headless `check`), the Bevy-independent model `Scene`/`Piece`/`TextureId`, `Animation`/`AnimationFrame`, `PieceGroup` and `group_is_shown`; the shared movement engine `movement` (grid, walkability, routes, a step per tick) | hides K1 behind a common API; `movement` knows neither K1 nor Bevy and reads no game files — the part's knowledge arrives through the `Passage` and `Pace` traits; K1 and K2 movement mechanics are presumably nearly identical ([AGENTS.md](../AGENTS.md), "Priority: modern experience"); `CheckReport` serializes to JSON |
 | `kn-io` | Bevy: кэш текстур (`textures`), куски сцены → спрайты по узлам групп (`scene`), покадровая анимация (`animation`), камера (`camera`) | Bevy 0.20, окно и GPU нужны только для запуска, не для тестов; оверлей — `Visibility` узла группы, а не пересборка карты; `animation` не знает ни о K1, ни о форматах |
 | `kn-viewer` | бинарь `re-konung-viewer`: окно с картой, Feathers-UI, воспроизведение анимации, headless-`check` | `check` работает без окна и GPU, возвращает ненулевой код при ошибке; карта собирается со всеми слоями |
 | `kn-exec` | бинарь `re-konung`: запуск игры | заготовка — стартовая карта новой игры тем же конвейером; игрового процесса нет |
@@ -37,9 +37,13 @@ k1-data (форматы)
     → kn-game: Game — фасад (open/maps/heroes/scene/textures/check); Scene/Piece/TextureId — общая модель, K1-типы наружу не выходят
       → kn-io: textures — TextureCache (RGBA → Image, один ассет на ключ); scene — куски → спрайты; animation — часы тиков и последовательности кадров на спрайтах; camera — панорама, ступенчатый масштаб, границы
         → kn-viewer (re-konung-viewer) и kn-exec (re-konung) — бинарники
+
+kn-game::movement — the shared movement engine — stands aside from this chain:
+it depends on neither `k1-*` nor Bevy, and takes the part's knowledge through
+the `Passage` and `Pace` traits (see "Movement engine")
 ```
 
-Зависимости идут только вниз: `kn-io` и бинарники не знают о K1, `kn-game` не знает о Bevy, `k1-data` — ни о том ни о другом.
+Dependencies point downward only: `kn-io` and the binaries know nothing of K1, `kn-game` knows nothing of Bevy, `k1-data` knows nothing of either; `kn_game::movement` knows nothing of K1 and nothing of the display at all.
 
 Порядок наложения сцены повторяет эталон `konung/k1/render.py`: земля → верхний слой → декорации (сырые пропускаются) → слой теней → объекты с огнями и персонажи, отсортированные по нижнему краю (ключ `(bottom, вид, слот)`, устойчивая сортировка — огни объекта остаются над его картинкой) → оверлеи: свет, проходимость, маркеры `Game.N`. Текстовые подписи маркеров не рисуются: в модели сцены нет текста, его показывает UI просмотрщика. Кольца маркеров — растеризованное приближение PIL-эллипса толщиной 3.
 
@@ -66,6 +70,245 @@ GRAPH.RES и OBJECTS.RES заимствуют буфер, поэтому `Resour
 `check` берёт начальное состояние по источнику карт: `Game.N` для игры, `TGame.N` для обучения. Одно состояние на оба источника расставляло бы по картам обучения персонажей основной игры (в ENG это давало 17 и 5 персонажей вместо 8 и 2). Ошибка одной карты попадает в её строку отчёта и не прерывает проверку остальных; недостающая текстура отличается от пустого слота и несёт причину (битое декодирование, палитра вне банка).
 
 Бинарные данные не считаются заведомо целыми: `rle` отсекает размеры за пределом `MAX_DIMENSION` и пропуски за ширину строки, `graph_res` проверяет, что палитра тайла помещается в банк цветов, `objects_res` — что число огней не превышает 20 слотов. Иначе следующее за чтением вычитание или аллокация паниковали бы на битом файле. Проверка пропуска зеркалирована в Python-эталон и в расширение Tiled — все три реализации формата остаются одинаковыми.
+
+## Movement engine (`kn_game::movement`)
+
+The shared layer (issue #35, epic #33 part 2): the isometric fine grid, cell
+walkability and occupancy, route search, walking a route and the game tick.
+Neither Bevy nor K1 — the part's specifics live in `k1-*` and the display in
+`kn-io`, so only the mechanics are here. Modules:
+
+- `grid` — the cell (`Cell`), the eight directions (`Direction`), cell ↔ pixels,
+  lattice coordinates without the row shift (`lattice`) and distance in cells;
+- `passage` — the `Passage` trait: a data supplier brings cell walkability;
+- `pace` — the `Pace` trait: how many ticks a step lasts in a direction — also
+  the supplier's job;
+- `occupancy` — `Occupancy`: one creature per cell, standing or held by a step
+  reservation;
+- `route` — `find_route` and `Route`: A\* (`pathfinding::astar`) over the grid;
+- `walk` — `Walker`: walking a finished route, steps per tick and the sprite
+  state (`WalkState`);
+- `world` — `World`: several creatures, the tick, disputes over cells, repathing
+  and events (`Event`); `tick_step` is the only event channel (see "Decision: one
+  channel for events");
+- `rng` — `Rng`: splitmix64, our own deterministic generator.
+
+Search and walking are deliberately far apart: `route` knows neither the tick nor
+the step duration, `walk` knows neither walkability nor how its route was found.
+`World` is the only place they meet and the only place time is counted.
+Walkability and occupancy are split the same way: `Passage` is the map's data,
+`Occupancy` is engine state, because only the engine knows who is mid-step and
+where. The original's facts — [k1/movement.md](k1/movement.md); the sections
+below are what we chose, not what the game shows.
+
+### Decision: step cost and the A* heuristic
+
+A step costs as many pixels as it travels: 464 units west and east, 256 north and
+south, 265 along the diagonals — all in 1/8 pixel, the diagonal being
+`ceil(8·√(29² + 16²))` rounded up. The heuristic is the straight-line distance
+between cell points in the same units (`u64::isqrt`, rounded down).
+
+The reason not to use "10/14 in cells": a cell rhombus is 58×32 px while
+neighbours stand 58, 32 and ≈33.1 px away, so orthogonal and diagonal steps have
+different lengths. A "10/14" metric would give the diagonal a cost of 14 against a
+north step's 10, though in pixels it is 33.1 against 32: with such weights the
+heuristic overestimates and A\* returns a route longer than the shortest. Once a
+step costs its own length, a straight-line estimate is admissible and monotone by
+the triangle inequality, so the search returns a genuinely shortest path and the
+route looks natural on an isometric picture
+(`route_cost_stays_close_to_a_straight_line`). Rounding the diagonal's cost up is
+deliberate: a step may never cost less than it really is.
+
+For the neighbourhood of a taken goal (several possible final cells) the
+heuristic measures the distance to the centre of the neighbourhood and subtracts
+the largest distance to a cell of that ring: the estimate stays admissible and no
+`isqrt` is needed per candidate cell.
+
+Distance in cells (`Cell::lattice_distance`, Chebyshev in unshifted lattice
+coordinates) kept a different role: it measures the neighbourhood of a taken goal.
+
+### Decision: routes without the 32-step limit
+
+A\* searches for a route of any length. The original's limit was the price of
+memory in 1999; it is reflected nowhere in the data and is not carried into modern
+limits (AGENTS.md, "Priority: modern experience"; the fact —
+[k1/movement.md](k1/movement.md), "Route limit: 32 steps in the original"). The
+saving is not one we need: a search over the whole fine grid costs 0.2–0.4 ms (see
+"Engine cost") — under one percent of a 60 ms tick.
+
+### Decision: no corner cutting
+
+Directions are divided not by the screen's diagonal but by how a cell touches its
+neighbour: east, west, north and south step through a vertex of the rhombus, and
+they are allowed only when both cells standing across the path are walkable
+(`Direction::corner_flanks`). Steps along a screen diagonal share a whole edge
+with the current cell — there is no corner left for them to cut. In unshifted
+lattice coordinates this is exactly the ordinary ban on diagonal moves in an
+8-connected grid: the four "screen-diagonal" steps are orthogonal there, while
+east/west/north/south are the diagonal ones.
+
+Flank cells are checked for map walkability only: another creature in a flank cell
+keeps a creature from entering the destination cell, and that is `Occupancy`'s
+job, not a corner rule. Otherwise a creature standing off to the side would block
+every passage.
+
+### Decision: one channel for events
+
+`tick_step` is the only place engine events leave. An order `move_to` given
+between ticks puts its own event (`RouteSet` or `NoRoute`) into the world's shared
+channel, and it is the first thing to arrive on the next tick, in the order the
+orders were given: outside a tick an event is neither lost nor emitted twice, and
+a consumer needs a single source. `move_to`'s return value stays the answer to the
+order itself — a step count or `Err(NoRoute)` — so the caller can decide at once
+without waiting for a tick.
+
+The rule "nobody stands in an impassable cell" is checked when a creature is
+placed as well: `World::add` refuses a cell outside the grid (`OutsideGrid`), a
+taken one (`CellTaken`) and an impassable one (`ImpassableCell`) — a creature
+inside a wall would break the invariant the world checks on every tick.
+
+### Decision: who yields a cell
+
+Starting a step, a creature reserves its destination cell and holds the
+reservation until the step ends (`Holder { standing: false }`). From that:
+
+- a head-on exchange is impossible: a foreign cell is held by a creature or by a
+  reservation, so the step does not start;
+- two creatures claiming one cell on one tick do not collide: a reservation is
+  exclusive and creatures are visited in number order, so the lower number gets
+  through first — and that is deterministic;
+- the cell a creature stepped out of is freed on the same tick, so whoever
+  follows enters it without waiting an extra tick;
+- if the destination cell became impassable while the creature was walking, the
+  step is rolled back (`Event::TerrainBlocked`), the creature stays on its own
+  cell and waits for a repath — it never ends up in an impassable cell.
+
+No separate "yielding rule" was invented: in Slavik a creature simply does not
+enter an occupied cell (`game.cpp:2889-2895`), and which of two creatures gives
+way in the game has not been worked out. There is no separate deadlock guard
+either: a cell frees itself after a few ticks, and if it does not, repathing kicks
+in. What happens to a creature with no detour — see "Open questions".
+
+### Decision: repathing without thrash
+
+A route search is the engine's most expensive operation, so it is called from one
+place only and under two conditions: the creature is standing with a route it
+cannot start (the cell ahead is taken or has become impassable) and has stood for
+`wait_before_repath_ticks` (12 ticks ≈ 0.72 s by default), and at least
+`repath_cooldown_ticks` (60 ticks ≈ 3.6 s) have passed since its last search. The
+whole route is not rechecked every tick: a creature learns about a blockage only
+when it is about to take a step.
+
+Both numbers are `WorldRules`, not constants: there are no confirmed values from
+the game, and part 3 can set its own. That a creature does not get stuck is held
+by a test: after a blockage the route is recomputed, and once the obstacle is
+removed the creature reaches its goal.
+
+A repath inserts no empty tick: a new route is spent by its first step on the very
+tick it was found
+(`a_deferred_order_starts_its_first_step_on_the_border_tick`). Before this, an
+order arriving while the creature was walking was executed one tick late — 60 ms
+of idling on every change of goal, while there is no pause between the steps of
+one route.
+
+### Decision: an occupied goal takes the nearest ring
+
+If the goal is taken or impassable, the search walks the rings of cells around it
+from the centre outward (`goal_fallback_radius`, 4 by default) and stops at the
+first ring it can route to: the creature goes to the closest free cell, not to the
+one cheapest to reach. The rings work **only for a goal that cannot be entered**:
+if the goal is free and walkable but unreachable, there is no answer — `find_route`
+returns `None` and the creature gets `Event::NoRoute`. Substituting a neighbouring
+cell for such a goal is not allowed, because the caller would not learn that the
+creature stopped somewhere other than where it was sent: it would see an arrival
+(`Event::Arrived`) where the order was not carried out
+(`a_free_but_unreachable_goal_does_not_take_a_ring_cell`). Without the ring sweep
+A\* would take the cheapest goal and stand on the cell nearest to itself rather
+than by the goal. Rings are enumerated centre outward, each with its own search:
+in the usual case — a free goal — there is exactly one. The radius bounds the
+worst case: a taken goal in a dead end will not force a sweep of the whole map,
+and a goal with no free cell even within the radius gives no route rather than a
+panic. A creature already standing in a free cell beside a taken goal gets an
+empty route: it has nowhere to go, and the order counts as done.
+
+### Decision: the seed breaks ties
+
+The order directions are tried in is rotated by a value from `Rng`, so a choice
+between routes of equal cost depends on the seed and repeats under the same seed.
+The seed does not affect the data: where the choice is not a tie, the route is the
+same under any seed — determinism would otherwise be out of reach. The generator
+sets no game rules: wherever the choice is in the data, the data is what arrives.
+
+### Decision: what the engine does not know
+
+The engine works in whole ticks; how many milliseconds a tick holds is the
+supplier's knowledge (`kn_game::TICK_MS`, 60 ms for K1). Step duration and
+walkability also arrive from outside, and a zero duration is counted as one tick:
+a zero-length step does not exist, and data must not panic the engine.
+
+What leaves the engine is `WalkState` (the cell, its pixel point, the cell it was
+entered from, the goal, the direction, whether a step is running and how many
+ticks are left in it) and `Event` (step start and end, arrival, waiting, blockage,
+repath, refusal). The direction index matches the original's table, so a
+visualization picks the walk animation by it; how to draw a sprite is not the
+engine's business.
+
+### Open questions
+
+- **A crowd with no detour.** If a repath around a taken cell gives no route, the
+  creature drops the order and stops (`Event::NoRoute`): the search does not repeat
+  forever, but neither does it resume by itself — whoever sent the order has to
+  send it again. Whether to hold the goal and wait for the crowd to clear is a
+  question for part 3: it is about behavior, not mechanics.
+- **A blockage mid-route.** A creature notices a closed cell only once it reaches
+  it, so a tree fallen in the middle of a route is worked around a few cells late.
+  Revisiting every route whenever walkability changes costs more and produces more
+  thrash.
+- **Rewinding.** The engine runs one way: `Event` is enough to rebuild state by
+  stepping forward through the ticks, and whether rewinding backwards is needed
+  (epic #33 part 5) is decided there.
+- **Differences in K2.** Running changes only the step duration, and that comes
+  from data; no other movement differences in K2 have been looked into yet.
+
+### Engine cost
+
+Release build, Apple M4 Pro, a fine grid of 160×320; measured by the
+`kn-game/tests/movement_cost.rs` test under `#[ignore]` (an ordinary `cargo test`
+does not run it):
+
+```bash
+cargo test --release --manifest-path crates/Cargo.toml -p kn-game \
+    --test movement_cost -- --ignored --nocapture
+```
+
+| Operation | Time |
+|---|---|
+| a world tick with 50 creatures walking | 1.7–1.8 µs (0.034–0.037 µs per creature) |
+| a world tick with 500 creatures walking | 14.2–15.1 µs (0.028–0.030 µs per creature) |
+| a tick with a blocked cell (amortized repath) | 1.9–2.2 µs |
+| a route across the whole map over open ground | 0.21–0.37 ms |
+| a route among walls | 2.0–2.2 ms |
+| a search next to 400 occupied cells | 2.8–3.0 ms |
+| a route to an unreachable goal (the whole reachable area) | 8.9–9.6 ms |
+| cell occupancy (a lookup) | 0.017–0.018 µs |
+| the A* heuristic (`isqrt`) | 0.005 µs |
+| a neighbour cell / cell to pixels | 0.002 / 0.001 µs |
+
+The spread over three runs in a row is given: under a percent for the short
+operations, nearly twofold for a route across open ground, so for that one the
+order of magnitude matters more than the number.
+
+Neighbouring operations for comparison (see the cost of switching layers below):
+switching a group of 5 131 sprites — 0.15 ms, parsing a render list — 26 ms. A
+tick of 50 creatures is about 90 times cheaper than an overlay switch and about
+15 000 times cheaper than parsing a map; a typical route (0.2–0.4 ms) is 1–3
+overlay switches and 1/65…1/125 of a map parse; the worst search is a third of a
+map parse and 15% of a 60 ms tick.
+
+The upshot: an engine tick costs microseconds and the entire cost is in route
+search, which is why `World` calls it no more often than `repath_cooldown_ticks`.
+The search for an unreachable goal stays the most expensive operation: part 3 must
+not run it on a timer for every creature.
 
 ## Отображение (`kn-io` и бинарники)
 
@@ -138,6 +381,8 @@ cargo run --release --manifest-path crates/Cargo.toml -p kn-exec -- \
 just cargo-test   # тесты: синтетические всегда, на данных — если есть original/
 just cargo-lint   # cargo fmt --check + clippy -D warnings
 ```
+
+The movement engine tests (`crates/kn-game/tests/movement.rs`, `movement_grid.rs`) are synthetic: they need neither game data nor Bevy — the grid, routes, a step per tick, a crowd of creatures and determinism are checked on invented walkability fields. `movement_grid.rs` is the only place in the module that knows about `k1-data`: a comparison of the grid formulas with the Python reference and with `game_state` over all 51 200 cells, not a layer dependency. The cost measurement (`movement_cost.rs`) is hidden under `#[ignore]` and is computed only by hand in release (see "Engine cost").
 
 Окно и GPU для тестов не нужны: `kn-game` и `k1-game` Bevy не используют, а `kn-io` и `kn-viewer` проверяют чистую логику — координаты и z-порядок кусков, ступени масштаба, разбор CLI, переключатели оверлеев, отчёт об ошибке, а у анимации — выбор кадра по тикам, накопление дробного остатка, пауза/выключение и пересчёт центра кадра. Сквозная проверка без окна — `check` (см. «Запуск»): на ENG все 43 карты игры и обе карты обучения собираются без ошибок, в release это ~5 с; в строке отчёта, кроме кусков и текстур, видно число анимированных кусков, их кадров и видимых в базовом кадре.
 

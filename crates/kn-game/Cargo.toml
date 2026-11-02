@@ -8,6 +8,7 @@ description = "Общий фасад игр серии «Князь»: моде�
 [dependencies]
 k1-data = { path = "../k1-data" }
 k1-game = { path = "../k1-game" }
+pathfinding = "4.16.0"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 

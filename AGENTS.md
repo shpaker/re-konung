@@ -58,7 +58,7 @@ Claude Code and other agents work on the project; the rules for all of them are 
 
 ## Coding style
 
-- Python 3.14, ruff. English is used for everything GitHub-facing: `.github/**` with the checks and the tests that cover them, this file, [CONTRIBUTING.md](CONTRIBUTING.md), and the text of issues and pull requests. Comments in the project's own code — Python, Rust, the Tiled extension — stay Russian; identifiers are English and unabbreviated.
+- Python 3.14, ruff. English is used for everything GitHub-facing: `.github/**` with the checks and the tests that cover them, this file, [CONTRIBUTING.md](CONTRIBUTING.md), and the text of issues and pull requests. New code and new documentation are English as well: comments, doc-comments, assertion and test names, and the `docs/` pages a change adds. Text that already exists keeps its language until a change touches it, and what is touched is rewritten in English — even when that leaves one English row in a Russian table. Identifiers are English and unabbreviated. Comments stay rare: only where the decision is not self-evident, brief and to the point.
 - A format parser is a pure function `parse(data: bytes)`; the filesystem lives separately (`load`).
 - Tests are simple: synthetic ones for algorithms (RLE), on real files for formats.
 

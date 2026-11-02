@@ -13,9 +13,10 @@
 
 ## «Князь: Легенды Лесной страны» (1999)
 
+- [k1/creatures.md](k1/creatures.md) — поведение существ: состояния, приказы, движение; что подтверждено, что гипотеза и что осталось неизвестным.
 - [k1/editions.md](k1/editions.md) — RUS и ENG: состав, отличия, как распаковать.
 - [k1/inventory.md](k1/inventory.md) — все файлы игры и что о них известно.
-- [k1/creatures.md](k1/creatures.md) — поведение существ: состояния, приказы, движение; что подтверждено, что гипотеза и что осталось неизвестным.
+- [k1/movement.md](k1/movement.md) — movement on the map: the fine grid, eight directions, step duration, the tick, the route limit.
 - [k1/tiled.md](k1/tiled.md) — как карта раскладывается в Tiled, как её править и сохранять.
 
 ### Статус форматов
