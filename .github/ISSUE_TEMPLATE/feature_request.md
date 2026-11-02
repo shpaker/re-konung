@@ -13,6 +13,9 @@ assignees: ''
 пустыми: неприменимое пишут как `None` или `N/A`. Необязательные — Implementation Notes,
 Alternatives, Dependencies / Related Issues — дописывают только когда есть что сказать:
 подтверждённые факты со ссылками и открытые вопросы идут в Implementation Notes.
+Зависимость перечисляют в Dependencies номерами, а настоящую связь ставит панель
+«Relationships» или `gh issue edit <n> --add-blocked-by <m>`: текст сам ничего не
+блокирует. Тикет закрывает PR строкой `Closes #NN` в своём разделе `Related`.
 -->
 
 ## Problem

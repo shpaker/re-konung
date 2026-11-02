@@ -161,6 +161,16 @@ def test_second_details_block_is_named():
     ]
 
 
+def test_markup_quoted_in_code_is_not_markup():
+    """Текст о самой форме цитирует `<details>` и `## What`: в коде это не разметка."""
+    quoted = (
+        BODY["What"]
+        + "\n\nThe template quotes `<details>` literally:\n\n"
+        + "```markdown\n## What\n```\n\nand nothing else."
+    )
+    assert form.check_body(render(What=quoted), form.PR_SECTIONS) == []
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -191,8 +201,7 @@ def test_paths_are_not_mentions():
 )
 def test_repo_template_has_the_sections_in_order(template: str, required: tuple[str, ...]):
     text = (GITHUB / template).read_text(encoding="utf-8")
-    titles = [title for title, _ in form.headings(form.english_part(text))]
-    assert titles == list(required)
+    assert [title for title, _ in form.structure(text)] == list(required)
 
 
 @pytest.mark.parametrize(
@@ -217,3 +226,12 @@ def test_contributing_documents_the_same_sections():
     text = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     for section in (*form.PR_SECTIONS, *form.BUG_SECTIONS, *form.FEATURE_SECTIONS):
         assert f"`{section}`" in text or f"## {section}" in text, section
+
+
+def test_github_linking_keywords_are_documented():
+    """Связи работают только служебными словами GitHub — они должны быть в правилах."""
+    contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    assert "Closes #" in contributing and "--add-blocked-by" in contributing
+    assert "Closes #" in (GITHUB / "pull_request_template.md").read_text(encoding="utf-8")
+    for template in ("ISSUE_TEMPLATE/bug_report.md", "ISSUE_TEMPLATE/feature_request.md"):
+        assert "Closes #" in (GITHUB / template).read_text(encoding="utf-8"), template
