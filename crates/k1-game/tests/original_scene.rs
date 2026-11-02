@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use k1_data::{
-    game_state, map,
+    characters, game_state, map,
     objects_res::{self, FRAMES},
     repo::{GAME_FILES, GameDir},
 };
@@ -541,4 +541,74 @@ fn group_filter_matches_a_scene_without_the_layer() {
             "{edition}: не все слои нашлись на картах: {verified:?}"
         );
     }
+}
+
+/// Criterion 8 of #36: the map without creatures plus the poses built through the
+/// public `scene::pose_in` give exactly the same draw list — same composition,
+/// order and depth — as the single pass `scene::draw_list`.
+#[test]
+fn map_plus_poses_gives_the_same_draw_list() {
+    let mut maps_with_creatures = 0;
+    for (edition, game) in game_dirs() {
+        let resources = Resources::load(&game).unwrap();
+        let data = game.state_bytes(0, GAME_FILES).unwrap();
+        let state = game_state::parse(&data).unwrap();
+        // GRAPH.RES and Objects.res are parsed once per edition: 66 megabytes, and
+        // a parse per map would make the test cost more than the check it guards
+        let reached = resources
+            .with_graphics(|graph, objects| {
+                let graphics = scene::Graphics::new(graph, objects, &resources.tables);
+                let mut reached = 0;
+                for number in game.map_numbers(GAME_FILES).unwrap() {
+                    let map_bytes = game.map_bytes(number, GAME_FILES).unwrap();
+                    let konung_map = map::parse(&map_bytes).unwrap();
+                    let lights_bytes = game.lights_bytes(number, GAME_FILES).unwrap();
+                    let lights = lights_bytes
+                        .as_ref()
+                        .map(|bytes| map::parse_lights(bytes).unwrap());
+                    let input = SceneInput {
+                        map: &konung_map,
+                        lights: lights.as_ref(),
+                        entities: Some(game_state::on_map(&state, number as usize, Some(0))),
+                        state: Some(&state),
+                        overlays: EVERY_SWITCH,
+                    };
+                    let entities = input.entities.as_ref().unwrap();
+                    let poses = characters::placed(entities, &state)
+                        .into_iter()
+                        .filter_map(|(character, x, y)| {
+                            let (px, py) = game_state::character_position(x, y);
+                            scene::pose_in(
+                                character,
+                                px,
+                                py,
+                                &state,
+                                &graphics,
+                                character.state,
+                                character.direction,
+                            )
+                            .ok()
+                            .flatten()
+                        })
+                        .collect::<Vec<_>>();
+                    let map =
+                        scene::map_scene(&input, graph, Some(objects), &resources.tables).unwrap();
+                    assert_eq!(
+                        scene::draw_list(&input, graph, Some(objects), &resources.tables).unwrap(),
+                        scene::assemble(map, &poses),
+                        "{edition} konung.{number}: map plus poses do not rebuild the same list"
+                    );
+                    if !poses.is_empty() {
+                        reached += 1;
+                    }
+                }
+                reached
+            })
+            .unwrap();
+        maps_with_creatures += reached;
+    }
+    assert!(
+        maps_with_creatures > 10,
+        "poses were built on only {maps_with_creatures} maps — the test checked almost nothing"
+    );
 }
