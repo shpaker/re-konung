@@ -845,6 +845,50 @@ mod tests {
         );
     }
 
+    /// The window delays a retry, it does not cancel it: a loop that keeps
+    /// re-sending the same order gets a real route once the goal is reachable
+    /// again and the window has passed. The engine is not told when walkability
+    /// changes, so "as soon as the path clears" is not something it can offer.
+    #[test]
+    fn a_repeated_unreachable_order_gets_a_route_once_the_window_passes() {
+        let mut world = world(8, 8);
+        let creature = world.add(Cell::new(1, 2)).unwrap();
+        let goal = Cell::new(6, 2);
+        let sealed = seal(&mut world, goal);
+        world.rules_mut().route.goal_fallback_radius = 0;
+        let cooldown = world.rules().repath_cooldown_ticks;
+
+        assert_eq!(world.move_to(creature, goal), Err(WorldError::NoRoute));
+        world.tick_step();
+
+        // The path clears, but the failed search is still inside its window.
+        unseal(&mut world, &sealed);
+        assert_eq!(
+            world.move_to(creature, goal),
+            Err(WorldError::NoRoute),
+            "a repeat inside the window must not search"
+        );
+        assert_eq!(world.tick_step(), Vec::new(), "the repeat ran a search");
+
+        // Once the window passes the same repeated order builds a route, and the
+        // creature walks it to the goal: the order never sticks.
+        for _ in 0..cooldown {
+            world.tick_step();
+        }
+        assert!(
+            matches!(world.move_to(creature, goal), Ok(steps) if steps > 0),
+            "a repeat after the window must search again"
+        );
+        for _ in 0..30 {
+            world.tick_step();
+        }
+        assert_eq!(
+            world.cell_of(creature),
+            Some(goal),
+            "the creature must reach the goal the loop kept ordering"
+        );
+    }
+
     /// Inside the window a repeat is refused by the return value only: no
     /// search runs, so the event channel stays silent and the creature is
     /// untouched.

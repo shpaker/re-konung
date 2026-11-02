@@ -247,7 +247,12 @@ order sticks and a goal the crowd has freed is never retried
 (`deferred_no_route_can_be_retried_after_the_path_clears`). So the two memories
 pull in opposite directions — one keeps an order it must not re-search, the other
 keeps an order it must search again — and the throttle window is what separates
-them: the retry is late, never absent. `World::stop` clears the failed goal too, so
+them: the retry is late, never absent
+(`a_repeated_unreachable_order_gets_a_route_once_the_window_passes`). Late is the
+best the engine can promise: `Passage` is a query, not a notifier, so nothing tells
+the world that walkability changed and no search can be woken the moment a path
+clears. Notifying the world of a terrain change is its own design, taken up when a
+consumer exists (#54). `World::stop` clears the failed goal too, so
 a withdrawn order followed by the same order is a real search
 (`stop_clears_a_failed_goal_so_the_next_order_searches`), and a different goal is
 never held up by a failed one
