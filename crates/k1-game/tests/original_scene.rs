@@ -548,7 +548,6 @@ fn group_filter_matches_a_scene_without_the_layer() {
 /// order and depth — as the single pass `scene::draw_list`.
 #[test]
 fn map_plus_poses_gives_the_same_draw_list() {
-    let mut maps_with_creatures = 0;
     for (edition, game) in game_dirs() {
         let resources = Resources::load(&game).unwrap();
         let data = game.state_bytes(0, GAME_FILES).unwrap();
@@ -605,12 +604,13 @@ fn map_plus_poses_gives_the_same_draw_list() {
                 reached
             })
             .unwrap();
-        maps_with_creatures += reached;
+        // A guard against a test that silently measured nothing: an edition whose
+        // maps hold no creatures would compare empty lists
+        assert!(
+            reached > 10,
+            "{edition}: poses were built on only {reached} maps — the test checked almost nothing"
+        );
     }
-    assert!(
-        maps_with_creatures > 10,
-        "poses were built on only {maps_with_creatures} maps — the test checked almost nothing"
-    );
 }
 
 /// Criterion 7 of #36: a pose is built for every direction and for the rest and

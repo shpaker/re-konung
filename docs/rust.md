@@ -310,6 +310,32 @@ search, which is why `World` calls it no more often than `repath_cooldown_ticks`
 The search for an unreachable goal stays the most expensive operation: part 3 must
 not run it on a timer for every creature.
 
+### Pose cost
+
+Release build, Apple M4 Pro, `konung.1` of both editions (25 creatures), measured by
+the `k1-game/tests/pose_cost.rs` test under `#[ignore]`:
+
+```bash
+cargo test --release --manifest-path crates/Cargo.toml -p k1-game \
+    --test pose_cost -- --ignored --nocapture
+```
+
+| Operation | Time |
+|---|---|
+| parsing `GRAPH.RES` and `Objects.res` | 19–26 ms |
+| one pose: the layers and frames of one state and direction | 56–57 µs |
+| rebuilding a pose when state or direction changes | 61 µs |
+| every creature of the map in its resting pose | 0.92 ms |
+
+**Decision (issue #36, whether lazily built poses are affordable):** a pose is built
+when it is needed and kept until the creature changes its state or direction. One
+assembly is a hundredth of the 60 ms tick, and a whole map of creatures costs 37 µs
+per creature, so preloading every state and every direction for a map would multiply
+the work by dozens to show what nobody asked for. The part worth caching is the
+parsed resources, not the poses: one parse is worth 300–500 poses, which is why
+`Resources::with_graphics` hands the tables to a closure instead of returning them,
+and `k1_game::scene::Graphics` holds them while poses are built.
+
 ## Отображение (`kn-io` и бинарники)
 
 Bevy 0.20; окно и GPU нужны только чтобы запустить бинарь, тесты идут без них.
