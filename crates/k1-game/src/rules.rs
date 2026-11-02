@@ -1,8 +1,8 @@
 //! K1 creature behavior classification and decision evaluation.
 //!
 //! Pure K1 logic: classifies creatures by [`CreatureType`] and produces
-//! [`Decision`]s from roster data. This module owns neither [`kn_game`] nor
-//! [`World`]; application lives in kn-game where those types exist.
+//! [`Decision`]s from roster data. This module owns neither `kn-game` nor
+//! `World`; application lives in kn-game where those types exist.
 //!
 //! Criterion 5 of epic #36: lone NPCs (group kind 0x53) produce
 //! [`Decision::None`]. Other types are placeholders pending equipment data
