@@ -20,8 +20,11 @@ pub mod group {
     pub const LAST_ROAMING: u8 = 0x50;
     /// Lone NPC (одиночный NPC).
     pub const LONE_NPC: u8 = 0x53;
-    /// Village villager groups (жители деревень), lowest 2 bits = side.
+    /// Village villager groups (жители деревень), lower 2 bits = side.
     pub const VILLAGE_FIRST: u8 = 0x80;
+    /// Last documented villager group kind. `docs/k1/formats/game-state.md`
+    /// records only 0x80–0x82; higher kinds are unconfirmed and not villagers.
+    pub const VILLAGE_LAST: u8 = 0x82;
 }
 
 /// Class constants from Slavik (`game.h`). Byte 0x04 of `Character`.
@@ -67,7 +70,9 @@ pub mod class {
 /// Decision produced by one creature during evaluation.
 #[derive(Debug, Clone, Copy)]
 pub enum Decision {
-    /// No action — creature stays where it is.
+    /// No new order for this tick. This does NOT stop a creature that is
+    /// already walking a route from an earlier `MoveTo` — there is no stop
+    /// decision yet, and `None` must not be read as "cancel".
     None,
     /// Move to target cell (fine-grid lattice coordinates).
     MoveTo(u32, u32),
@@ -111,9 +116,10 @@ pub fn classify(creature: &Creature) -> CreatureType {
     match creature.group_kind {
         group::LONE_NPC => CreatureType::LoneNpc,
         group::FIRST_ROAMING..=group::LAST_ROAMING => CreatureType::RoamingMonster,
-        group::VILLAGE_FIRST.. => CreatureType::Villager,
+        group::VILLAGE_FIRST..=group::VILLAGE_LAST => CreatureType::Villager,
         _ => {
-            // Player group (0x20) or unrecognised kind — always player/warrior.
+            // Player group (0x20) or an unconfirmed kind — treated as
+            // player/warrior: it does not get the villager or roaming rules.
             CreatureType::PlayerOrWarrior
         }
     }
@@ -188,10 +194,60 @@ mod tests {
     }
 
     #[test]
-    fn group_0x80_to_0xff_are_villagers() {
-        for kind in group::VILLAGE_FIRST..=0xff {
+    fn group_0x80_to_0x82_are_villagers() {
+        for kind in group::VILLAGE_FIRST..=group::VILLAGE_LAST {
             assert_eq!(classify(&make_creature(kind, 0)), CreatureType::Villager);
         }
+    }
+
+    /// Boundary of the confirmed villager range: 0x83 is not documented as a
+    /// villager kind, so it must not be classified as one.
+    #[test]
+    fn group_just_above_villager_range_is_not_a_villager() {
+        assert_eq!(
+            classify(&make_creature(group::VILLAGE_LAST + 1, 0)),
+            CreatureType::PlayerOrWarrior
+        );
+    }
+
+    /// Group_kind boundaries on either side of every classified range.
+    #[test]
+    fn group_kind_boundaries() {
+        // Just below / at / above the roaming range 0x41..=0x50.
+        assert_eq!(
+            classify(&make_creature(group::FIRST_ROAMING - 1, 0)),
+            CreatureType::PlayerOrWarrior
+        );
+        assert_eq!(
+            classify(&make_creature(group::FIRST_ROAMING, 0)),
+            CreatureType::RoamingMonster
+        );
+        assert_eq!(
+            classify(&make_creature(group::LAST_ROAMING, 0)),
+            CreatureType::RoamingMonster
+        );
+        assert_eq!(
+            classify(&make_creature(group::LAST_ROAMING + 1, 0)),
+            CreatureType::PlayerOrWarrior
+        );
+        // Just below / at the lone NPC 0x53.
+        assert_eq!(
+            classify(&make_creature(group::LONE_NPC - 1, 0)),
+            CreatureType::PlayerOrWarrior
+        );
+        assert_eq!(
+            classify(&make_creature(group::LONE_NPC, 0)),
+            CreatureType::LoneNpc
+        );
+        // Just below / at the villager range 0x80.
+        assert_eq!(
+            classify(&make_creature(group::VILLAGE_FIRST - 1, 0)),
+            CreatureType::PlayerOrWarrior
+        );
+        assert_eq!(
+            classify(&make_creature(group::VILLAGE_FIRST, 0)),
+            CreatureType::Villager
+        );
     }
 
     // Negative: unknown group kinds fall through to player_or_warrior.
@@ -203,6 +259,10 @@ mod tests {
         );
         assert_eq!(
             classify(&make_creature(0x10, 0)), // low value
+            CreatureType::PlayerOrWarrior
+        );
+        assert_eq!(
+            classify(&make_creature(0xff, 0)), // above every range
             CreatureType::PlayerOrWarrior
         );
     }
@@ -219,14 +279,14 @@ mod tests {
                 "class {class_id:#04x} must not change LoneNpc"
             );
             assert_eq!(
-                classify(&make(group::VILLAGE_FIRST, class::WARRIOR, 0)),
+                classify(&make(group::VILLAGE_FIRST, class_id, 0)),
                 CreatureType::Villager,
-                "villager group with warrior class must stay Villager"
+                "class {class_id:#04x} must not change Villager"
             );
             assert_eq!(
-                classify(&make(group::FIRST_ROAMING, class::WARRIOR, 0)),
+                classify(&make(group::FIRST_ROAMING, class_id, 0)),
                 CreatureType::RoamingMonster,
-                "roaming group with any class must stay RoamingMonster"
+                "class {class_id:#04x} must not change RoamingMonster"
             );
         }
     }

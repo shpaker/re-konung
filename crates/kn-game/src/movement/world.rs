@@ -105,6 +105,10 @@ struct Actor {
     walker: Walker,
     /// The cell the creature was sent to; kept until it arrives.
     goal: Option<Cell>,
+    /// The last goal an order named, kept across arrival so a tick loop that
+    /// re-sends the same order is recognized as a no-op rather than a new
+    /// search (docs/rust.md, "Decision: a repeated order is idempotent").
+    last_commanded: Option<Cell>,
     /// A new order not yet turned into a route: it arrived while the creature
     /// was mid-step and will be executed at the cell border.
     pending: bool,
@@ -119,6 +123,7 @@ impl Actor {
         Actor {
             walker,
             goal: None,
+            last_commanded: None,
             pending: false,
             waiting_ticks: 0,
             last_search: 0,
@@ -226,6 +231,12 @@ impl<P: Passage, K: Pace> World<P, K> {
     /// given up, and `Ok(0)` is returned then. `Err(NoRoute)` — there is no
     /// route and the creature stays where it is.
     ///
+    /// A repeated order to the goal the creature was last sent to is idempotent:
+    /// it neither resets the waiting counter nor forces a new search, and
+    /// returns the steps the current route still has (or `0` once arrived). A
+    /// tick loop that re-sends the same order every tick must not disturb the
+    /// repath timing (docs/rust.md, "Decision: a repeated order is idempotent").
+    ///
     /// The search events (`RouteSet`/`NoRoute`) go into the world's shared
     /// channel and come out first on the next [`World::tick_step`] — outside a
     /// tick the engine emits no events, but it does not lose them either.
@@ -234,22 +245,43 @@ impl<P: Passage, K: Pace> World<P, K> {
         if !self.grid.contains(goal) {
             return Err(WorldError::OutsideGrid);
         }
+        if self.actors[index].last_commanded == Some(goal) {
+            return Ok(self.actors[index].walker.route_len());
+        }
         self.actors[index].goal = Some(goal);
         self.actors[index].pending = true;
         self.actors[index].waiting_ticks = 0;
         if self.actors[index].walker.is_walking() {
+            // Kept: the order will be carried out at the cell border, so it is
+            // pursued and a repeat is a no-op.
+            self.actors[index].last_commanded = Some(goal);
             return Ok(0);
         }
         let mut events = Vec::new();
         let steps = self.search_route(index, &mut events);
         self.pending_events.append(&mut events);
-        steps.ok_or(WorldError::NoRoute)
+        match steps {
+            Some(steps) => {
+                self.actors[index].last_commanded = Some(goal);
+                Ok(steps)
+            }
+            // A goal with no route is not remembered: re-sending it is the only
+            // way to retry once a crowd clears, and must search again.
+            None => {
+                self.actors[index].last_commanded = None;
+                Err(WorldError::NoRoute)
+            }
+        }
     }
 
     /// Withdraw the order: the creature finishes the step it started and stops.
+    ///
+    /// Clears the remembered goal too, so a later order to the same cell is a
+    /// real new order, not an idempotent no-op.
     pub fn stop(&mut self, creature: CreatureId) -> Result<(), WorldError> {
         let index = self.index(creature).ok_or(WorldError::UnknownCreature)?;
         self.actors[index].goal = None;
+        self.actors[index].last_commanded = None;
         self.actors[index].pending = false;
         self.actors[index].waiting_ticks = 0;
         self.actors[index].walker.clear_route();

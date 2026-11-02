@@ -211,6 +211,20 @@ order arriving while the creature was walking was executed one tick late — 60 
 of idling on every change of goal, while there is no pause between the steps of
 one route.
 
+### Decision: a repeated order is idempotent
+
+A rules tick loop re-sends a creature's current goal every tick. `World::move_to`
+remembers the last goal it accepted (`Actor::last_commanded`) and treats a repeat
+of that goal as a no-op: it returns the steps the current route still has and
+neither resets the waiting counter nor runs a fresh search. Without this the loop
+would clear `waiting_ticks` and call A\* every tick — the opposite of "repathing
+without thrash", and a route would never be allowed to complete.
+
+The memory is kept across arrival, so an order re-sent to a creature already at
+rest on that goal is still a no-op; `World::stop` clears it, and a different goal
+overwrites it. A goal that had no route is not remembered, because re-sending it
+is the only way to retry once a crowd clears.
+
 ### Decision: an occupied goal takes the nearest ring
 
 If the goal is taken or impassable, the search walks the rings of cells around it
