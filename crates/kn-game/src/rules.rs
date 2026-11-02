@@ -4,7 +4,7 @@
 //! world. Uses explicit `(CreatureId, Decision)` pairs so there is no index
 //! mismatch between creatures and decisions.
 //!
-//! See docs/rust.md for "Evaluation vs application in a tick".
+//! See docs/rust.md, "Decision: separate evaluate from apply".
 
 use super::movement::CreatureId;
 use super::movement::grid::Cell;

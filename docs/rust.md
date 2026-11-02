@@ -336,6 +336,37 @@ parsed resources, not the poses: one parse is worth 250–450 poses, which is wh
 `Resources::with_graphics` hands the tables to a closure instead of returning them,
 and `k1_game::scene::Graphics` holds them while poses are built.
 
+## Creature rules (`k1-game::rules` → `kn-game::rules`)
+
+Epic #36 part 3. K1 behavior splits from the shared world in two crates: evaluation
+lives in `k1-game::rules` (it reads only `Creature`, so it needs no dependency on
+`kn-game`), application lives in `kn-game::rules` (it takes explicit
+`(CreatureId, Decision)` pairs and calls `World::move_to`).
+
+### Decision: separate evaluate from apply
+
+Two phases per tick — evaluate the whole roster first, then apply — so that
+decisions do not depend on the order creatures are visited in. If a single pass
+mutated the world as it went, the second creature's decision would see the first
+already moved and the roster's iteration order would leak into behavior. A
+contested cell is settled by the world itself (see "Decision: who yields a cell"),
+not by whoever happened to evaluate earlier.
+
+### Decision: classification is by group kind, not class byte
+
+`0x53` in the ticket is a *group kind* (see `Group.kind` in
+[game-state.md](k1/formats/game-state.md)), not a character class; villager groups
+are `0x80`–`0x82`. `Creature` carries both `class_id` (byte 0x04, describes the
+character: sprite source, dead bit, work bits) and `group_kind` (byte 0x1E of the
+group, describes the band), and `classify()` reads only the second. A warrior
+class_id inside a villager group still classifies as `Villager`.
+
+### Open questions
+
+- The `class` module in `k1-game::rules` carries the Slavik `CHCLASS` values as
+  documentation only; nothing reads them yet. Whether they end up load-bearing or
+  get dropped comes with criteria 3 and 4 (villager work bits, monster group state).
+
 ## Отображение (`kn-io` и бинарники)
 
 Bevy 0.20; окно и GPU нужны только чтобы запустить бинарь, тесты идут без них.
