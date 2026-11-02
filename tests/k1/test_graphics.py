@@ -144,3 +144,33 @@ def test_every_character_on_every_map_is_drawn(k1_game, k1_file):
                         i for i in worn if tables.equipment[state.items[i].info_id].sprite_set >= 0
                     ]
                     assert len(sprite.layers) == 1 + len(drawn), (hero, character.slot)
+
+
+# Frames of the walk animation per direction, measured over both editions; the
+# table and its meaning — docs/k1/movement.md, "Step duration".
+WALK_FRAMES = [12] * 8
+SPECIAL_DYNAMIC = {
+    3: [0, 0, 0, 0, 0, 0, 0, 0],
+    19: [2, 2, 2, 2, 2, 12, 2, 2],
+    20: [1, 1, 1, 12, 1, 1, 1, 12],
+    23: [6, 6, 6, 6, 6, 6, 6, 6],
+}
+
+
+def test_walk_frame_counts_match_the_measured_animation_table(k1_game, k1_file):
+    graph = graph_res.load(k1_file("graph.res"))
+    objects = objects_res.load(k1_file("objects.res"))
+    seen = set()
+    for hero in game_state.numbers(k1_game):
+        state = game_state.load(k1_game, hero)
+        for number in map_file.map_numbers(k1_game):
+            entities = game_state.on_map(state, number, hero)
+            for character, _, _ in characters.placed(entities, state):
+                if character.has_dynamic_sprite:
+                    expected = SPECIAL_DYNAMIC.get(character.sprite_set, WALK_FRAMES)
+                else:
+                    expected = WALK_FRAMES
+                counts = characters.walk_frame_counts(character, graph, objects)
+                assert counts == expected, (hero, number, character.slot, character.sprite_set)
+                seen.add((character.has_dynamic_sprite, character.sprite_set))
+    assert len(seen) > 20, seen

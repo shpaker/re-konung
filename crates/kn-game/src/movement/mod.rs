@@ -51,7 +51,9 @@ impl CreatureId {
     }
 }
 
-pub use grid::{Cell, Direction, FINE_HEIGHT, FINE_WIDTH, Grid, ODD_ROW_SHIFT, STEP_X, STEP_Y};
+pub use grid::{
+    Cell, DIRECTION_COUNT, Direction, FINE_HEIGHT, FINE_WIDTH, Grid, ODD_ROW_SHIFT, STEP_X, STEP_Y,
+};
 pub use occupancy::{Holder, Occupancy};
 pub use pace::Pace;
 pub use passage::Passage;

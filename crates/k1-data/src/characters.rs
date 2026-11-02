@@ -8,7 +8,7 @@
 
 use crate::executable::{EQUIPMENT_PALETTES, Executable};
 use crate::game_state::{Character, GameState, MapEntities};
-use crate::graph_res::{GraphRes, Result, SpriteFrame, Sprites};
+use crate::graph_res::{DIRECTIONS, GraphRes, Result, SpriteFrame, Sprites};
 use crate::objects_res::ObjectsRes;
 use crate::rle::IndexedImage;
 
@@ -16,6 +16,10 @@ pub const COLORS_PER_PALETTE: usize = 256;
 /// У динамических объектов 6 анимаций; состояния 6–9 игра сводит к 0–3
 /// (Slavik game_character.cpp:147)
 pub const DYNAMIC_ANIMATIONS: u8 = 6;
+
+/// Walking is animation 1 of a sprite table: state 1 and state 7 (a weapon in
+/// hand) share its frame count (docs/k1/creatures.md, "Animation states 0-9").
+pub const WALK_ANIMATION: usize = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LayerSource {
@@ -91,19 +95,28 @@ fn sprites_for<'a>(
     graph: &'a GraphRes<'a>,
     objects: &'a ObjectsRes<'a>,
 ) -> (Option<&'a Sprites<'a>>, usize) {
-    if character.has_dynamic_sprite() {
-        (
-            objects
-                .dynamic
-                .get(character.sprite_set as usize)
-                .and_then(Option::as_ref),
-            (character.state % DYNAMIC_ANIMATIONS) as usize,
-        )
+    let sprites = sprites_of(character, graph, objects);
+    let animation = if character.has_dynamic_sprite() {
+        (character.state % DYNAMIC_ANIMATIONS) as usize
     } else {
-        (
-            graph.models.get(character.sprite_set as usize),
-            character.state as usize,
-        )
+        character.state as usize
+    };
+    (sprites, animation)
+}
+
+/// Whose sprite table this character draws from: a model or a dynamic object.
+fn sprites_of<'a>(
+    character: &Character,
+    graph: &'a GraphRes<'a>,
+    objects: &'a ObjectsRes<'a>,
+) -> Option<&'a Sprites<'a>> {
+    if character.has_dynamic_sprite() {
+        objects
+            .dynamic
+            .get(character.sprite_set as usize)
+            .and_then(Option::as_ref)
+    } else {
+        graph.models.get(character.sprite_set as usize)
     }
 }
 
@@ -116,6 +129,30 @@ pub fn frame_count(character: &Character, graph: &GraphRes<'_>, objects: &Object
         .get(animation)
         .and_then(|row| row.get(character.direction as usize))
         .map_or(0, Vec::len)
+}
+
+/// Frame counts of the walk animation in every direction, in the order of the
+/// original's direction table ([`DIRECTIONS`]).
+///
+/// A step to a neighbouring cell lasts this many ticks (docs/k1/movement.md,
+/// "Step duration"), so a duration supplier reads it once per creature instead of
+/// once per step. Missing walk frames and a missing sprite table both answer 0.
+pub fn walk_frame_counts(
+    character: &Character,
+    graph: &GraphRes<'_>,
+    objects: &ObjectsRes<'_>,
+) -> [usize; DIRECTIONS] {
+    let mut counts = [0; DIRECTIONS];
+    let Some(sprites) = sprites_of(character, graph, objects) else {
+        return counts;
+    };
+    let Some(row) = sprites.sequences.get(WALK_ANIMATION) else {
+        return counts;
+    };
+    for (direction, count) in counts.iter_mut().enumerate() {
+        *count = row.get(direction).map_or(0, Vec::len);
+    }
+    counts
 }
 
 /// Кадр персонажа, стоящего в точке (x, y) карты; None — если кадра нет.
