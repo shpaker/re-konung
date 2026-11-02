@@ -25,7 +25,8 @@ pub struct WorldRules {
     /// two, so running a search every tick is pointless.
     pub wait_before_repath_ticks: u32,
     /// Shortest gap between two searches for the same creature, in ticks: the
-    /// guard against thrash when even the detour does not get through.
+    /// guard against thrash when even the detour does not get through, and the
+    /// window a repeated order to a goal that had no route is throttled to.
     pub repath_cooldown_ticks: u32,
     /// Route search rules.
     pub route: RouteRules,
@@ -109,6 +110,12 @@ struct Actor {
     /// re-sends the same order is recognized as a no-op rather than a new
     /// search (docs/rust.md, "Decision: a repeated order is idempotent").
     last_commanded: Option<Cell>,
+    /// The goal whose last route search found no route, kept only until that
+    /// order is retried, replaced or withdrawn: it is what the repeat order is
+    /// throttled against, and cannot be `last_commanded` — that one has to stay
+    /// cleared so a retry after a crowd clears is not a silent no-op
+    /// (docs/rust.md, "Decision: a failed goal is retried on a cooldown").
+    failed_goal: Option<Cell>,
     /// A new order not yet turned into a route: it arrived while the creature
     /// was mid-step and will be executed at the cell border.
     pending: bool,
@@ -124,6 +131,7 @@ impl Actor {
             walker,
             goal: None,
             last_commanded: None,
+            failed_goal: None,
             pending: false,
             waiting_ticks: 0,
             last_search: 0,
@@ -237,6 +245,14 @@ impl<P: Passage, K: Pace> World<P, K> {
     /// tick loop that re-sends the same order every tick must not disturb the
     /// repath timing (docs/rust.md, "Decision: a repeated order is idempotent").
     ///
+    /// A repeated order to a goal whose last search found no route is refused
+    /// the same way it would be by a real search — `Err(NoRoute)` — but without
+    /// running one and without a new [`Event::NoRoute`], until
+    /// [`WorldRules::repath_cooldown_ticks`] have passed since that failed
+    /// search (docs/rust.md, "Decision: a failed goal is retried on a
+    /// cooldown"). The refusal reaches the caller through the return value; the
+    /// event channel carries only the search that actually ran.
+    ///
     /// The search events (`RouteSet`/`NoRoute`) go into the world's shared
     /// channel and come out first on the next [`World::tick_step`] — outside a
     /// tick the engine emits no events, but it does not lose them either.
@@ -247,6 +263,12 @@ impl<P: Passage, K: Pace> World<P, K> {
         }
         if self.actors[index].last_commanded == Some(goal) {
             return Ok(self.actors[index].walker.route_len());
+        }
+        let actor = &self.actors[index];
+        if actor.failed_goal == Some(goal)
+            && self.tick - actor.last_search < u64::from(self.rules.repath_cooldown_ticks)
+        {
+            return Err(WorldError::NoRoute);
         }
         self.actors[index].goal = Some(goal);
         self.actors[index].pending = true;
@@ -266,12 +288,14 @@ impl<P: Passage, K: Pace> World<P, K> {
 
     /// Withdraw the order: the creature finishes the step it started and stops.
     ///
-    /// Clears the remembered goal too, so a later order to the same cell is a
-    /// real new order, not an idempotent no-op.
+    /// Clears the remembered goals too, so a later order to the same cell is a
+    /// real new order: neither an idempotent no-op nor a throttled retry of a
+    /// search that failed before the withdrawal.
     pub fn stop(&mut self, creature: CreatureId) -> Result<(), WorldError> {
         let index = self.index(creature).ok_or(WorldError::UnknownCreature)?;
         self.actors[index].goal = None;
         self.actors[index].last_commanded = None;
+        self.actors[index].failed_goal = None;
         self.actors[index].pending = false;
         self.actors[index].waiting_ticks = 0;
         self.actors[index].walker.clear_route();
@@ -469,6 +493,7 @@ impl<P: Passage, K: Pace> World<P, K> {
                 let steps = route.len();
                 self.actors[index].pending = false;
                 self.actors[index].last_commanded = Some(goal);
+                self.actors[index].failed_goal = None;
                 self.actors[index].walker.set_route(&route);
                 events.push(Event::RouteSet { creature, steps });
                 Some(steps)
@@ -478,8 +503,11 @@ impl<P: Passage, K: Pace> World<P, K> {
                 self.actors[index].goal = None;
                 // Forget the goal so a later order to it re-searches: re-sending
                 // an unreachable goal is the only retry once a crowd clears, and
-                // a stale memory would make that retry a silent no-op.
+                // a stale memory would make that retry a silent no-op. The
+                // repeat is throttled by `failed_goal` instead, so the retry
+                // costs one search per cooldown and not one per tick.
                 self.actors[index].last_commanded = None;
+                self.actors[index].failed_goal = Some(goal);
                 self.actors[index].walker.clear_route();
                 events.push(Event::NoRoute { creature, goal });
                 None
@@ -728,6 +756,9 @@ mod tests {
     /// A deferred order whose search finds no route must not be remembered: the
     /// creature has to retry the same goal once the path clears. Regression for
     /// the `last_commanded` hang where a deferred NoRoute left the goal sticky.
+    ///
+    /// The retry is allowed only once the failed-goal window has passed (#54),
+    /// so the test waits out `repath_cooldown_ticks` before re-sending.
     #[test]
     fn deferred_no_route_can_be_retried_after_the_path_clears() {
         let mut world = world(8, 8);
@@ -763,11 +794,162 @@ mod tests {
             "the deferred order to the sealed goal must report NoRoute"
         );
 
-        // Free the path and re-send the same goal: it must be searched again.
+        // Free the path, but re-send inside the window: the search is throttled,
+        // so the goal is still refused rather than routed (#54).
         unseal(&mut world, &sealed);
+        assert_eq!(
+            world.move_to(creature, goal),
+            Err(WorldError::NoRoute),
+            "a retry inside the failed-goal window must not search"
+        );
+
+        // Wait the window out, then re-send: the goal must be searched again.
+        let cooldown = world.rules().repath_cooldown_ticks;
+        for _ in 0..=cooldown {
+            world.tick_step();
+        }
         assert!(
             matches!(world.move_to(creature, goal), Ok(steps) if steps > 0),
-            "a retry to a now-reachable goal must build a route, not be ignored"
+            "a retry after the window to a now-reachable goal must build a route, not be ignored"
+        );
+    }
+
+    /// A rules-style loop that re-sends the same unreachable order every tick
+    /// must pay for the worst search the engine has once per cooldown window,
+    /// not once per tick (#54).
+    #[test]
+    fn repeated_unreachable_order_is_throttled_to_the_cooldown() {
+        let mut world = world(12, 12);
+        let creature = world.add(Cell::new(1, 6)).unwrap();
+        let goal = Cell::new(10, 6);
+        for row in 0..12 {
+            world.passage_mut().blocked.insert(Cell::new(6, row));
+        }
+        world.rules_mut().route.goal_fallback_radius = 0;
+        let cooldown = world.rules().repath_cooldown_ticks;
+        let ticks = 4 * cooldown;
+
+        let mut refusals = 0;
+        for _ in 0..ticks {
+            assert_eq!(world.move_to(creature, goal), Err(WorldError::NoRoute));
+            refusals += world
+                .tick_step()
+                .iter()
+                .filter(|event| matches!(event, Event::NoRoute { .. }))
+                .count();
+        }
+        assert_eq!(
+            refusals,
+            usize::try_from(ticks / cooldown).unwrap(),
+            "{refusals} searches in {ticks} ticks: expected one per cooldown window"
+        );
+    }
+
+    /// Inside the window a repeat is refused by the return value only: no
+    /// search runs, so the event channel stays silent and the creature is
+    /// untouched.
+    #[test]
+    fn a_retry_inside_the_window_neither_searches_nor_reports_a_refusal() {
+        let mut world = world(12, 12);
+        let creature = world.add(Cell::new(1, 6)).unwrap();
+        let goal = Cell::new(10, 6);
+        for row in 0..12 {
+            world.passage_mut().blocked.insert(Cell::new(6, row));
+        }
+        world.rules_mut().route.goal_fallback_radius = 0;
+
+        assert_eq!(world.move_to(creature, goal), Err(WorldError::NoRoute));
+        let cooldown = world.rules().repath_cooldown_ticks;
+        // the search that ran surfaces as exactly one refusal
+        assert_eq!(world.tick_step(), vec![Event::NoRoute { creature, goal }]);
+        for _ in 1..cooldown {
+            assert_eq!(world.move_to(creature, goal), Err(WorldError::NoRoute));
+            assert_eq!(
+                world.tick_step(),
+                Vec::new(),
+                "a throttled repeat must not report a new refusal"
+            );
+        }
+        assert_eq!(world.cell_of(creature), Some(Cell::new(1, 6)));
+        assert_eq!(world.states()[0].goal, None, "no goal was taken");
+    }
+
+    /// The window belongs to the goal that failed, not to the creature: an
+    /// order to another cell is a new order and searches at once.
+    #[test]
+    fn a_failed_goal_does_not_hold_up_an_order_to_another_one() {
+        let mut world = world(12, 12);
+        let creature = world.add(Cell::new(1, 6)).unwrap();
+        let unreachable = Cell::new(10, 6);
+        for row in 0..12 {
+            world.passage_mut().blocked.insert(Cell::new(6, row));
+        }
+        world.rules_mut().route.goal_fallback_radius = 0;
+        assert_eq!(
+            world.move_to(creature, unreachable),
+            Err(WorldError::NoRoute)
+        );
+        world.tick_step();
+        assert_eq!(world.move_to(creature, Cell::new(4, 6)), Ok(3));
+    }
+
+    /// Pins the bound of the window rather than asking to widen it: the memory
+    /// holds one goal, so a loop that alternates between two unreachable orders
+    /// searches on every switch, inside the window. Keeping the cadence sane is
+    /// the rules layer's job (#36 part 3), not the engine's.
+    #[test]
+    fn alternating_unreachable_orders_each_search_inside_the_window() {
+        let mut world = world(12, 12);
+        let creature = world.add(Cell::new(1, 6)).unwrap();
+        let first = Cell::new(10, 6);
+        let second = Cell::new(10, 7);
+        for row in 0..12 {
+            world.passage_mut().blocked.insert(Cell::new(6, row));
+        }
+        world.rules_mut().route.goal_fallback_radius = 0;
+        let cooldown = world.rules().repath_cooldown_ticks;
+
+        let mut refusals = 0;
+        for tick in 0..cooldown {
+            let goal = if tick % 2 == 0 { first } else { second };
+            assert_eq!(world.move_to(creature, goal), Err(WorldError::NoRoute));
+            refusals += world
+                .tick_step()
+                .iter()
+                .filter(|event| matches!(event, Event::NoRoute { .. }))
+                .count();
+        }
+        assert!(
+            refusals > usize::try_from(cooldown / 2).unwrap(),
+            "{refusals} searches inside one window: a switching loop is not throttled"
+        );
+    }
+
+    /// Withdrawing the order drops the failed goal too, so the very next order
+    /// to it is a real search rather than a throttled refusal.
+    #[test]
+    fn stop_clears_a_failed_goal_so_the_next_order_searches() {
+        let mut world = world(12, 12);
+        let creature = world.add(Cell::new(1, 6)).unwrap();
+        let goal = Cell::new(10, 6);
+        for row in 0..12 {
+            world.passage_mut().blocked.insert(Cell::new(6, row));
+        }
+        world.rules_mut().route.goal_fallback_radius = 0;
+
+        assert_eq!(world.move_to(creature, goal), Err(WorldError::NoRoute));
+        // the search that ran surfaces as one refusal
+        assert_eq!(world.tick_step(), vec![Event::NoRoute { creature, goal }]);
+        // still inside the window: a repeat is refused without a search
+        assert_eq!(world.move_to(creature, goal), Err(WorldError::NoRoute));
+        assert_eq!(world.tick_step(), Vec::new(), "the repeat ran a search");
+
+        world.stop(creature).unwrap();
+        assert_eq!(world.move_to(creature, goal), Err(WorldError::NoRoute));
+        assert_eq!(
+            world.tick_step(),
+            vec![Event::NoRoute { creature, goal }],
+            "after a withdrawal the order has to search again"
         );
     }
 
