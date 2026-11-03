@@ -268,10 +268,22 @@ retries an unreachable order has not been worked out, and the window is the
 engine's own `WorldRules` number, not a confirmed one. Its bound is one remembered
 goal: a loop that switches between two unreachable orders searches on every switch,
 inside the window (`alternating_unreachable_orders_each_search_inside_the_window`).
+
 That is left as it is on purpose — widening the memory to a set costs state for a
 caller that does not exist yet, and a rules layer that oscillates between two goals
 every tick is a bug in the rules, not something the engine should paper over
 (#36 part 3 owns the cadence).
+
+That caller arrived with criteria 3 and 4 of #36: the rules re-roll a target every
+tick, so a creature facing an unreachable area paid one search per tick. The bound
+is a per-creature window one layer up — `kn_game::rules::FailedOrderCooldown` holds
+a movement order back for `window_ticks` after one of its found no route and answers
+`Applied::Held` without calling the engine
+(`an_unreachable_area_costs_one_search_per_window`: 4 searches over 40 ticks instead
+of 40, and `a_cooldown_bounds_the_searches_of_an_isolated_creature`). It lives
+beside the rules rather than in `World`, so a player's order is never delayed by a
+failed AI one, and a turn — which costs no search — is never held. The two memories
+stay one each: the engine remembers the goal, the application remembers the tick.
 
 ### Decision: an occupied goal takes the nearest ring
 
@@ -442,7 +454,10 @@ for roaming squads the game itself overwrites within the first 16 ticks
 (`game.cpp:645`, `game_play.cpp:1623-1638`; the period is a 1999 cost cap we
 do not reproduce). A creature whose squad state the caller did not supply, or
 whose live picture is missing, gets the calm answer and no decision rather
-than a panic: the arrays are indexed like the roster and may lag it.
+than a panic: the arrays are indexed like the roster and may lag it. A creature
+the world does not know is `None` in that picture, never a made-up cell — an
+invented `(0, 0)` would decide the state of every squad whose spawn area covers
+the origin (`an_unknown_player_member_never_makes_a_squad_hostile`).
 
 The villager walk picks a cell uniformly inside the squad's spawn area; the
 original offsets from the creature by the viewport size (`ViewTiles * 2`,

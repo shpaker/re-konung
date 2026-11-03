@@ -175,19 +175,20 @@ pub fn is_alive(creature: &Creature) -> bool {
 
 /// Evaluate every creature and return decisions indexed like the roster.
 ///
-/// A creature with no `live` entry at its index gets `Decision::None`, and a
-/// missing `states` entry stands for [`GroupState::Calm`] — no panic: the
-/// caller's live picture and squad states may lag the roster.
+/// A `None` in `live` — a creature the caller's world does not know — and an
+/// entry missing altogether both give `Decision::None`, and a missing `states`
+/// entry stands for [`GroupState::Calm`]. No panic and no decision from an
+/// invented position: the caller's live picture may lag the roster.
 pub fn evaluate<G: Ground, R: Random>(
     creatures: &[Creature],
-    live: &[Live],
+    live: &[Option<Live>],
     context: &mut Context<'_, G, R>,
 ) -> Vec<Decision> {
     creatures
         .iter()
         .enumerate()
         .map(|(index, creature)| {
-            let Some(live) = live.get(index) else {
+            let Some(live) = live.get(index).and_then(Option::as_ref) else {
                 return Decision::None;
             };
             let state = context
@@ -212,15 +213,16 @@ pub fn evaluate<G: Ground, R: Random>(
 /// data it is the unknown `0x80` for every squad (docs/k1/creatures.md, "The
 /// group state of a roaming squad").
 ///
-/// A creature with no `live` entry is `Calm` and its position joins neither
-/// scan. The original recomputes every 16 ticks, a 1999 cost cap we do not
-/// reproduce: this runs every tick.
+/// A creature with no live picture — a `None` entry, or none at all — is
+/// `Calm` and its position joins neither scan: a cell the world never
+/// reported must not decide a squad state. The original recomputes every 16
+/// ticks, a 1999 cost cap we do not reproduce: this runs every tick.
 ///
 /// The player squad is looked for in `creatures` itself, by its group kind —
 /// and [`crate::creatures::roster`] lists it only on the map the game starts
 /// on. Anywhere else a simulation has to add the arriving player squad to the
 /// roster it passes here, or no squad is ever seen as `PlayerInside`.
-pub fn group_states(creatures: &[Creature], live: &[Live]) -> Vec<GroupState> {
+pub fn group_states(creatures: &[Creature], live: &[Option<Live>]) -> Vec<GroupState> {
     // The two inputs of the scans, keyed once: live cells of the player
     // squad, and live cells per roaming squad. Dead members and members
     // without a live picture join neither.
@@ -230,7 +232,7 @@ pub fn group_states(creatures: &[Creature], live: &[Live]) -> Vec<GroupState> {
         if !is_alive(creature) {
             continue;
         }
-        let Some(live) = live.get(index) else {
+        let Some(live) = live.get(index).and_then(Option::as_ref) else {
             continue;
         };
         if creature.group_kind == group::PLAYER {
@@ -247,7 +249,7 @@ pub fn group_states(creatures: &[Creature], live: &[Live]) -> Vec<GroupState> {
         .iter()
         .enumerate()
         .map(|(index, creature)| {
-            if !creature.roaming || live.get(index).is_none() {
+            if !creature.roaming || live.get(index).and_then(Option::as_ref).is_none() {
                 return GroupState::Calm;
             }
             let spawn = &creature.spawn;
@@ -397,18 +399,23 @@ fn walk_target<G: Ground, R: Random>(
     Decision::None
 }
 
+/// The classes the monster decision leaves alone (`game_play.cpp:3163-3164`):
+/// woman and child, and `0x53`, which the reference compares but never names.
+const NOT_MONSTER: [u8; 3] = [class::WOMAN, class::CHILD, 0x53];
+
 /// The roaming monster's decision, from its squad's recomputed state (Slavik
 /// `game_play.cpp:3156-3181`, `3286`, `3337-3392`; docs/k1/creatures.md,
 /// "The monster decision"). Calm stands; `PlayerInside` would start combat —
 /// target choice, attack and shooting are not reverse-engineered, so we give
-/// no order rather than invent one; `MemberOutside` returns.
+/// no order rather than invent one; `MemberOutside` returns. A creature of a
+/// class the monster rules skip takes no decision whatever its squad state.
 fn monster_decision<G: Ground, R: Random>(
     creature: &Creature,
     live: &Live,
     state: GroupState,
     context: &mut Context<'_, G, R>,
 ) -> Decision {
-    if !is_alive(creature) || live.busy {
+    if !is_alive(creature) || live.busy || NOT_MONSTER.contains(&creature.class_id) {
         return Decision::None;
     }
     match state {
@@ -626,6 +633,12 @@ mod tests {
         }
     }
 
+    /// Every creature known to the world — the picture a caller wraps in
+    /// `Option` because the world may not know some of them.
+    fn pictures(live: &[Live]) -> Vec<Option<Live>> {
+        live.iter().copied().map(Some).collect()
+    }
+
     fn job(character: i16, cell: (i16, i16), direction: u8) -> Workplace {
         Workplace {
             cell,
@@ -666,6 +679,20 @@ mod tests {
     fn decide_all_with_states(
         creatures: &[Creature],
         live: &[Live],
+        ground: &MockGround,
+        draws: impl IntoIterator<Item = u64>,
+        jobs: &[Workplace],
+        states: &[GroupState],
+    ) -> Vec<Decision> {
+        let live: Vec<Option<Live>> = live.iter().copied().map(Some).collect();
+        decide_optional(creatures, &live, ground, draws, jobs, states)
+    }
+
+    /// The same, with an explicit `None` where the world does not know a
+    /// creature — the picture [`kn_game::rules::live`] hands over.
+    fn decide_optional(
+        creatures: &[Creature],
+        live: &[Option<Live>],
         ground: &MockGround,
         draws: impl IntoIterator<Item = u64>,
         jobs: &[Workplace],
@@ -875,6 +902,19 @@ mod tests {
         let decisions = decide_all(&creatures, &live, &MockGround::default(), [49], &[]);
         assert_eq!(decisions[0], Decision::None);
         assert_eq!(decisions[1], Decision::None);
+    }
+
+    /// A creature the world does not know — the explicit `None`
+    /// `kn_game::rules::live` reports for an absent id — decides nothing and
+    /// rolls no dice, instead of standing at an invented cell.
+    #[test]
+    fn a_creature_the_world_does_not_know_decides_nothing() {
+        let creatures = [villager(class::VILLAGER, 1), villager(class::VILLAGER, 2)];
+        let live = [Some(standing((5, 5))), None];
+        // Creature 1 stands on the half roll (49 < 50); creature 2 has no
+        // picture at all, and the exhausted script proves it never rolled.
+        let decisions = decide_optional(&creatures, &live, &MockGround::default(), [49], &[], &[]);
+        assert_eq!(decisions, vec![Decision::None, Decision::None]);
     }
 
     #[test]
@@ -1374,7 +1414,7 @@ mod tests {
         let squad = [roaming_at(3, 1), roaming_at(3, 2)];
         let live = [standing((11, 11)), standing((20, 20))]; // 20 is on the edge: inside
         assert_eq!(
-            group_states(&squad, &live),
+            group_states(&squad, &pictures(&live)),
             vec![GroupState::Calm, GroupState::Calm]
         );
     }
@@ -1385,7 +1425,7 @@ mod tests {
         // One member steps one cell past the right edge (20): outside.
         let live = [standing((12, 12)), standing((21, 12))];
         assert_eq!(
-            group_states(&squad, &live),
+            group_states(&squad, &pictures(&live)),
             vec![GroupState::MemberOutside, GroupState::MemberOutside]
         );
     }
@@ -1397,7 +1437,7 @@ mod tests {
         let roster = [roaming_at(3, 1), player_at(2)];
         let live = [standing((30, 30)), standing((15, 15))];
         assert_eq!(
-            group_states(&roster, &live),
+            group_states(&roster, &pictures(&live)),
             vec![GroupState::PlayerInside, GroupState::Calm]
         );
     }
@@ -1412,7 +1452,7 @@ mod tests {
         let roster = [stray, dead_stray, dead_player];
         let live = [standing((12, 12)), standing((40, 40)), standing((15, 15))];
         assert_eq!(
-            group_states(&roster, &live),
+            group_states(&roster, &pictures(&live)),
             vec![GroupState::Calm, GroupState::Calm, GroupState::Calm]
         );
     }
@@ -1430,7 +1470,7 @@ mod tests {
         let roster = [villager_squad, npc, hero];
         let live = [standing((40, 40)), standing((40, 40)), standing((40, 40))];
         assert_eq!(
-            group_states(&roster, &live),
+            group_states(&roster, &pictures(&live)),
             vec![GroupState::Calm, GroupState::Calm, GroupState::Calm]
         );
     }
@@ -1442,8 +1482,32 @@ mod tests {
         // strayed, and 2 itself reads Calm.
         let live = [standing((12, 12))];
         assert_eq!(
-            group_states(&squad, &live),
+            group_states(&squad, &pictures(&live)),
             vec![GroupState::Calm, GroupState::Calm]
+        );
+    }
+
+    /// The regression the explicit `None` exists for: a squad whose spawn area
+    /// covers the origin must not read a player member the world does not know
+    /// as standing inside it, which is what an invented `(0, 0)` cell did.
+    #[test]
+    fn an_unknown_player_member_never_makes_a_squad_hostile() {
+        let origin_area = k1_data::game_state::Rect {
+            left: -5,
+            top: -5,
+            right: 5,
+            bottom: 5,
+        };
+        let mut monster = roaming_at(3, 1);
+        monster.spawn = origin_area;
+        let mut hero = player_at(2);
+        hero.spawn = origin_area;
+        // The squad member stands inside its own area; the hero is unknown.
+        let live = [Some(standing((0, 0))), None];
+        assert_eq!(
+            group_states(&[monster, hero], &live),
+            vec![GroupState::Calm, GroupState::Calm],
+            "an absent live picture must not place anybody at the origin"
         );
     }
 
@@ -1454,7 +1518,7 @@ mod tests {
         let two = roaming_at(4, 2);
         let live = [standing((12, 12)), standing((12, 12))];
         assert_eq!(
-            group_states(&[one, two], &live),
+            group_states(&[one, two], &pictures(&live)),
             vec![GroupState::Calm, GroupState::Calm]
         );
     }
@@ -1646,6 +1710,25 @@ mod tests {
                 [],
             );
             assert_eq!(decision, Decision::None);
+        }
+    }
+
+    /// The classes the monster decision leaves alone
+    /// (`game_play.cpp:3163-3164`): a strayed member of class 0x51, 0x52 or
+    /// 0x53 gets no order and rolls no dice — the empty script is the proof.
+    #[test]
+    fn monster_classes_the_original_skips_take_no_decision() {
+        for class_id in [class::WOMAN, class::CHILD, 0x53] {
+            let mut creature = small_squad();
+            creature.class_id = class_id;
+            let decision = decide_monster(
+                &creature,
+                &standing((30, 30)),
+                GroupState::MemberOutside,
+                &MockGround::default(),
+                [],
+            );
+            assert_eq!(decision, Decision::None, "class {class_id:#04x}");
         }
     }
 

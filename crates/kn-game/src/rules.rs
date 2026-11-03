@@ -45,14 +45,17 @@ impl Random for Rng {
 
 /// The live picture at this tick, indexed like the given ids.
 ///
-/// An id the world does not know is reported `busy` with a neutral cell: the
-/// rules skip a creature they cannot see rather than deciding for the cell
-/// `(0, 0)` under it.
-pub fn live<P: Passage, K: Pace>(world: &World<P, K>, creatures: &[CreatureId]) -> Vec<Live> {
+/// An id the world does not know is `None`, never an invented cell: the rules
+/// skip a creature they cannot see, and a made-up position would decide squad
+/// states from nowhere.
+pub fn live<P: Passage, K: Pace>(
+    world: &World<P, K>,
+    creatures: &[CreatureId],
+) -> Vec<Option<Live>> {
     creatures
         .iter()
-        .map(|creature| match world.state(*creature) {
-            Some(state) => Live {
+        .map(|creature| {
+            world.state(*creature).map(|state| Live {
                 // A coordinate past `i16` folds to a negative cell no rule
                 // can aim at; the K1 fine grid is far smaller than `i16`.
                 cell: (
@@ -61,12 +64,7 @@ pub fn live<P: Passage, K: Pace>(world: &World<P, K>, creatures: &[CreatureId]) 
                 ),
                 direction: state.direction.map(|direction| direction.index() as u8),
                 busy: state.moving || state.goal.is_some(),
-            },
-            None => Live {
-                cell: (0, 0),
-                direction: None,
-                busy: true,
-            },
+            })
         })
         .collect()
 }
@@ -88,6 +86,9 @@ pub enum Applied {
     Failed(WorldError),
     /// `turn` accepted the new facing; it is readable from `World::state`.
     Turned,
+    /// [`FailedOrderCooldown`] held the order back: the world was not called,
+    /// so no route search was paid for.
+    Held,
 }
 
 /// Apply evaluated decisions through the world.
@@ -105,25 +106,105 @@ pub fn apply<P: Passage, K: Pace>(
 ) -> Vec<Applied> {
     commands
         .iter()
-        .map(|(creature_id, decision)| match decision {
-            Decision::None => Applied::Skipped,
-            Decision::MoveTo(tx, ty) => match world.move_to(*creature_id, Cell::new(*tx, *ty)) {
-                Ok(route_steps) => Applied::Accepted { route_steps },
+        .map(|(creature_id, decision)| run_one(world, *creature_id, decision))
+        .collect()
+}
+
+/// One command through the world: the dispatch both [`apply`] and
+/// [`FailedOrderCooldown::apply`] run.
+fn run_one<P: Passage, K: Pace>(
+    world: &mut World<P, K>,
+    creature: CreatureId,
+    decision: &Decision,
+) -> Applied {
+    match decision {
+        Decision::None => Applied::Skipped,
+        Decision::MoveTo(tx, ty) => match world.move_to(creature, Cell::new(*tx, *ty)) {
+            Ok(route_steps) => Applied::Accepted { route_steps },
+            Err(error) => Applied::Failed(error),
+        },
+        Decision::Turn(direction) => match Direction::ALL.get(usize::from(*direction)) {
+            Some(direction) => match world.turn(creature, *direction) {
+                Ok(()) => Applied::Turned,
                 Err(error) => Applied::Failed(error),
             },
-            Decision::Turn(direction) => {
-                match Direction::ALL.get(usize::from(*direction)) {
-                    Some(direction) => match world.turn(*creature_id, *direction) {
-                        Ok(()) => Applied::Turned,
-                        Err(error) => Applied::Failed(error),
-                    },
-                    // A byte outside the eight-way table is a malformed
-                    // decision; it reaches no world call.
-                    None => Applied::Skipped,
+            // A byte outside the eight-way table is a malformed
+            // decision; it reaches no world call.
+            None => Applied::Skipped,
+        },
+    }
+}
+
+/// How soon a creature may be sent somewhere again after an order of its found
+/// no route.
+///
+/// A rules loop re-decides every tick and picks a fresh cell each time, so a
+/// creature with no reachable target would pay a route search per tick. The
+/// world's own throttle covers a repeat of the *same* failed goal (#54), not a
+/// different goal every tick; the window lives here rather than in the engine
+/// so that a player's order is never delayed by it.
+#[derive(Debug, Clone)]
+pub struct FailedOrderCooldown {
+    window_ticks: u32,
+    /// Tick of the last order that found no route, by creature number.
+    failed_at: Vec<Option<u64>>,
+}
+
+impl FailedOrderCooldown {
+    /// A window of `window_ticks`;
+    /// [`WorldRules::repath_cooldown_ticks`](super::movement::world::WorldRules::repath_cooldown_ticks)
+    /// is the number to start from, so one creature costs one search per window.
+    pub fn new(window_ticks: u32) -> FailedOrderCooldown {
+        FailedOrderCooldown {
+            window_ticks,
+            failed_at: Vec::new(),
+        }
+    }
+
+    /// [`apply`], holding back the movement orders of creatures inside their
+    /// window: those come back as [`Applied::Held`] and reach no search. A
+    /// turn is cheap and is never held.
+    pub fn apply<P: Passage, K: Pace>(
+        &mut self,
+        world: &mut World<P, K>,
+        commands: &[(CreatureId, Decision)],
+    ) -> Vec<Applied> {
+        let tick = world.tick_number();
+        commands
+            .iter()
+            .map(|(creature, decision)| {
+                if matches!(decision, Decision::MoveTo(..)) && self.holding(*creature, tick) {
+                    return Applied::Held;
                 }
-            }
-        })
-        .collect()
+                let applied = run_one(world, *creature, decision);
+                self.record(*creature, tick, &applied);
+                applied
+            })
+            .collect()
+    }
+
+    fn holding(&self, creature: CreatureId, tick: u64) -> bool {
+        let failed_at = self
+            .failed_at
+            .get(creature.raw() as usize)
+            .copied()
+            .flatten();
+        failed_at.is_some_and(|failed_at| tick - failed_at < u64::from(self.window_ticks))
+    }
+
+    /// Only a search that found no route starts the window; an accepted order
+    /// ends it, so a creature that got through is free to be sent again.
+    fn record(&mut self, creature: CreatureId, tick: u64, applied: &Applied) {
+        let index = creature.raw() as usize;
+        if self.failed_at.len() <= index {
+            self.failed_at.resize(index + 1, None);
+        }
+        self.failed_at[index] = match applied {
+            Applied::Failed(WorldError::NoRoute) => Some(tick),
+            Applied::Accepted { .. } => None,
+            _ => self.failed_at[index],
+        };
+    }
 }
 
 #[cfg(test)]
@@ -402,31 +483,83 @@ mod tests {
         let creature = world.add(Cell::new(1, 1)).unwrap();
         let picture = live(&world, &[creature]);
         assert_eq!(picture.len(), 1);
-        assert_eq!(picture[0].cell, (1, 1));
-        assert_eq!(picture[0].direction, None, "nothing has turned or walked");
-        assert!(!picture[0].busy);
+        let first = picture[0].expect("the world knows a creature it added");
+        assert_eq!(first.cell, (1, 1));
+        assert_eq!(first.direction, None, "nothing has turned or walked");
+        assert!(!first.busy);
         world.turn(creature, Direction::NorthEast).unwrap();
         let picture = live(&world, &[creature]);
         assert_eq!(
-            picture[0].direction,
+            picture[0].unwrap().direction,
             Some(3),
             "the facing is reported as the original's direction byte"
         );
         world.move_to(creature, Cell::new(4, 1)).unwrap();
         world.tick_step();
         let picture = live(&world, &[creature]);
-        assert!(picture[0].busy, "a walking creature waits for arrival");
+        assert!(
+            picture[0].unwrap().busy,
+            "a walking creature waits for arrival"
+        );
     }
 
+    /// An id the world does not know is absent, not a creature standing at an
+    /// invented cell: a made-up `(0, 0)` would put it inside every spawn area
+    /// that covers the origin and decide squad states from nowhere.
     #[test]
-    fn live_marks_an_unknown_creature_busy() {
+    fn live_reports_an_unknown_creature_as_absent() {
         let world = test_world();
         let picture = live(&world, &[CreatureId::new(99)]);
-        assert!(
-            picture[0].busy,
-            "the rules must skip a creature the world does not know"
+        assert_eq!(picture.len(), 1);
+        assert!(picture[0].is_none(), "{picture:?}");
+    }
+
+    /// A rules loop re-rolls a target every tick, so a creature with no
+    /// reachable cell would pay a route search per tick — the world's own
+    /// throttle covers a repeat of the *same* failed goal only (#54). With the
+    /// window, one search per window is the bound, and the creature is held
+    /// the rest of the time without ever reaching the engine.
+    #[test]
+    fn a_cooldown_bounds_the_searches_of_an_isolated_creature() {
+        const WINDOW: u32 = 10;
+        const TICKS: u32 = 40;
+        let mut world = test_world();
+        // Wall the creature in: every neighbour of its cell is impassable.
+        let start = Cell::new(4, 4);
+        for direction in Direction::ALL {
+            if let Some(neighbour) = start.neighbour(direction) {
+                world.passage_mut().blocked.insert(neighbour);
+            }
+        }
+        let creature = world.add(start).unwrap();
+        let mut cooldown = FailedOrderCooldown::new(WINDOW);
+        let mut searches = 0;
+        let mut held = 0;
+        for tick in 0..TICKS {
+            // A different unreachable goal every tick, as a re-rolled walk is.
+            let goal = Cell::new(1 + tick % 3, 1);
+            let result = cooldown.apply(
+                &mut world,
+                &[(creature, Decision::MoveTo(goal.column, goal.row))],
+            );
+            match result[0] {
+                Applied::Failed(WorldError::NoRoute) => searches += 1,
+                Applied::Held => held += 1,
+                other => panic!("an isolated creature must go nowhere: {other:?}"),
+            }
+            world.tick_step();
+        }
+        assert_eq!(
+            searches,
+            (TICKS / WINDOW) as usize,
+            "one search per window, not one per tick"
         );
-        assert_eq!(picture[0].direction, None);
+        assert_eq!(held, (TICKS - TICKS / WINDOW) as usize);
+        assert_eq!(
+            world.cell_of(creature),
+            Some(start),
+            "the creature never moved"
+        );
     }
 
     #[test]

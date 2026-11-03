@@ -118,7 +118,7 @@ impl Random for Seeded {
 
 fn run(
     roster: &[creatures::Creature],
-    live: &[Live],
+    live: &[Option<Live>],
     ground: &FootGround,
     jobs: &[creatures::Workplace],
     squad_states: &[GroupState],
@@ -136,14 +136,17 @@ fn run(
 
 /// The starting state is the file cells and nobody walking: the picture the
 /// rules read is where the records say the creature stands (re-placing
-/// roaming squads on map load is criterion 2, not this slice).
-fn file_live(roster: &[creatures::Creature]) -> Vec<Live> {
+/// roaming squads on map load is criterion 2, not this slice). Every creature
+/// of the roster is known, so every entry is `Some`.
+fn file_live(roster: &[creatures::Creature]) -> Vec<Option<Live>> {
     roster
         .iter()
-        .map(|creature| Live {
-            cell: creature.cell,
-            direction: Some(creature.direction),
-            busy: false,
+        .map(|creature| {
+            Some(Live {
+                cell: creature.cell,
+                direction: Some(creature.direction),
+                busy: false,
+            })
         })
         .collect()
 }
