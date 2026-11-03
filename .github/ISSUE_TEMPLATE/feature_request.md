@@ -6,7 +6,7 @@ labels: enhancement
 assignees: ''
 ---
 
-<!-- Prefix the title with bug: | feat: | task: (work with no new observable result) | research: (a fact for docs/), and name the expected result, not the action. A scope like (kn-io) is optional. -->
+<!-- Prefix the title with bug: | feat: | task: (work with no new observable result) | research: (a fact for docs/), and name the expected result, not the action. A scope like (kn-render) is optional. -->
 
 ## Problem
 

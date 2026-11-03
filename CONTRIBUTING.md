@@ -50,7 +50,7 @@ An issue title starts with one of four prefixes, which say what kind of work it 
 
 - The title names the expected result, not the action: `feat: creatures move along the original maps
   on their own`, not `task: implement pathfinding`.
-- A scope like `(kn-io)` is optional: a ticket usually spans several layers, and they are listed in
+- A scope like `(kn-render)` is optional: a ticket usually spans several layers, and they are listed in
   `## Scope`. Use a scope when it is exactly one and not debatable.
 - A label and a prefix do not compete: the templates attach the label (`bug`, `enhancement`) at
   creation, and `gh issue create` without a template adds it with `--label` — the label is for

@@ -10,7 +10,9 @@ use std::process::ExitCode;
 use bevy::prelude::*;
 use clap::Parser;
 use kn_game::{Game, MapRef, MapSource, SceneOptions};
-use kn_io::{GameResource, MapCameraPlugin, PendingFrame, TextureCache, frame_scene, spawn_scene};
+use kn_render::{
+    GameResource, MapCameraPlugin, PendingFrame, TextureCache, frame_scene, spawn_scene,
+};
 
 #[derive(Parser, Debug)]
 #[command(name = "re-konung", version, about)]

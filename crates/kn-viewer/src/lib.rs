@@ -26,7 +26,7 @@ use bevy::{
     ui_widgets::ValueChange,
 };
 use kn_game::{Game, MapRef, MapSource, Piece, SceneOptions, TICK_MS, group_is_shown};
-use kn_io::{
+use kn_render::{
     AnimPlugin, CameraBounds, CameraState, Clock, GameResource, MapCameraPlugin, PendingFrame,
     PlayState, SceneGroup, ScenePiece, TextureCache, clear_scene, frame_scene, spawn_scene,
 };
@@ -574,9 +574,9 @@ fn shown(options: &SceneOptions) -> impl Fn(&Piece) -> bool + '_ {
 /// Переносит переключатели слоёв в видимость групп кусков.
 ///
 /// Узел группы — единственный, чего касается переключение: дети наследуют её
-/// видимость ([`kn_io::SceneGroup`]), поэтому кадр не обходится в тысячи
+/// видимость ([`kn_render::SceneGroup`]), поэтому кадр не обходится в тысячи
 /// despawn/spawn. Включённая группа получает [`Visibility::Inherited`], а не
-/// `Visible`: `Visible` перебивает наследование от [`kn_io::MapRoot`], и карту,
+/// `Visible`: `Visible` перебивает наследование от [`kn_render::MapRoot`], и карту,
 /// спрятанную целиком, было бы видно. Система идёт сразу за [`rebuild_scene`] и
 /// успевает спрятать свежие группы до извлечения кадра.
 ///
