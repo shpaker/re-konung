@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use kn_game::{Game, MapRef, MapSource, Piece, Scene, SceneOptions, group_is_shown};
 
 fn game_roots() -> Vec<(&'static str, PathBuf)> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../original/k1");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../original/k1");
     let dirs = ["rus", "eng"]
         .into_iter()
         .filter_map(|edition| {

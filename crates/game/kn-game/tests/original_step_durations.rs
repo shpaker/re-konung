@@ -18,7 +18,7 @@ use kn_game::{
 };
 
 fn game_dirs() -> Vec<(&'static str, GameDir)> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../original/k1");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../original/k1");
     let dirs = ["rus", "eng"]
         .into_iter()
         .filter_map(|edition| {

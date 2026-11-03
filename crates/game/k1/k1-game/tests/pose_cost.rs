@@ -23,7 +23,7 @@ const MAP: u32 = 1;
 const REPEATS: u32 = 200;
 
 fn editions() -> Vec<(&'static str, GameDir)> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../original/k1");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../original/k1");
     ["rus", "eng"]
         .into_iter()
         .filter_map(|edition| {

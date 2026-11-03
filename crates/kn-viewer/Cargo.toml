@@ -14,7 +14,7 @@ name = "re-konung-viewer"
 path = "src/main.rs"
 
 [dependencies]
-kn-game = { path = "../kn-game" }
+kn-game = { path = "../game/kn-game" }
 kn-io = { path = "../kn-io" }
 bevy = { version = "0.20", features = ["bevy_feathers"] }
 clap = { version = "4", features = ["derive"] }
