@@ -1,0 +1,24 @@
+[package]
+name = "kn-viewer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Map-viewer app for «Князь»: CLI, headless diagnostics; the window itself is kn-fe-viewer"
+
+[lib]
+name = "kn_viewer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "re-konung-viewer"
+path = "src/main.rs"
+
+[dependencies]
+kn-fe-viewer = { path = "../../frontend/bevy/viewer" }
+kn-game = { path = "../../game/kn-game" }
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

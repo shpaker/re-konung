@@ -3495,6 +3495,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kn-fe-viewer"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "kn-game",
+ "kn-input",
+ "kn-render",
+ "kn-ui",
+]
+
+[[package]]
 name = "kn-game"
 version = "0.1.0"
 dependencies = [
@@ -3533,12 +3544,9 @@ dependencies = [
 name = "kn-viewer"
 version = "0.1.0"
 dependencies = [
- "bevy",
  "clap",
+ "kn-fe-viewer",
  "kn-game",
- "kn-input",
- "kn-render",
- "kn-ui",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",

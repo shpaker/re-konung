@@ -12,7 +12,7 @@ Shared Bevy UI mechanics for the «Князь» frontends. Three items, nothing 
   component merely exists (Feathers attaches it to every control at spawn).
 
 What does not live here: app-specific panels, widget state, input bindings,
-rendering and game rules — those stay in the frontends (`kn-viewer`, `kn-exec`)
+rendering and game rules — those stay in the frontends (`kn-fe-viewer`, `kn-exec`)
 and their layers.
 
 Details — [docs/rust.md](../../../../docs/rust.md).
