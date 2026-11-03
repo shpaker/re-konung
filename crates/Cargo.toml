@@ -1,3 +1,3 @@
 [workspace]
-members = ["game/k1/k1-data", "game/k1/k1-game", "game/kn-game", "frontend/bevy/input", "frontend/bevy/render", "frontend/bevy/ui", "frontend/bevy/viewer", "kn-exec", "apps/viewer"]
+members = ["game/k1/k1-data", "game/k1/k1-game", "game/kn-game", "frontend/bevy/input", "frontend/bevy/render", "frontend/bevy/ui", "frontend/bevy/viewer", "frontend/bevy/player", "apps/viewer", "apps/player"]
 resolver = "3"

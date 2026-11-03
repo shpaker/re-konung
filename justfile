@@ -45,7 +45,7 @@ check-maps source="game":
 
 # Игра: just game — заготовка re-konung на стартовой карте новой игры
 game:
-    cargo run --release --manifest-path crates/Cargo.toml -p kn-exec -- --game-dir "{{game_dir}}"
+    cargo run --release --manifest-path crates/Cargo.toml -p kn-player -- --game-dir "{{game_dir}}"
 
 # Расширение Tiled «konung» — в папку расширений Tiled; запущенный Tiled подхватит его сам
 [windows]

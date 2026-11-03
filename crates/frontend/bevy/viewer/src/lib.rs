@@ -28,7 +28,7 @@ use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
     AnimPlugin, CameraApply, CameraBounds, CameraInput, CameraState, Clock, GameResource,
     MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup, ScenePiece,
-    TextureCache, clear_scene, frame_scene, ortho_scale, spawn_scene,
+    TextureCache, clear_scene, load_scene, ortho_scale,
 };
 use kn_ui::{dark_theme, pointer_over_ui, sync_checked};
 
@@ -513,36 +513,37 @@ fn rebuild_scene(
             return;
         }
     };
-    let ids = scene.texture_ids();
-    let unique = ids.len();
     let animation = scene.animation_stats();
-    let problems = match cache.load(&game.0, &ids, &mut images) {
-        Ok(problems) => problems,
+    let loaded = match load_scene(
+        &game.0,
+        &scene,
+        shown(&viewer.options()),
+        &mut cache,
+        &mut images,
+        &mut commands,
+        &mut pending,
+    ) {
+        Ok(loaded) => loaded,
         Err(error) => {
             *stats = failed(map_ref, cache.len(), error.to_string(), started.elapsed());
             return;
         }
     };
-    for problem in &problems {
+    for problem in &loaded.problems {
         warn!("карта {map_ref:?}: {problem}");
     }
-    if let Some(root) = active.0 {
-        clear_scene(&mut commands, root);
+    if let Some(old) = active.0 {
+        clear_scene(&mut commands, old);
     }
-    let root = spawn_scene(&mut commands, &scene, &cache);
-    active.0 = Some(root);
-    // Кадр и масштаб сбрасываются только на новой карте: переключение оверлея
-    // оставляет камеру там, где её оставил пользователь. Границы берутся по
-    // видимым группам, иначе выключенный слой раздвигал бы их навсегда
-    frame_scene(&scene, &cache, shown(&viewer.options()), &mut pending);
+    active.0 = Some(loaded.root);
     *stats = Stats {
         map: Some(map_ref),
-        unique_textures: unique,
+        unique_textures: loaded.unique_textures,
         cached_textures: cache.len(),
         built_ms: started.elapsed().as_millis(),
         animated_pieces: animation.pieces,
         animation_frames: animation.frames,
-        problems,
+        problems: loaded.problems,
         error: None,
     };
 }

@@ -18,8 +18,8 @@ pub use camera::{
     PendingFrame, ZOOM_LEVELS, fitting_zoom, frame_scene, ortho_scale,
 };
 pub use scene::{
-    MapRoot, SceneGroup, ScenePiece, Z_STEP, clear_scene, piece_center, piece_sequence, piece_size,
-    piece_transform, scene_bounds, spawn_scene,
+    MapRoot, SceneGroup, SceneLoad, ScenePiece, Z_STEP, clear_scene, load_scene, piece_center,
+    piece_sequence, piece_size, piece_transform, scene_bounds, spawn_scene,
 };
 pub use textures::{TextureCache, TextureEntry};
 

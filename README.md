@@ -42,7 +42,7 @@ just tiled-install
 
 ```text
    re-konung            re-konung-viewer
-   (kn-exec: игра)      (kn-viewer: CLI, headless-check) ← kn-fe-viewer (окно, UI)
+   (kn-player: игра)    (kn-viewer: CLI, headless-check) ← kn-fe-viewer (окно, UI)
          \                    /
           ▼                  ▼
               kn-render — Bevy: рендер сцены, камера, кэш текстур

@@ -3483,11 +3483,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
-name = "kn-exec"
+name = "kn-fe-player"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "clap",
  "kn-game",
  "kn-input",
  "kn-render",
@@ -3522,6 +3521,15 @@ name = "kn-input"
 version = "0.1.0"
 dependencies = [
  "bevy",
+]
+
+[[package]]
+name = "kn-player"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "kn-fe-player",
+ "kn-game",
 ]
 
 [[package]]
