@@ -17,8 +17,9 @@ use kn_game::{Game, MapRef, MapSource, SceneOptions};
 use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
     CameraInput, CameraState, GameResource, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame,
-    TextureCache, frame_scene, ortho_scale, pointer_over_ui, spawn_scene,
+    TextureCache, frame_scene, ortho_scale, spawn_scene,
 };
+use kn_ui::pointer_over_ui;
 
 #[derive(Parser, Debug)]
 #[command(name = "re-konung", version, about)]

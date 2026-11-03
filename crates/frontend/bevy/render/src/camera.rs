@@ -124,18 +124,6 @@ pub fn ortho_scale(projection: &Projection) -> f32 {
     }
 }
 
-/// Cursor over the interface.
-///
-/// The value, not the presence of the component: `Hovered` in Bevy is a
-/// boolean component, and the hover plugin only updates it on entities that
-/// already have it. Bevy Feathers attaches `Hovered` to every one of its
-/// controls at spawn, so "`Hovered` is on a UI node" means "the panel has a
-/// widget", not "the cursor is over the panel" — with that test the map did
-/// not move or zoom at all.
-pub fn pointer_over_ui(mut hovers: impl Iterator<Item = bool>) -> bool {
-    hovers.any(|hovered| hovered)
-}
-
 fn apply_zoom(state: Res<CameraState>, mut camera: Single<&mut Projection, With<MapCamera>>) {
     let scale = 1.0 / state.scale();
     if let Projection::Orthographic(ortho) = camera.as_mut()
@@ -246,15 +234,6 @@ mod tests {
         assert_eq!(state.scale(), 2.0);
         state.step(-1);
         assert_eq!(state.scale(), 1.0);
-    }
-
-    #[test]
-    fn widgets_without_the_cursor_are_not_the_ui_under_it() {
-        // Feathers носит Hovered на каждом контроле, и вне курсора он false:
-        // по наличию компонента карта лишалась и перетаскивания, и колеса
-        assert!(!pointer_over_ui([false, false, false].into_iter()));
-        assert!(!pointer_over_ui(std::iter::empty()));
-        assert!(pointer_over_ui([false, true, false].into_iter()));
     }
 
     #[test]

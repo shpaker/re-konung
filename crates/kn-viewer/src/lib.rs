@@ -15,9 +15,8 @@ use bevy::{
     feathers::{
         FeathersPlugins,
         controls::{FeathersCheckbox, FeathersSelect, OptionIndex, list_rows_from_strings},
-        dark_theme::create_dark_theme,
         display::caption,
-        theme::{ThemeBackgroundColor, UiTheme},
+        theme::ThemeBackgroundColor,
         tokens,
     },
     input::mouse::{AccumulatedMouseMotion, MouseWheel},
@@ -31,8 +30,9 @@ use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
     AnimPlugin, CameraApply, CameraBounds, CameraInput, CameraState, Clock, GameResource,
     MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup, ScenePiece,
-    TextureCache, clear_scene, frame_scene, ortho_scale, pointer_over_ui, spawn_scene,
+    TextureCache, clear_scene, frame_scene, ortho_scale, spawn_scene,
 };
+use kn_ui::{dark_theme, pointer_over_ui, sync_checked};
 use thiserror::Error;
 
 use crate::cli::{Cli, Format};
@@ -271,7 +271,7 @@ pub fn run_viewer(cli: Cli) -> ExitCode {
             AnimPlugin::new(TICK_MS as f32),
             FrameTimeDiagnosticsPlugin::default(),
         ))
-        .insert_resource(UiTheme(create_dark_theme()))
+        .insert_resource(dark_theme())
         .insert_resource(GameResource(game))
         .init_resource::<TextureCache>()
         .init_resource::<ActiveRoot>()
@@ -457,18 +457,6 @@ fn toggle_overlay(
     };
     viewer.set(kind.0, change.value);
     sync_checked(&mut commands, change.source, change.value);
-}
-
-/// `Checkbox` считает новое значение как `!Has<Checked>` и сам `Checked` не
-/// пишет: без этого каждый клик присылал бы `true`
-/// (`bevy_ui_widgets::checkbox_self_update`).
-fn sync_checked(commands: &mut Commands, widget: Entity, checked: bool) {
-    let mut checkbox = commands.entity(widget);
-    if checked {
-        checkbox.insert(Checked);
-    } else {
-        checkbox.remove::<Checked>();
-    }
 }
 
 /// Переключатели воспроизведения правят только состояние: сцена той же карты не

@@ -1,0 +1,9 @@
+[package]
+name = "kn-ui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Shared Bevy UI mechanics for the «Князь» frontends: Feathers theme, checkbox mirroring, pointer capture. No rendering, no input bindings, no game rules"
+
+[dependencies]
+bevy = { version = "0.20", features = ["bevy_feathers"] }
