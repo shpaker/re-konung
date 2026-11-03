@@ -123,6 +123,163 @@
 Поэтому: значение из файла — это состояние игры на старте, а не настройка, и
 полагаться на него нельзя: у бродячих отрядов первые же 16 тиков его перепишут.
 
+### The villager decision (confirmed 2026-11-03)
+
+Confirmed against the reference and implemented with tests
+(`k1-game/src/rules.rs`, `villager_decision`; synthetic cases and both
+editions of `Game.0`–`Game.2`, `k1-game/tests/original_rules.rs`). The game
+calls the peaceful decision for members of a villager squad — group kind
+0x80–0x82, dispatch at `Marisa-Chan/Slavik/game_play.cpp:737-757` — through
+`FUN_00416934` (`game_play.cpp:2288-2385`), and only when the character needs
+a decision: flag 0x40 of byte 0x02 is set on arrival and cleared once a
+decision was made (`game_play.cpp:2834-2846`, `3477-3489`). A dead character
+(class bit 0x80, state 3 or 9) and a walking one take no decision. The order
+of the branches matters:
+
+1. **Woman (class 0x51) and child (0x52)**: one roll of `rand() % 100`; below
+   75 the creature stands, otherwise it walks (branch 5) — a quarter walks
+   (`game_play.cpp:2294-2309`).
+2. **Static work from bits 3–5 of the class**: `job = (class >> 3) & 7` names
+   a village slot; a village has exactly five slots and index 0 is the elder
+   (`game.h:702`, and our check: every village in the files carries five job
+   records, `docs/k1/formats/game-state.md`). An empty slot
+   (`Jobs[job].CharID == 0`) is passed over; the original also clears the work
+   bits in memory (`game_play.cpp:2340`), we do not touch the record — the
+   branch depends only on data that never changes mid-run, so the next tick
+   takes the same path (our difference). A filled slot sends every *other*
+   creature of the village to it (`game_play.cpp:2323-2338`): unless the
+   creature stands on one of the eight neighbours of the place's cell (the
+   direction lookup `FUN_0041165c`, `game_play.cpp:1973-1983`; standing on the
+   place itself is not adjacency), it is sent to the first free neighbour of
+   the place in direction order 0..7 (`FUN_00410ffc`,
+   `game_play.cpp:1985-1992`); once adjacent, it faces the place's direction
+   byte, and once facing — it stands. The branch never falls through.
+   - **Our measurement**: no creature of the shipped starting data reaches
+     this branch — of the villager classes 1, 2, 3, 5, 0x45, 0x51, 0x52 the
+     first five carry zero work bits and 0x51/0x52 leave through the woman and
+     child branch first. The branch is covered by synthetic tests only.
+   - Bits naming slot 5, 6 or 7 read past the five-slot array in the original
+     (`std::array<Job, 5>`); with us they are no static work either way (our
+     difference).
+   - When no neighbour of the place is free, `FUN_00410ffc` returns `-1`,
+     which the original treats as success and walks the creature to an
+     uninitialized point (`game_play.cpp:2327-2331`); we give no order (our
+     difference).
+   - The original's free-neighbour test checks terrain only; we also require
+     that nobody stands there (our difference).
+   - The original turns by one direction per tick (`FUN_004391bc`,
+     `game_play.cpp:1995-2013`, listed under «Вне объёма»); our
+     `Decision::Turn` faces the creature in one step.
+3. **The dynamic workplace**: the village slot whose `CharID` equals the
+   creature's record number — `GetVillageCharacterJob`
+   (`game_village.cpp:522-536`) scans the five slots in order and returns the
+   first match as `i + 1`. Standing on the place's cell: face the place's
+   direction when the facing differs, else stand; anywhere else: move exactly
+   onto the place's cell (`game_play.cpp:2354-2381`).
+   - **Our measurement**: `Job.character` is the 0-based record number
+     (the village of map 19 points at records 181–185, and group 19 starts at
+     character 181), and `0` marks the empty slot — the very marker the rules
+     test — so the player's hero, record 0, never owns an open slot. In the
+     starting data every job holder stands exactly on its place's cell, in
+     state 6, and already faces the place's direction: over 41 maps ×
+     `Game.0`–`Game.2` of both editions the rules turn nobody
+     (`k1-game/tests/original_rules.rs`), so the turn path is covered by the
+     synthetic tests alone.
+4. **No work at all**: one roll of `rand() % 100`; below 50 the creature
+   stands — half walk (`game_play.cpp:2346-2348`).
+5. **The walk**: a free cell strictly inside the squad's spawn area
+   (`left < x < right`, `top < y < bottom`), up to ten attempts; no attempt
+   lands free, or the area has no interior, and there is no order.
+   - The original does not pick inside the area at all: it offsets from the
+     character's own cell by at most `ViewTiles * 2`, and `ViewTiles` is the
+     viewport size in tiles (`game_play.cpp:1889-1949`, `game.cpp:921-922`).
+     Behavior must not depend on the window size, so we pick uniformly inside
+     the spawn area, drawing `x` and then `y` per attempt (our difference).
+6. The original's first decision for a villager with a weapon in hands is
+   putting it away (bit 0x04 of byte 0x03 → state 6, `game_play.cpp:2312-2317`).
+   That is an animation-state change, not a movement; the rules layer owns no
+   animation state, and we do not implement it.
+
+**Our measurement** of the village shape, both editions: one village per map,
+15 villages on 15 distinct maps; `village.elder_group` is the squad slot, and
+it is the map's only villager squad — every villager of a map is a member of
+it (map 19 → squad slot 19, kind 0x80, 19 members). The earlier note that
+among workplaces `character` is filled only for the elder is wrong: map 19
+fills all five slots, map 14 only the elder.
+
+### The group state of a roaming squad (confirmed 2026-11-03)
+
+Confirmed and implemented with tests (`k1-game/src/rules.rs`, `group_states`;
+synthetic cases and both editions). For a roaming squad (group kind 0x41–0x50,
+`FUN_00412c30`, `game_play.cpp:1024-1062`):
+
+1. any alive member of the player squad inside the squad's spawn area, bounds
+   included (`game_play.cpp:1028-1042`) — state 1: combat mode; the game also
+   writes the player squad's number into the squad record at the same moment
+   (`game_play.cpp:1038`, byte 0x1A);
+2. else any alive member of the squad itself standing outside the area —
+   state 0x20: the strayed members return, «The monster decision» below;
+3. else state 0, calm.
+
+«Alive» is the original's own test: class bit 0x80 clear, state neither 3 nor
+9. Every other squad — villagers, the player squad, lone NPCs — takes no
+recomputed state and reads calm. The byte stored in the file (0x1D,
+`ai_state`) is never read: the game zeroes it for roaming squads on map load
+(`game.cpp:645`), and in the shipped files it is the unknown 0x80 for every
+squad («Состояние ИИ отряда» above).
+
+Deliberate differences from the original:
+
+- the state is recomputed every tick, not every 16 (`game_play.cpp:1623-1638`
+  — a cost cap of 1999, listed under «Вне объёма»);
+- the original's "outside" test for its own members is tangled by `&&`/`||`
+  precedence into `y < top` alone (`game_play.cpp:1050-1052`); we use the
+  plain negation of the inclusive inside test;
+- the elder squad's byte is set in the village pass from village flags and the
+  player's weapons (`FUN_00416700`, `game_play.cpp:1516-1562`, `4451`), not
+  from positions. Until the village rules are recovered, a villager squad is
+  calm with us — our villagers never turn hostile; this is an open question,
+  not confirmed behavior (see «Не подтверждено»).
+
+### The monster decision (the return is confirmed; combat is not 2026-11-03)
+
+Confirmed and implemented for the return — `FUN_00412e00`
+(`game_play.cpp:3156-3181`, `3286`, `3337-3392`), tested at the synthetic and
+real-data level. The dispatch gives it to members of a roaming squad (group
+kind bit 0x40, `game_play.cpp:737-745`); classes 0x51, 0x52 and 0x53 return
+from the decision untouched (`game_play.cpp:3163-3164`). Dead and walking
+characters take no decision, as with villagers. By the squad state:
+
+- **Calm (0)**: stand. The original only resets the animation state
+  (`game_play.cpp:3166-3177`).
+- **Player inside (1)**: combat — target choice, attack and shooting are not
+  reverse-engineered, so no order is given rather than one invented
+  (`game_play.cpp:3179-3283`).
+- **Strayed (0x20)**: a creature already inside the spawn area, bounds
+  included, stands. Outside, it returns: take the centre
+  `((left + right) / 2, (top + bottom) / 2)`, with `rh = bottom - top - 1`
+  and `rw = right - left - 1`; one coin `rand() % 2` picks *subtract* (0) or
+  *add* (1) for both axes together; then `rand() % (rh / 4)` to `y`, then
+  `rand() % (rw / 4)` to `x`, each drawn only when its divisor reaches two
+  (`game_play.cpp:3353-3375` — the draw order is the coin, then `y`, then
+  `x`, and we keep it for reproducibility). From that point the area is
+  scanned over at most `rh * rw` cells: the first cell with empty foot
+  terrain becomes the target; otherwise one step east with wraps — past
+  `right - 1` the row restarts at `left + 1`, past `bottom - 1` at `top + 1`
+  (`game_play.cpp:3377-3391`). Nothing free — stand.
+- Our difference: the original tests "inside the area" with `x >= r.top`
+  where `r.left` is meant — the reference itself marks it as an error
+  (`game_play.cpp:3339`); we use `r.left`. The original's scan checks terrain
+  only; our `Ground` also requires that nobody stands in the cell.
+
+**Our measurement**, both editions: the cells of roaming members in the file
+are not where the game puts them — the map load re-places the squad
+(criterion 2, not implemented yet) — so recomputing from the file cells flags
+`MemberOutside` for thousands of squad members (2 123 across the runs of
+`original_rules.rs` per edition), and every return order the rules give lands
+strictly inside the squad's spawn area and on a free cell; the test asserts
+that on all 41 maps per edition that carry creatures.
+
 ### Названия существ
 
 Монстр называется по виду из таблицы имён exe: номер записи `(класс & 0x7F) −
@@ -152,8 +309,14 @@
 
 ## Не подтверждено
 
-- Куда именно игра водит бродячий отряд, когда `ai_state` стал 1 или 0x20: в
-  `game_play.cpp:1024-1062` только расчёт самого состояния.
+- Combat, once the squad state becomes 1: which monster is picked as a target
+  and how the attack resolves (`game_play.cpp:3179-3283`). The return on 0x20
+  is confirmed now — «The monster decision» above.
+- Whether a villager squad ever enters combat mode: the elder squad's state
+  byte is set from the village flags and the player's weapons
+  (`FUN_00416700`, `game_play.cpp:1516-1562`), part of the village rules not
+  yet recovered. Until then a villager squad is treated as calm and our
+  villagers never turn hostile — an open question, not confirmed behavior.
 - Как выбирается цель атаки из нескольких (`game_play.cpp:2441`, `FUN_004202a8`) и
   как считается, стоит ли преследовать (`game_play.cpp:550-560`).
 - Как часто и по какому правилу игра берёт «дорогие» решения поведения
