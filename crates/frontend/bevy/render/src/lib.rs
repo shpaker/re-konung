@@ -2,8 +2,8 @@
 //!
 //! Тонкий слой над общей моделью [`kn_game::Scene`]: текстуры кэшируются по
 //! [`kn_game::TextureId`], куски сцены становятся спрайтами в порядке
-//! наложения, камера управляется пользователем. Игровой логики и знания
-//! форматов здесь нет — только Bevy и координаты.
+//! наложения, камера записывается здесь, а управляется привязками приложений.
+//! Игровой логики и знания форматов здесь нет — только Bevy и координаты.
 
 pub mod animation;
 pub mod camera;
@@ -14,8 +14,8 @@ pub use animation::{
     AnimPlugin, Animator, Clock, Frame, PlayState, Sequence, SpriteView, frame_view,
 };
 pub use camera::{
-    CameraBounds, CameraState, MapCamera, MapCameraPlugin, PendingFrame, ZOOM_LEVELS, ZoomScroll,
-    fitting_zoom, frame_scene,
+    CameraApply, CameraBounds, CameraInput, CameraState, MapCamera, MapCameraPlugin, PAN_SPEED,
+    PendingFrame, ZOOM_LEVELS, fitting_zoom, frame_scene, ortho_scale, pointer_over_ui,
 };
 pub use scene::{
     MapRoot, SceneGroup, ScenePiece, Z_STEP, clear_scene, piece_center, piece_sequence, piece_size,

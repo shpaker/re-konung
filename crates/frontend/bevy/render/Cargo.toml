@@ -3,7 +3,7 @@ name = "kn-render"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "Отображение сцены игр серии «Князь» на Bevy: рендер, камера, ввод"
+description = "Отображение сцены игр серии «Князь» на Bevy: рендер, камера, анимации"
 
 [dependencies]
 kn-game = { path = "../../../game/kn-game" }
