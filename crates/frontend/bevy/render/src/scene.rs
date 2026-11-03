@@ -10,9 +10,10 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use kn_game::{Piece, PieceGroup, Scene, TextureId};
+use kn_game::{Game, Piece, PieceGroup, Scene, TextureId};
 
 use crate::animation::{Animator, Frame, Sequence};
+use crate::camera::{PendingFrame, frame_scene};
 use crate::textures::{TextureCache, TextureEntry};
 
 /// Шаг z между соседними кусками сцены.
@@ -315,6 +316,38 @@ pub fn scene_bounds(
         .fold(None, |bounds, piece| {
             merge(bounds, piece_bounds(piece, cache))
         })
+}
+
+/// Result of a successful scene load.
+pub struct SceneLoad {
+    pub root: Entity,
+    pub unique_textures: usize,
+    pub problems: Vec<String>,
+}
+
+/// Shared scene-display pipeline: textures → sprites → camera frame.
+///
+/// Does NOT remove the previous scene — the caller keeps the old root and
+/// clears it only after this returns `Ok` (the current `rebuild_scene` semantics).
+pub fn load_scene(
+    game: &Game,
+    scene: &Scene,
+    shown: impl Fn(&Piece) -> bool,
+    cache: &mut TextureCache,
+    images: &mut Assets<Image>,
+    commands: &mut Commands,
+    pending: &mut PendingFrame,
+) -> kn_game::Result<SceneLoad> {
+    let ids = scene.texture_ids();
+    let unique_textures = ids.len();
+    let problems = cache.load(game, &ids, images)?;
+    let root = spawn_scene(commands, scene, cache);
+    frame_scene(scene, cache, shown, pending);
+    Ok(SceneLoad {
+        root,
+        unique_textures,
+        problems,
+    })
 }
 
 #[cfg(test)]

@@ -1,0 +1,13 @@
+[package]
+name = "kn-fe-player"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Bevy frontend of the «Князь» player: window, camera, start-map loading"
+
+[dependencies]
+kn-game = { path = "../../../game/kn-game" }
+kn-render = { path = "../../bevy/render" }
+kn-input = { path = "../../bevy/input" }
+kn-ui = { path = "../../bevy/ui" }
+bevy = "0.20"

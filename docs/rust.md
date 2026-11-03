@@ -16,7 +16,8 @@ The game-layer crates are grouped under `crates/game/` (`game/k1/k1-data`, `game
 | `kn-render` | Bevy: кэш текстур (`textures`), куски сцены → спрайты по узлам групп (`scene`), покадровая анимация (`animation`), камера без ввода (`camera`) | Bevy 0.20, окно и GPU нужны только для запуска, не для тестов; оверлей — `Visibility` узла группы, а не пересборка карты; `animation` не знает ни о K1, ни о форматах |
 | `kn-fe-viewer` | Bevy frontend of the viewer: state (`Viewer`), the Feathers panel, overlays, playback, diagnostics, the camera binding and the App assembly; receives a `ViewerConfig` and knows no CLI | the map is built with all layers at once; toggling an overlay changes group visibility, not a rebuild |
 | `kn-viewer` | app `re-konung-viewer`: CLI, startup resolution, headless `check` | `check` creates no Bevy App, window or GPU context and returns a nonzero code on failure; bevy is linked only transitively |
-| `kn-exec` | бинарь `re-konung`: запуск игры | заготовка — стартовая карта новой игры тем же конвейером; игрового процесса нет |
+| `kn-fe-player` | Bevy frontend of the player: window, camera binding, start-map loading; receives a `PlayerConfig` | no CLI, no game rules — only the display pipeline and the App assembly |
+| `kn-player` | app `re-konung`: CLI, game opening, hero resolution | thin `main`: opens `Game`, resolves the hero, calls `run_player` |
 
 Будущие крейты: `k2-data`, `k2-game`. Общее выделяется, когда общность подтверждена, а не заранее, — та же логика, что в [games.md](games.md) про проверку общности движка на K2. Исключение сделано для перемещения: его механика в K1 и K2 предположительно почти одинакова (заметное отличие — бег), поэтому общий движок сразу строится в `kn-game`, а специфика части остаётся в `k1-game`.
 
@@ -42,7 +43,7 @@ k1-data (форматы)
     → kn-game: Game — фасад (open/maps/heroes/scene/textures/check); Scene/Piece/TextureId — общая модель, K1-типы наружу не выходят
       → kn-render: textures — TextureCache (RGBA → Image, один ассет на ключ); scene — куски → спрайты; animation — часы тиков и последовательности кадров на спрайтах; camera — ступенчатый масштаб, границы, запись камеры
         → kn-fe-viewer (window/systems) → kn-viewer app (re-konung-viewer: CLI, check) — бинарник
-        → kn-exec (re-konung) — бинарник
+        → kn-fe-player (window/systems) → kn-player app (re-konung) — бинарник
 
 kn-game::movement — the shared movement engine — stands aside from this chain:
 it depends on neither `k1-*` nor Bevy, and takes the part's knowledge through
@@ -569,7 +570,7 @@ cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- \
     --game-dir original/k1/rus/game check --map 1
 … check --all [--format json]
 
-cargo run --release --manifest-path crates/Cargo.toml -p kn-exec -- \
+cargo run --release --manifest-path crates/Cargo.toml -p kn-player -- \
     --game-dir original/k1/rus/game
 ```
 
