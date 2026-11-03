@@ -3489,7 +3489,7 @@ dependencies = [
  "bevy",
  "clap",
  "kn-game",
- "kn-io",
+ "kn-render",
 ]
 
 [[package]]
@@ -3505,7 +3505,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kn-io"
+name = "kn-render"
 version = "0.1.0"
 dependencies = [
  "bevy",
@@ -3520,7 +3520,7 @@ dependencies = [
  "bevy",
  "clap",
  "kn-game",
- "kn-io",
+ "kn-render",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",

@@ -1,11 +1,11 @@
 [package]
-name = "kn-io"
+name = "kn-render"
 version = "0.1.0"
 edition = "2024"
 publish = false
 description = "Отображение сцены игр серии «Князь» на Bevy: рендер, камера, ввод"
 
 [dependencies]
-kn-game = { path = "../game/kn-game" }
+kn-game = { path = "../../../game/kn-game" }
 bevy = "0.20"
 thiserror = "2"

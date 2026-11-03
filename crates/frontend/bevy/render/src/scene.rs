@@ -281,7 +281,7 @@ pub fn clear_scene(commands: &mut Commands, root: Entity) {
 /// анимации с её смещением от угла куска.
 ///
 /// Отдельно от [`scene_bounds`], чтобы список кадров можно было проверить без
-/// кэша текстур: ключ `TextureId` для `kn-io` непрозрачен.
+/// кэша текстур: ключ `TextureId` для `kn-render` непрозрачен.
 fn piece_frames(piece: &Piece) -> impl Iterator<Item = (Option<TextureId>, i32, i32)> {
     std::iter::once((piece.texture, 0, 0)).chain(
         piece
@@ -302,7 +302,7 @@ fn piece_frames(piece: &Piece) -> impl Iterator<Item = (Option<TextureId>, i32, 
 /// `shown` — какие куски сейчас видно: карта собирается целиком со всеми
 /// оверлеями, а наводить камеру на спрятанные под [`SceneGroup`] ромбы
 /// проходимости или маски света незачем. Как именно группа оказывается видимой,
-/// решает вызывающий: `kn-io` про оверлеи ничего не знает.
+/// решает вызывающий: `kn-render` про оверлеи ничего не знает.
 pub fn scene_bounds(
     scene: &Scene,
     cache: &TextureCache,

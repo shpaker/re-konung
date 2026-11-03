@@ -12,13 +12,13 @@ use bevy::{
     transform::TransformPlugin,
 };
 use kn_game::{Game, MapSource, Piece, PieceGroup, Scene, SceneOptions, group_is_shown};
-use kn_io::{
+use kn_render::{
     Animator, GameResource, MapRoot, SceneGroup, ScenePiece, TextureCache, Z_STEP, scene_bounds,
     spawn_scene,
 };
 
 fn game_roots() -> Vec<(&'static str, PathBuf)> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../original/k1");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../original/k1");
     let dirs = ["rus", "eng"]
         .into_iter()
         .filter_map(|edition| {

@@ -1,7 +1,7 @@
 # k1-data
 
 Данные игры «Князь: Легенды Лесной страны» (1999): репозиторий и форматы.
-Часть Cargo-workspace [`crates/`](../Cargo.toml); эталон — Python-пакет
+Часть Cargo-workspace [`crates/`](../../../Cargo.toml); эталон — Python-пакет
 `konung/`, при расхождении прав Python (AGENTS.md).
 
 ## Слои
@@ -15,8 +15,8 @@
     `lights_res` (маски света), `flames_res` (огни), `executable` (таблицы
     из EXE), `characters` (сборка кадра персонажа), `rle`, `palette`.
 
-Форматы описаны в [docs/k1/formats/](../../docs/k1/formats/); общая картина —
-[docs/rust.md](../../docs/rust.md).
+Форматы описаны в [docs/k1/formats/](../../../../docs/k1/formats/); общая картина —
+[docs/rust.md](../../../../docs/rust.md).
 
 ## Проверки
 
@@ -26,4 +26,4 @@ just cargo-lint   # cargo fmt --check + clippy -D warnings
 ```
 
 Тесты на данных (`tests/original*.rs`) берут файлы из `original/` и
-пропускаются без них; как их получить — [docs/k1/editions.md](../../docs/k1/editions.md).
+пропускаются без них; как их получить — [docs/k1/editions.md](../../../../docs/k1/editions.md).

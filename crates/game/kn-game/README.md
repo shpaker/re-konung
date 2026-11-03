@@ -1,7 +1,7 @@
 # kn-game
 
 Общий фасад игр серии «Князь»: Bevy-независимая модель сцены и подготовка
-данных для отображения. Потребители (`kn-io`, бинарники) видят только этот
+данных для отображения. Потребители (`kn-render`, бинарники) видят только этот
 крейт; специфика частей серии спрятана за фасадом (сейчас — `k1-game`,
 позже `k2-game`).
 
@@ -26,8 +26,8 @@
 walkability and occupancy, route search, walking a route and the game tick. It
 knows neither Bevy nor K1: the layer lives in `kn-game` because the movement
 mechanics of K1 and K2 are presumably the same
-([docs/k1/movement.md](../../docs/k1/movement.md) — the facts,
-[docs/rust.md](../../docs/rust.md) — the project decisions).
+([docs/k1/movement.md](../../../docs/k1/movement.md) — the facts,
+[docs/rust.md](../../../docs/rust.md) — the project decisions).
 
 - `Grid`/`Cell`/`Direction` — the grid, eight directions, cell ↔ pixels.
 - `Passage` — whose trait: a data supplier brings cell walkability.
@@ -40,7 +40,7 @@ mechanics of K1 and K2 are presumably the same
 
 No game rules here (who goes where, and why) — epic #33 part 3 adds them.
 
-The facade and the scene model exist for `kn-io` and the binaries; the crate has
+The facade and the scene model exist for `kn-render` and the binaries; the crate has
 no "shared game rules" and gains none: the engine walks where it is told and
 never decides where to go (AGENTS.md, docs/rust.md).
 
