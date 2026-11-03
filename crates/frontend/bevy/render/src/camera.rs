@@ -144,8 +144,11 @@ impl Plugin for MapCameraPlugin {
                     keyboard_pan,
                     drag_pan,
                     wheel_zoom,
-                    apply_zoom,
+                    // The frame's zoom must reach the projection on the same frame:
+                    // apply_pending_frame picks the fitting step into CameraState,
+                    // and apply_zoom is what writes the state out to the camera
                     apply_pending_frame,
+                    apply_zoom,
                 )
                     .chain(),
             )
@@ -518,5 +521,42 @@ mod tests {
         scroll.clear();
         scroll.push(MouseScrollUnit::Line, 0.5);
         assert_eq!(scroll.take(), 0);
+    }
+
+    #[test]
+    fn a_framed_scene_reaches_the_projection_on_the_same_frame() {
+        // Мир без окна и GPU, но со всем, что читают системы плагина:
+        // MinimalPlugins ставит только время и планировщик
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, MapCameraPlugin))
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<AccumulatedMouseMotion>()
+            .init_resource::<Messages<MouseWheel>>();
+        // Ступень наводки подбирается только при окне в мире — спавним его
+        app.world_mut().spawn(Window {
+            resolution: (1280, 800).into(),
+            ..default()
+        });
+        let bounds = (Vec2::new(-4669.0, -1344.0), Vec2::new(4669.0, 1344.0));
+        app.world_mut().insert_resource(PendingFrame {
+            center: Some(Vec2::ZERO),
+            bounds: Some(bounds),
+        });
+
+        app.update();
+
+        let want = fitting_zoom(bounds.1 - bounds.0, Vec2::new(1280.0, 800.0));
+        assert_eq!(app.world().resource::<CameraState>().zoom, want);
+        let mut projections = app
+            .world_mut()
+            .query_filtered::<&Projection, With<MapCamera>>();
+        let scale = match projections.single(app.world()).expect("камера жива") {
+            Projection::Orthographic(ortho) => ortho.scale,
+            other => panic!("карта рисуется ортографической проекцией, а не {other:?}"),
+        };
+        // До правки порядка apply_zoom шёл первым, и проекция получала новую
+        // ступень только следующим кадром
+        assert_eq!(scale, 1.0 / ZOOM_LEVELS[want]);
     }
 }
