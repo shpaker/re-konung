@@ -129,11 +129,12 @@ fn roster_names_every_creature_of_the_map_as_the_records_do() {
                             "{edition} {number}: workplace {} is not a job of this map",
                             creature.id
                         ),
+                        // `character == 0` marks an empty slot, not record 0 —
+                        // the hero never owns an open slot
+                        // (docs/k1/creatures.md, "The villager decision").
                         None => assert!(
-                            !entities
-                                .jobs
-                                .iter()
-                                .any(|(_, job)| job.character as usize == creature.id),
+                            !entities.jobs.iter().any(|(_, job)| job.character > 0
+                                && job.character as usize == creature.id),
                             "{edition} {number}: creature {} has a job and no workplace",
                             creature.id
                         ),

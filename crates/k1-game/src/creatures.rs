@@ -20,6 +20,10 @@ pub struct Workplace {
     pub cell: (i16, i16),
     pub direction: u8,
     pub role: &'static str,
+    /// Record number the slot points at. `0` is the game's empty-slot marker,
+    /// not record 0: the hero never owns an open slot
+    /// (docs/k1/creatures.md, "The villager decision").
+    pub character: i16,
 }
 
 /// One creature of the map.
@@ -89,18 +93,51 @@ fn creature(character: &Character, group: &Group, places: &HashMap<usize, Workpl
     }
 }
 
+/// The village job slots of `map_number` in file order: index = slot, five per
+/// village (docs/k1/formats/game-state.md, the `Job` block).
+///
+/// Our data has at most one village per map (docs/k1/creatures.md, our
+/// measurement over `Game.0`–`Game.2`); were there more, the first is taken.
+/// No village on the map — an empty list, and the rules find no work anywhere.
+pub fn job_slots(state: &GameState, map_number: usize) -> Vec<Workplace> {
+    state
+        .villages
+        .iter()
+        .flatten()
+        .find(|village| village.map_id as usize == map_number)
+        .map(|village| {
+            village
+                .jobs
+                .iter()
+                .map(|job| Workplace {
+                    cell: (job.x, job.y),
+                    direction: job.direction,
+                    role: job.role,
+                    character: job.character,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Workplace of every character of this map that has one, keyed by record number.
+///
+/// An empty slot carries `character == 0`, the game's own test
+/// (`Jobs[job].CharID != 0`, docs/k1/creatures.md, "The villager decision"):
+/// keying on it as record 0 would hand the hero a workplace on every map with
+/// an open slot.
 fn workplaces(entities: &MapEntities) -> HashMap<usize, Workplace> {
     entities
         .jobs
         .iter()
         .filter_map(|(_, job)| {
-            (job.character >= 0).then_some((
+            (job.character > 0).then_some((
                 job.character as usize,
                 Workplace {
                     cell: (job.x, job.y),
                     direction: job.direction,
                     role: job.role,
+                    character: job.character,
                 },
             ))
         })
