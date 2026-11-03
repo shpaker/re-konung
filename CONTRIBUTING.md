@@ -55,9 +55,15 @@ An issue title starts with one of four prefixes, which say what kind of work it 
 - A label and a prefix do not compete: the templates attach the label (`bug`, `enhancement`) at
   creation, and `gh issue create` without a template adds it with `--label` — the label is for
   filters, the prefix is for reading the list.
-- Pull request titles stay in Conventional Commits (`feat:`, `fix:`, `chore:` …): git-cliff reads
-  those, and they decide the release and the version ([docs/releases.md](docs/releases.md)). Issue
-  prefixes affect no release.
+- Pull request titles stay in Conventional Commits (`feat:`, `fix:`, `chore:` …) and carry a
+  mandatory subsystem scope: `type(scope): subject`. The scope is exactly one of `game` (the
+  engine and code shared across the series), `konung1`, `konung2`, `konung2.5` (a specific game of
+  the series), `ui` (the display layer and its interface: pieces to sprites, textures, animation,
+  camera, widgets), `tiled` (the Tiled extension), `arch` (the crate and layer structure: new
+  crates, moves between layers, dependency direction), `docs`, `ci`, `deps`, `repo` (repository
+  infrastructure and rules: justfile, prek, templates, contribution docs). No job validates the
+  scope — review enforces it. git-cliff reads those, and they decide the release and the version
+  ([docs/releases.md](docs/releases.md)). Issue prefixes affect no release.
 
 ## Branches and PRs
 
