@@ -268,10 +268,22 @@ retries an unreachable order has not been worked out, and the window is the
 engine's own `WorldRules` number, not a confirmed one. Its bound is one remembered
 goal: a loop that switches between two unreachable orders searches on every switch,
 inside the window (`alternating_unreachable_orders_each_search_inside_the_window`).
+
 That is left as it is on purpose — widening the memory to a set costs state for a
 caller that does not exist yet, and a rules layer that oscillates between two goals
 every tick is a bug in the rules, not something the engine should paper over
 (#36 part 3 owns the cadence).
+
+That caller arrived with criteria 3 and 4 of #36: the rules re-roll a target every
+tick, so a creature facing an unreachable area paid one search per tick. The bound
+is a per-creature window one layer up — `kn_game::rules::FailedOrderCooldown` holds
+a movement order back for `window_ticks` after one of its found no route and answers
+`Applied::Held` without calling the engine
+(`an_unreachable_area_costs_one_search_per_window`: 4 searches over 40 ticks instead
+of 40, and `a_cooldown_bounds_the_searches_of_an_isolated_creature`). It lives
+beside the rules rather than in `World`, so a player's order is never delayed by a
+failed AI one, and a turn — which costs no search — is never held. The two memories
+stay one each: the engine remembers the goal, the application remembers the tick.
 
 ### Decision: an occupied goal takes the nearest ring
 
@@ -403,10 +415,16 @@ and `k1_game::scene::Graphics` holds them while poses are built.
 
 ## Creature rules (`k1-game::rules` → `kn-game::rules`)
 
-Epic #36 part 3. K1 behavior splits from the shared world in two crates: evaluation
-lives in `k1-game::rules` (it reads only `Creature`, so it needs no dependency on
-`kn-game`), application lives in `kn-game::rules` (it takes explicit
-`(CreatureId, Decision)` pairs and calls `World::move_to`).
+Epic #36 part 3, criteria 3 and 4 on top of the skeleton. K1 behavior splits
+from the shared world in two crates: evaluation lives in `k1-game::rules`
+(it reads the roster plus a live picture of the tick and declares its own
+`Ground`, `Random` and `Live` abstractions, so it needs no dependency on
+`kn-game` — the dependency runs the other way), application lives in
+`kn-game::rules` (it takes explicit `(CreatureId, Decision)` pairs, calls
+`World::move_to` and `World::turn`, and hands the world itself to the rules as
+their `Ground`). The confirmed rules themselves are in
+[creatures.md](k1/creatures.md), «The villager decision», «The group state of
+a roaming squad» and «The monster decision».
 
 ### Decision: separate evaluate from apply
 
@@ -426,11 +444,61 @@ character: sprite source, dead bit, work bits) and `group_kind` (byte 0x1E of th
 group, describes the band), and `classify()` reads only the second. A warrior
 class_id inside a villager group still classifies as `Villager`.
 
+### Decision: the rules read live positions, not the file
+
+`Game.N` is the starting state; the rules decide over where creatures stand
+now, so `evaluate` and `group_states` take a parallel `Live` picture (cell,
+facing, whether the creature is still walking) and the group state byte is
+recomputed every tick from those positions — never read from the file, which
+for roaming squads the game itself overwrites within the first 16 ticks
+(`game.cpp:645`, `game_play.cpp:1623-1638`; the period is a 1999 cost cap we
+do not reproduce). A creature whose squad state the caller did not supply, or
+whose live picture is missing, gets the calm answer and no decision rather
+than a panic: the arrays are indexed like the roster and may lag it. A creature
+the world does not know is `None` in that picture, never a made-up cell — an
+invented `(0, 0)` would decide the state of every squad whose spawn area covers
+the origin (`an_unknown_player_member_never_makes_a_squad_hostile`).
+
+The villager walk picks a cell uniformly inside the squad's spawn area; the
+original offsets from the creature by the viewport size (`ViewTiles * 2`,
+`game_play.cpp:1889-1949`), and behavior must not depend on the window. The
+monster return keeps the original's exact draw order (coin, then `y`, then
+`x`), so a run with a fixed seed replays. Villager squads are always calm
+until the village rules (`FUN_00416700`) are recovered — our villagers never
+turn hostile; monster combat (state 1) gives no order rather than an invented
+one. Both are recorded as open questions in
+[creatures.md](k1/creatures.md), not as confirmed behavior.
+
+The player squad the state scan looks for is part of the roster the caller
+passes, and `k1_game::creatures::roster` lists it only on the map the game
+starts on: a simulation of any other map adds the arriving player squad itself
+before asking for group states (#38, #49). The rules' eight-direction offset
+table is a second copy of the engine's, because `k1-game` cannot import
+`kn-game`; `kn-game/tests/movement_grid.rs` holds the two together.
+
+### Decision: turning in place
+
+`Decision::Turn(u8)` turns a standing creature to face the original's
+direction byte 0..7; `Applied::Turned` reports acceptance. The engine gains
+the smallest thing criterion 3 needs: `Walker` remembers an explicit face,
+and `facing()` answers in order — the running step, the route's first
+direction, the face, the direction of arrival. A step consumes the face, so
+after a walk the creature faces where it came from exactly as it does without
+a turn, and a creature sent to a workplace is turned again once it stands —
+which is also the original's order of events. `World::state` exposes the
+facing, so turning emits no event. Turning is immediate,
+not one direction per tick (the original creeps by one step at a time,
+`FUN_004391bc`, `game_play.cpp:1995-2013` — a 1999 limit,
+see «Вне объёма» in [creatures.md](k1/creatures.md)).
+
 ### Open questions
 
-- The `class` module in `k1-game::rules` carries the Slavik `CHCLASS` values as
-  documentation only; nothing reads them yet. Whether they end up load-bearing or
-  get dropped comes with criteria 3 and 4 (villager work bits, monster group state).
+- The `class` module in `k1-game::rules` is load-bearing since criteria 3 and 4:
+  `class::WOMAN` and `class::CHILD` gate the villager branch, and the work bits
+  `(class >> 3) & 7` pick the static workplace.
+- Whether a villager squad can enter combat mode, and what monster combat is
+  (target choice, attack, shooting), stays unrecovered — the rules give no
+  order for those states and the engine waits for the village and combat rules.
 
 ## Отображение (`kn-io` и бинарники)
 

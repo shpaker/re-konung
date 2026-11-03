@@ -91,3 +91,24 @@ fn neighbours_on_the_fine_grid_match_the_original_table() {
         }
     }
 }
+
+/// The K1 rules re-declare the offset table because `k1-game` must not depend
+/// on `kn-game`; this holds the two copies together, so a change to the
+/// engine's table cannot silently reorder the rules' "first free neighbour of
+/// the workplace" (issue #36, criterion 3).
+#[test]
+fn the_rules_copy_of_the_offset_table_matches_the_engine() {
+    for (index, direction) in Direction::ALL.into_iter().enumerate() {
+        let (even, odd) = k1_game::rules::NEIGHBOUR_OFFSETS[index];
+        assert_eq!(
+            direction.offset(false),
+            even,
+            "{direction:?} (index {index}) on an even row"
+        );
+        assert_eq!(
+            direction.offset(true),
+            odd,
+            "{direction:?} (index {index}) on an odd row"
+        );
+    }
+}
