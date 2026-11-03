@@ -13,5 +13,6 @@ path = "src/main.rs"
 kn-game = { path = "../game/kn-game" }
 kn-input = { path = "../frontend/bevy/input" }
 kn-render = { path = "../frontend/bevy/render" }
+kn-ui = { path = "../frontend/bevy/ui" }
 bevy = "0.20"
 clap = { version = "4", features = ["derive"] }

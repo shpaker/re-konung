@@ -15,7 +15,7 @@ pub use animation::{
 };
 pub use camera::{
     CameraApply, CameraBounds, CameraInput, CameraState, MapCamera, MapCameraPlugin, PAN_SPEED,
-    PendingFrame, ZOOM_LEVELS, fitting_zoom, frame_scene, ortho_scale, pointer_over_ui,
+    PendingFrame, ZOOM_LEVELS, fitting_zoom, frame_scene, ortho_scale,
 };
 pub use scene::{
     MapRoot, SceneGroup, ScenePiece, Z_STEP, clear_scene, piece_center, piece_sequence, piece_size,
