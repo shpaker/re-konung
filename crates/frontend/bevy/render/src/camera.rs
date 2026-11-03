@@ -5,12 +5,7 @@
 //! `scale = 1 / zoom`, поэтому при zoom = 1 один мировой юнит равен одному
 //! пикселю окна.
 
-use bevy::{
-    input::mouse::{AccumulatedMouseMotion, MouseScrollUnit, MouseWheel},
-    picking::hover::Hovered,
-    prelude::*,
-    ui::Node,
-};
+use bevy::prelude::*;
 
 /// Камера просмотра карты.
 #[derive(Component)]
@@ -43,65 +38,6 @@ pub const ZOOM_LEVELS: [f32; 9] = [0.125, 0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 6.0, 8.
 pub const DEFAULT_ZOOM: usize = 3;
 /// Скорость панорамирования с клавиатуры, экранных пикселей в секунду.
 pub const PAN_SPEED: f32 = 900.0;
-/// Сколько «строк» прокрутки дают одну ступень масштаба: один щелчок колеса.
-pub const LINES_PER_ZOOM_STEP: f32 = 1.0;
-/// Сколько пикселей прокрутки дают одну ступень масштаба: короткий жест трекпада.
-///
-/// Со 100 пикселей жест трекпада отзывался не сразу: первые события не давали
-/// и ступени, и масштаб догонял прокрутку с задержкой.
-pub const PIXELS_PER_ZOOM_STEP: f32 = 60.0;
-/// Сколько ступеней масштаба отдаёт одному кадру.
-///
-/// Потолок нужен, иначе инерция жеста пролистывает весь диапазон, но считать его
-/// надо на кадр, а не на событие: колесо присылает несколько щелчков одним
-/// событием, и прежнее ограничение съедало их в одну ступень.
-pub const MAX_ZOOM_STEPS_PER_FRAME: i32 = 3;
-/// Сколько ступеней переживает ожидание своей очереди.
-///
-/// Долгий жест размазывается по кадрам, но не копит бесконечно: за этим пределом
-/// лишнее всё равно отбрасывается — как раньше, только намного позже.
-const ZOOM_ACCUM_LIMIT: f32 = 6.0;
-
-/// Накопитель прокрутки для масштаба.
-///
-/// Одна ступень требует порога, а незакрытая доля не обнуляется: [ZoomScroll::push]
-/// копит прокрутку, [ZoomScroll::take] отдаёт не больше [`MAX_ZOOM_STEPS_PER_FRAME`]
-/// на кадр, и остаток переходит в следующий кадр.
-#[derive(Debug, Default)]
-pub struct ZoomScroll {
-    accum: f32,
-}
-
-impl ZoomScroll {
-    /// Учитывает очередное событие прокрутки.
-    pub fn push(&mut self, unit: MouseScrollUnit, y: f32) {
-        let normalized = match unit {
-            MouseScrollUnit::Line => y / LINES_PER_ZOOM_STEP,
-            MouseScrollUnit::Pixel => y / PIXELS_PER_ZOOM_STEP,
-        };
-        self.accum = (self.accum + normalized).clamp(-ZOOM_ACCUM_LIMIT, ZOOM_ACCUM_LIMIT);
-    }
-
-    /// Забирает ступени этого кадра: не больше потолка, остаток остаётся далее.
-    pub fn take(&mut self) -> i32 {
-        let whole = self.accum.trunc();
-        let steps = whole.clamp(
-            -(MAX_ZOOM_STEPS_PER_FRAME as f32),
-            MAX_ZOOM_STEPS_PER_FRAME as f32,
-        );
-        self.accum -= steps;
-        steps as i32
-    }
-
-    /// Забывает накопленное целиком.
-    ///
-    /// Нужно, когда курсор над интерфейсом: прокрутка, случившаяся над
-    /// панелью, не должна позже доехать до карты, а `take` оставил бы её ждать
-    /// следующего кадра.
-    pub fn clear(&mut self) {
-        self.accum = 0.0;
-    }
-}
 
 /// Текущая ступень масштаба.
 #[derive(Resource, Debug)]
@@ -120,7 +56,8 @@ impl CameraState {
         ZOOM_LEVELS[self.zoom.min(ZOOM_LEVELS.len() - 1)]
     }
 
-    fn step(&mut self, delta: i32) -> bool {
+    /// Moves the zoom `delta` steps along the ladder; whether it changed.
+    pub fn step(&mut self, delta: i32) -> bool {
         let max = ZOOM_LEVELS.len() - 1;
         let next = (self.zoom as i32 + delta).clamp(0, max as i32) as usize;
         let changed = next != self.zoom;
@@ -129,7 +66,18 @@ impl CameraState {
     }
 }
 
-/// Камера и её плагин: спавн, ввод, границы.
+/// Set for the apps' input bindings: frontends register their camera-control
+/// systems here.
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub struct CameraInput;
+
+/// Set for the camera write-out: ordered after [`CameraInput`] in this crate,
+/// so the schedule does not depend on plugin registration order.
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub struct CameraApply;
+
+/// Camera and its plugin: spawn, write-out and bounds. Input handling lives in
+/// the apps' bindings ([`CameraInput`]).
 pub struct MapCameraPlugin;
 
 impl Plugin for MapCameraPlugin {
@@ -141,16 +89,15 @@ impl Plugin for MapCameraPlugin {
             .add_systems(
                 Update,
                 (
-                    keyboard_pan,
-                    drag_pan,
-                    wheel_zoom,
                     // The frame's zoom must reach the projection on the same frame:
                     // apply_pending_frame picks the fitting step into CameraState,
                     // and apply_zoom is what writes the state out to the camera
                     apply_pending_frame,
                     apply_zoom,
                 )
-                    .chain(),
+                    .chain()
+                    .in_set(CameraApply)
+                    .after(CameraInput),
             )
             .add_systems(PostUpdate, clamp_to_bounds);
     }
@@ -167,98 +114,26 @@ fn spawn_camera(mut commands: Commands, state: Res<CameraState>) {
     ));
 }
 
-fn ortho_scale(projection: &Projection) -> f32 {
+/// Orthographic scale of a projection; the pan/drag world step is the screen
+/// step times this.
+pub fn ortho_scale(projection: &Projection) -> f32 {
     match projection {
         Projection::Orthographic(ortho) => ortho.scale,
-        // Перспективы и пользовательских проекций у карты нет
+        // The map has no perspective or custom projections
         _ => 1.0,
     }
 }
 
-fn keyboard_pan(
-    keys: Res<ButtonInput<KeyCode>>,
-    time: Res<Time>,
-    camera: Single<(&mut Transform, &Projection), With<MapCamera>>,
-) {
-    let mut direction = Vec2::ZERO;
-    if keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft) {
-        direction.x -= 1.0;
-    }
-    if keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight) {
-        direction.x += 1.0;
-    }
-    if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) {
-        direction.y += 1.0;
-    }
-    if keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown) {
-        direction.y -= 1.0;
-    }
-    if direction == Vec2::ZERO {
-        return;
-    }
-    let (mut transform, projection) = camera.into_inner();
-    transform.translation.x +=
-        direction.x * PAN_SPEED * time.delta_secs() * ortho_scale(projection);
-    transform.translation.y +=
-        direction.y * PAN_SPEED * time.delta_secs() * ortho_scale(projection);
-}
-
-/// Курсор над интерфейсом.
+/// Cursor over the interface.
 ///
-/// Значение, а не наличие компонента: `Hovered` в Bevy — булево-компонент, и
-/// плагин ховера только обновляет его у тех, у кого он уже есть. Bevy Feathers
-/// навешивает `Hovered` на каждый свой контрол при спавне, поэтому «на UI-ноде
-/// есть `Hovered`» означает «в панели есть виджет», а не «курсор над панелью» —
-/// по такому признаку карта не двигалась и не масштабировалась вовсе.
-fn pointer_over_ui(mut hovers: impl Iterator<Item = bool>) -> bool {
+/// The value, not the presence of the component: `Hovered` in Bevy is a
+/// boolean component, and the hover plugin only updates it on entities that
+/// already have it. Bevy Feathers attaches `Hovered` to every one of its
+/// controls at spawn, so "`Hovered` is on a UI node" means "the panel has a
+/// widget", not "the cursor is over the panel" — with that test the map did
+/// not move or zoom at all.
+pub fn pointer_over_ui(mut hovers: impl Iterator<Item = bool>) -> bool {
     hovers.any(|hovered| hovered)
-}
-
-/// Панорамирование перетаскиванием левой кнопкой: мир следует за курсором.
-/// Над интерфейсом не работает — иначе список карт двигал бы карту.
-fn drag_pan(
-    buttons: Res<ButtonInput<MouseButton>>,
-    motion: Res<AccumulatedMouseMotion>,
-    over_ui: Query<&Hovered, With<Node>>,
-    camera: Single<(&mut Transform, &Projection), With<MapCamera>>,
-) {
-    if !buttons.pressed(MouseButton::Left)
-        || pointer_over_ui(over_ui.iter().map(|hovered| hovered.0))
-    {
-        return;
-    }
-    let (mut transform, projection) = camera.into_inner();
-    let scale = ortho_scale(projection);
-    transform.translation.x -= motion.delta.x * scale;
-    // Экранная y вниз, мировая y вверх
-    transform.translation.y += motion.delta.y * scale;
-}
-
-/// Прокрутка над интерфейсом карту не масштабирует: иначе колесо, наведённое
-/// на список карт, ещё и меняло бы масштаб сцены.
-///
-/// Над интерфейсом очередь не ждёт своей очереди, а сгорает целиком: три
-/// ступени, накрученные над панелью, не должны доехать до карты в следующем
-/// кадре, когда курсор уберут с виджета. События при этом прочитаны всегда —
-/// иначе они копились бы до следующей прокрутки над картой.
-fn wheel_zoom(
-    mut wheel: MessageReader<MouseWheel>,
-    mut state: ResMut<CameraState>,
-    mut scroll: Local<ZoomScroll>,
-    over_ui: Query<&Hovered, With<Node>>,
-) {
-    let over_ui = pointer_over_ui(over_ui.iter().map(|hovered| hovered.0));
-    for event in wheel.read() {
-        scroll.push(event.unit, event.y);
-    }
-    if over_ui {
-        scroll.clear();
-        return;
-    }
-    let steps = scroll.take();
-    if steps != 0 {
-        state.step(steps);
-    }
 }
 
 fn apply_zoom(state: Res<CameraState>, mut camera: Single<&mut Projection, With<MapCamera>>) {
@@ -373,92 +248,6 @@ mod tests {
         assert_eq!(state.scale(), 1.0);
     }
 
-    /// События прокрутки — по одному на кадр — возвращает ступени, которые кадры
-    /// действительно получат: очередное `take` добирает то, что осталось в очереди
-    /// после последнего события, уже без новых событий.
-    fn scroll_events(events: &[(MouseScrollUnit, f32)]) -> Vec<i32> {
-        let mut scroll = ZoomScroll::default();
-        let mut frames = Vec::new();
-        for &(unit, y) in events {
-            scroll.push(unit, y);
-            frames.push(scroll.take());
-        }
-        loop {
-            let taken = scroll.take();
-            if taken == 0 {
-                break;
-            }
-            frames.push(taken);
-        }
-        frames.retain(|steps| *steps != 0);
-        frames
-    }
-
-    #[test]
-    fn one_wheel_notch_is_one_level() {
-        assert_eq!(scroll_events(&[(MouseScrollUnit::Line, 1.0)]), [1]);
-        assert_eq!(scroll_events(&[(MouseScrollUnit::Line, -1.0)]), [-1]);
-    }
-
-    #[test]
-    fn fractional_scrolls_accumulate_to_a_level() {
-        // Половинки не дают ступень, пока не наберут целое
-        assert_eq!(
-            scroll_events(&[(MouseScrollUnit::Line, 0.5), (MouseScrollUnit::Line, 0.5)]),
-            [1]
-        );
-    }
-
-    #[test]
-    fn trackpad_swipe_is_bounded() {
-        // Свайп: 30 событий по 10 пикселей = 300 пикселей = пять ступеней,
-        // а не тридцать; за кадр не больше потолка, остаток доезжает следом
-        let events = vec![(MouseScrollUnit::Pixel, 10.0); 30];
-        let per_frame = scroll_events(&events);
-        assert_eq!(per_frame.iter().sum::<i32>(), 5, "свайп в 300 пикселей");
-        assert!(
-            per_frame
-                .iter()
-                .all(|steps| steps.abs() <= MAX_ZOOM_STEPS_PER_FRAME),
-            "{per_frame:?} — за кадр больше потолка"
-        );
-    }
-
-    #[test]
-    fn a_fast_scroll_spreads_over_frames_instead_of_vanishing() {
-        // Колесо на macOS присылает несколько щелчков одним событием. Прежний
-        // потолок на событии схлопывал их в одну ступень; теперь потолок на
-        // кадр, и очередное событие не отбрасывается, а ждёт своего кадра
-        assert_eq!(scroll_events(&[(MouseScrollUnit::Line, 2.0)]), [2]);
-        assert_eq!(
-            scroll_events(&[(MouseScrollUnit::Line, 3.0), (MouseScrollUnit::Line, 3.0)]),
-            [3, 3]
-        );
-    }
-
-    #[test]
-    fn unfinished_pixels_carry_to_the_next_event() {
-        // 60 пикселей на ступень: два незакрытых жеста складываются в ступень
-        let mut scroll = ZoomScroll::default();
-        scroll.push(MouseScrollUnit::Pixel, 40.0);
-        assert_eq!(scroll.take(), 0);
-        scroll.push(MouseScrollUnit::Pixel, 40.0);
-        assert_eq!(scroll.take(), 1);
-        scroll.push(MouseScrollUnit::Pixel, 40.0);
-        assert_eq!(scroll.take(), 1);
-    }
-
-    #[test]
-    fn scroll_direction_is_kept() {
-        assert_eq!(
-            scroll_events(&[
-                (MouseScrollUnit::Line, -1.0),
-                (MouseScrollUnit::Pixel, -60.0)
-            ]),
-            [-1, -1]
-        );
-    }
-
     #[test]
     fn widgets_without_the_cursor_are_not_the_ui_under_it() {
         // Feathers носит Hovered на каждом контроле, и вне курсора он false:
@@ -495,45 +284,12 @@ mod tests {
     }
 
     #[test]
-    fn opposite_scrolls_cancel_out() {
-        let mut scroll = ZoomScroll::default();
-        // Незакрытый порог в одну сторону гасится прокруткой в другую
-        scroll.push(MouseScrollUnit::Line, 0.5);
-        scroll.push(MouseScrollUnit::Line, -0.5);
-        assert_eq!(scroll.take(), 0);
-    }
-
-    #[test]
-    fn scrolling_over_the_interface_does_not_reach_the_map_later() {
-        // Сценарий из ревью: шесть ступеней над панелью, потом курсор уходит на
-        // карту. take() вернул бы три из них — поэтому над интерфейсом очередь
-        // сгорает целиком
-        let mut scroll = ZoomScroll::default();
-        for _ in 0..6 {
-            scroll.push(MouseScrollUnit::Line, 1.0);
-        }
-        scroll.clear();
-        assert_eq!(scroll.take(), 0);
-
-        // Дробный остаток сгорает так же: половина ступени над панелью не должна
-        // сложиться с следующим жестом, уже над картой
-        scroll.push(MouseScrollUnit::Line, 0.5);
-        scroll.clear();
-        scroll.push(MouseScrollUnit::Line, 0.5);
-        assert_eq!(scroll.take(), 0);
-    }
-
-    #[test]
     fn a_framed_scene_reaches_the_projection_on_the_same_frame() {
-        // Мир без окна и GPU, но со всем, что читают системы плагина:
-        // MinimalPlugins ставит только время и планировщик
+        // A world without a window and GPU; MinimalPlugins provides only time
+        // and the scheduler, and the plugin's systems read nothing else
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, MapCameraPlugin))
-            .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<ButtonInput<MouseButton>>()
-            .init_resource::<AccumulatedMouseMotion>()
-            .init_resource::<Messages<MouseWheel>>();
-        // Ступень наводки подбирается только при окне в мире — спавним его
+        app.add_plugins((MinimalPlugins, MapCameraPlugin));
+        // The fitting step is picked only with a window in the world — spawn one
         app.world_mut().spawn(Window {
             resolution: (1280, 800).into(),
             ..default()
@@ -551,12 +307,12 @@ mod tests {
         let mut projections = app
             .world_mut()
             .query_filtered::<&Projection, With<MapCamera>>();
-        let scale = match projections.single(app.world()).expect("камера жива") {
+        let scale = match projections.single(app.world()).expect("the camera lives") {
             Projection::Orthographic(ortho) => ortho.scale,
-            other => panic!("карта рисуется ортографической проекцией, а не {other:?}"),
+            other => panic!("the map is drawn with an orthographic projection, not {other:?}"),
         };
-        // До правки порядка apply_zoom шёл первым, и проекция получала новую
-        // ступень только следующим кадром
+        // Before the order fix apply_zoom ran first, and the projection got
+        // the new step only on the next frame
         assert_eq!(scale, 1.0 / ZOOM_LEVELS[want]);
     }
 }

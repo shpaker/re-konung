@@ -45,7 +45,9 @@ just tiled-install
    (kn-exec: игра)      (kn-viewer: окно, UI, headless-диагностика)
          \                    /
           ▼                  ▼
-              kn-render — Bevy: рендер сцены, камера, ввод, кэш текстур
+              kn-render — Bevy: рендер сцены, камера, кэш текстур
+              kn-input — Bevy: механизмы ввода (клавиатура, мышь, колесо);
+                         рядом с kn-render, зависит только от bevy
                      │
                      ▼
               kn-game — общий фасад серии: Game, Scene, check;

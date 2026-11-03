@@ -17,13 +17,15 @@
   по возрастанию z (`bevy_sprite_render`: `sort_key = FloatOrd(transform.z)`).
   Спрайты — потомки корня `MapRoot`, которому обязательны `Transform` и
   `Visibility`: без них потомки не получают `GlobalTransform` и не рисуются.
-- `camera` — `MapCameraPlugin`: панорамирование (WASD, стрелки, перетаскивание
-  левой кнопкой — и то и другое над интерфейсом отключено, иначе панель
-  двигала бы и масштабировала карту), ступенчатый масштаб колесом с пороговым
-  накопителем `ZoomScroll`, границы карты. Ступени дискретные, чтобы на целых
-  значениях картинка оставалась пиксель-в-пиксель
-  (`scale = 1 / zoom`). `frame_scene` наводит камеру на содержимое сцены и
-  подбирает ступень, на которой оно влезает в окно (`fitting_zoom`).
+- `camera` — `MapCameraPlugin`: camera spawn, the discrete zoom ladder
+  (`ZOOM_LEVELS`, `scale = 1 / zoom` keeps whole levels pixel-perfect), map
+  bounds, the pending frame (`frame_scene` aims the camera at the scene
+  content and picks the fitting step, `fitting_zoom`) and the bounds clamp.
+  No input handling: the input mechanisms live in
+  [`kn-input`](../input), and each app binds them to the camera in a system
+  registered in the `CameraInput` set; `CameraApply` (the write-out:
+  `apply_pending_frame` then `apply_zoom`) is ordered after `CameraInput`
+  inside this crate.
 
 Также `GameResource` — обёртка `kn_game::Game` в ресурс Bevy.
 
@@ -33,7 +35,7 @@ Bevy используется с `ImagePlugin::default_nearest()`: график�
 ## Проверки
 
 ```bash
-just cargo-test   # координаты, z-порядок, ступени и накопитель масштаба, вписывание в окно
+just cargo-test   # координаты, z-порядок, ступени масштаба, вписывание в окно
 just cargo-lint
 ```
 

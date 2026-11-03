@@ -3489,6 +3489,7 @@ dependencies = [
  "bevy",
  "clap",
  "kn-game",
+ "kn-input",
  "kn-render",
 ]
 
@@ -3502,6 +3503,13 @@ dependencies = [
  "serde",
  "tempfile",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "kn-input"
+version = "0.1.0"
+dependencies = [
+ "bevy",
 ]
 
 [[package]]
@@ -3520,6 +3528,7 @@ dependencies = [
  "bevy",
  "clap",
  "kn-game",
+ "kn-input",
  "kn-render",
  "serde_json",
  "tempfile",

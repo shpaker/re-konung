@@ -1,0 +1,9 @@
+[package]
+name = "kn-input"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Input mechanisms for the «Князь» frontends: keyboard direction, mouse drag, wheel accumulation. No camera types, no UI, no game rules"
+
+[dependencies]
+bevy = "0.20"
