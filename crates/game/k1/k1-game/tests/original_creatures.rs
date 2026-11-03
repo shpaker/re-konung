@@ -24,7 +24,7 @@ const SPECIAL_DYNAMIC: &[(u8, [usize; 8])] = &[
 const WALK_FRAMES: [usize; 8] = [12; 8];
 
 fn game_dirs() -> Vec<(&'static str, GameDir)> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../original/k1");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../original/k1");
     let dirs = ["rus", "eng"]
         .into_iter()
         .filter_map(|edition| {

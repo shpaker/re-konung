@@ -10,7 +10,7 @@ name = "re-konung"
 path = "src/main.rs"
 
 [dependencies]
-kn-game = { path = "../kn-game" }
+kn-game = { path = "../game/kn-game" }
 kn-io = { path = "../kn-io" }
 bevy = "0.20"
 clap = { version = "4", features = ["derive"] }

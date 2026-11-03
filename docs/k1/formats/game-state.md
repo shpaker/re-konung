@@ -72,7 +72,7 @@ uv run konung k1 map original/k1/rus/game out/k1/maps -n 1 --game 0
 - У всех, кроме бродячих, место берётся из записи персонажа. **Подтверждено**: у всех таких персонажей место не (0, 0).
 
 Roaming is exactly `0x41`–`0x50`, so our predicate is a range test — `Group::is_roaming`
-in `crates/k1-data/src/game_state.rs`, `Group.is_roaming` in `konung/k1/game_state.py`,
+in `crates/game/k1/k1-data/src/game_state.rs`, `Group.is_roaming` in `konung/k1/game_state.py`,
 `roaming` in `tiled/konung/lib/k1.mjs`. Slavik compares `unk5 < 0x51 && !(unk5 & 0x80)`
 at `game.cpp:651`, but that loop skips the player group (`_mainMapChar`, `game.cpp:638`),
 while the respawn and growth path that has no such skip uses the range (`game.cpp:708`,

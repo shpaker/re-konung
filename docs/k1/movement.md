@@ -29,7 +29,7 @@ area of one rhombus.
 51 200 cells, and the forward formula against the Python reference
 (`konung/k1/game_state.py`, `character_position`) and against `k1-data`
 (`game_state::character_position`, `character_cell`). The test
-`fine_grid_matches_k1_data` (`crates/kn-game/tests/movement_grid.rs`) holds this.
+`fine_grid_matches_k1_data` (`crates/game/kn-game/tests/movement_grid.rs`) holds this.
 
 In the basis of the south-east and north-east steps (`u = x + y//2`,
 `v = x − (y+1)//2`) the grid becomes an ordinary square field: the eight
@@ -54,7 +54,7 @@ while west, east, north and south become the diagonals.
 
 **Confirmed** against Slavik `game.cpp:2918-2947` — the table `d[8][2]`, the
 column chosen by `tilepos.y & 1`, bounds checked over `0..160 × 0..320`. Repeated
-in `crates/kn-game/src/movement/grid.rs`; the test
+in `crates/game/kn-game/src/movement/grid.rs`; the test
 `neighbour_offsets_match_pixel_offsets` checks both rows of the table. A
 direction index is the key into walk-animation frames, so the order is kept.
 
