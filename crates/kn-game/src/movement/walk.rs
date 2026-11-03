@@ -40,7 +40,8 @@ pub struct WalkState {
     pub goal: Option<Cell>,
     /// The pixel point of the cell it stands in.
     pub pixel: (i32, i32),
-    /// The direction it faces: it changes at the cell border.
+    /// The direction it faces: it changes at the cell border, and a standing
+    /// creature can be turned in place (`Walker::turn`).
     pub direction: Option<Direction>,
     /// Whether a step is in progress right now.
     pub moving: bool,
@@ -73,6 +74,10 @@ pub struct Walker {
     /// about to go.
     route: Vec<Direction>,
     step: Option<Step>,
+    /// The direction a standing creature was turned to face: it holds while the
+    /// creature stands, is masked by a route that has not started stepping, and
+    /// is consumed by a step.
+    face: Option<Direction>,
 }
 
 impl Walker {
@@ -85,6 +90,7 @@ impl Walker {
             goal: None,
             route: Vec::new(),
             step: None,
+            face: None,
         }
     }
 
@@ -123,8 +129,8 @@ impl Walker {
     }
 
     /// The direction it faces: the step's direction while walking, otherwise
-    /// the next step of the route, and after arriving the direction it came
-    /// from.
+    /// the next step of the route, otherwise the in-place turn of `turn`, and
+    /// after arriving with no turn on record the direction it came from.
     pub fn facing(&self) -> Option<Direction> {
         if let Some(step) = self.step {
             return Some(step.direction);
@@ -132,8 +138,20 @@ impl Walker {
         if let Some(&next) = self.route.first() {
             return Some(next);
         }
+        if let Some(face) = self.face {
+            return Some(face);
+        }
         self.entered_from
             .and_then(|from| Direction::between(from, self.cell))
+    }
+
+    /// Turn in place: face `direction` while standing.
+    ///
+    /// A step that starts later consumes the turn, so after a walk the
+    /// creature faces where it came from; while a route has not begun
+    /// stepping, its first direction masks the face.
+    pub fn turn(&mut self, direction: Direction) {
+        self.face = Some(direction);
     }
 
     /// The cell the next step points at.
@@ -193,6 +211,10 @@ impl Walker {
             ticks: ticks.max(1),
             elapsed: 1,
         });
+        // Walking consumes an in-place turn: after the arrival the creature
+        // faces where it came from, and a face remembered from before the walk
+        // must not resurface over the direction of travel.
+        self.face = None;
         Some(direction)
     }
 
@@ -440,5 +462,47 @@ mod tests {
         assert!(walker.is_waiting(), "a route but no step means waiting");
         walker.start_step(2).unwrap();
         assert!(!walker.is_waiting(), "a creature mid-step is not waiting");
+    }
+
+    /// A turn in place survives standing still: nothing clears the face while
+    /// the creature neither steps nor holds a route.
+    #[test]
+    fn turn_survives_standing_still() {
+        let mut walker = Walker::new(creature(1), Cell::new(4, 4));
+        assert_eq!(walker.facing(), None);
+        walker.turn(Direction::North);
+        assert_eq!(walker.facing(), Some(Direction::North));
+        for _ in 0..4 {
+            assert!(!walker.tick());
+            assert_eq!(walker.facing(), Some(Direction::North));
+        }
+    }
+
+    /// A route masks the face while it has not started stepping, and the step
+    /// consumes it: after the arrival the creature faces where it came from,
+    /// not the direction it was turned to before the walk.
+    #[test]
+    fn a_step_consumes_the_in_place_turn() {
+        let from = Cell::new(4, 4);
+        let mut walker = Walker::new(creature(1), from);
+        walker.turn(Direction::North);
+        walker.set_route(&route_from(from, &[Direction::East]));
+        assert_eq!(
+            walker.facing(),
+            Some(Direction::East),
+            "the route's first direction must win over the face"
+        );
+        walker.start_step(1).unwrap();
+        assert_eq!(
+            walker.facing(),
+            Some(Direction::East),
+            "the step's direction must win over the face"
+        );
+        assert!(walker.tick());
+        assert_eq!(
+            walker.facing(),
+            Some(Direction::East),
+            "the walk must consume the turn, so the arrival faces its own direction"
+        );
     }
 }

@@ -307,6 +307,19 @@ impl<P: Passage, K: Pace> World<P, K> {
         Some(self.actors[index].walker.state())
     }
 
+    /// Turn a creature in place: it faces `direction` while it stands.
+    ///
+    /// Turning is not a ticked action, so it emits no [`Event`]: the new
+    /// facing is readable from [`World::state`]. A creature mid-step keeps its
+    /// step direction until the cell border, and a step that starts later
+    /// consumes the turn — after the arrival the creature faces where it came
+    /// from, exactly as it does without a turn.
+    pub fn turn(&mut self, creature: CreatureId, direction: Direction) -> Result<(), WorldError> {
+        let index = self.index(creature).ok_or(WorldError::UnknownCreature)?;
+        self.actors[index].walker.turn(direction);
+        Ok(())
+    }
+
     /// Every creature's state, in order of their numbers, so traversal is
     /// deterministic.
     pub fn states(&self) -> Vec<WalkState> {
@@ -1185,6 +1198,58 @@ mod tests {
         assert_eq!(
             route::find_route(&request, &mut Rng::new(0)).map(|found| found.len()),
             Some(5)
+        );
+    }
+
+    /// A standing creature's facing is what `turn` set; mid-step the step wins
+    /// until the cell border, and the walk consumes the turn — the arrival
+    /// faces its own direction, and a later turn takes effect again (issue #36
+    /// criterion 3 turns villagers at their workplace through this call).
+    #[test]
+    fn turn_faces_a_standing_creature_and_walking_consumes_it() {
+        let mut world = world(8, 8);
+        let creature = world.add(Cell::new(2, 2)).unwrap();
+        assert_eq!(world.state(creature).unwrap().direction, None);
+        world.turn(creature, Direction::NorthWest).unwrap();
+        assert_eq!(
+            world.state(creature).unwrap().direction,
+            Some(Direction::NorthWest)
+        );
+        // Sent somewhere: the step's direction overrides the face while walking.
+        world.move_to(creature, Cell::new(4, 2)).unwrap();
+        world.tick_step();
+        assert!(world.state(creature).unwrap().moving);
+        assert_eq!(
+            world.state(creature).unwrap().direction,
+            Some(Direction::East),
+            "a mid-step creature faces its step"
+        );
+        for _ in 0..4 {
+            world.tick_step();
+        }
+        assert!(
+            !world.state(creature).unwrap().moving,
+            "the creature must have arrived"
+        );
+        assert_eq!(
+            world.state(creature).unwrap().direction,
+            Some(Direction::East),
+            "the walk consumes the turn: the arrival faces where it came from"
+        );
+        // Turned again once it stands — the workplace flow of criterion 3.
+        world.turn(creature, Direction::South).unwrap();
+        assert_eq!(
+            world.state(creature).unwrap().direction,
+            Some(Direction::South)
+        );
+    }
+
+    #[test]
+    fn turn_reports_unknown_creature() {
+        let mut world = world(8, 8);
+        assert_eq!(
+            world.turn(CreatureId::new(99), Direction::East),
+            Err(WorldError::UnknownCreature)
         );
     }
 }
