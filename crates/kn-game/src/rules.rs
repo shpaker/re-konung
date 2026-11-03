@@ -143,6 +143,11 @@ fn run_one<P: Passage, K: Pace>(
 /// world's own throttle covers a repeat of the *same* failed goal (#54), not a
 /// different goal every tick; the window lives here rather than in the engine
 /// so that a player's order is never delayed by it.
+///
+/// The memory belongs to one world: a caller that rebuilds the world builds a
+/// cooldown with it. Reusing one across worlds neither panics nor holds
+/// anything — the new world's counter is behind the recorded tick, and a window
+/// from a world that no longer exists has nothing to protect.
 #[derive(Debug, Clone)]
 pub struct FailedOrderCooldown {
     window_ticks: u32,
@@ -189,21 +194,31 @@ impl FailedOrderCooldown {
             .get(creature.raw() as usize)
             .copied()
             .flatten();
-        failed_at.is_some_and(|failed_at| tick - failed_at < u64::from(self.window_ticks))
+        // `checked_sub` is the reused-across-worlds case: the recorded tick is
+        // then ahead of the counter and holds nothing.
+        failed_at.is_some_and(|failed_at| {
+            tick.checked_sub(failed_at)
+                .is_some_and(|age| age < u64::from(self.window_ticks))
+        })
     }
 
     /// Only a search that found no route starts the window; an accepted order
     /// ends it, so a creature that got through is free to be sent again.
+    ///
+    /// Nothing else touches the memory: an id the world does not know, or a
+    /// decision that reached no world call, must not grow it — a large id would
+    /// otherwise allocate a slot per number below it.
     fn record(&mut self, creature: CreatureId, tick: u64, applied: &Applied) {
+        let recorded = match applied {
+            Applied::Failed(WorldError::NoRoute) => Some(tick),
+            Applied::Accepted { .. } => None,
+            _ => return,
+        };
         let index = creature.raw() as usize;
         if self.failed_at.len() <= index {
             self.failed_at.resize(index + 1, None);
         }
-        self.failed_at[index] = match applied {
-            Applied::Failed(WorldError::NoRoute) => Some(tick),
-            Applied::Accepted { .. } => None,
-            _ => self.failed_at[index],
-        };
+        self.failed_at[index] = recorded;
     }
 }
 
@@ -559,6 +574,113 @@ mod tests {
             world.cell_of(creature),
             Some(start),
             "the creature never moved"
+        );
+    }
+
+    /// A huge id the world does not know must not make the memory grow: it is
+    /// refused before any search, so it records nothing — allocating a slot per
+    /// number below it is what the guard is for.
+    #[test]
+    fn an_unknown_creature_does_not_grow_the_cooldown_memory() {
+        let mut world = test_world();
+        let mut cooldown = FailedOrderCooldown::new(10);
+        let ghost = CreatureId::new(u32::MAX / 2);
+        let result = cooldown.apply(&mut world, &[(ghost, Decision::MoveTo(1, 1))]);
+        assert!(
+            matches!(result[0], Applied::Failed(WorldError::UnknownCreature)),
+            "{result:?}"
+        );
+        assert!(
+            cooldown.failed_at.is_empty(),
+            "a refusal is not a failed search: {:?}",
+            cooldown.failed_at.len()
+        );
+        // Neither is a decision that reaches no world call.
+        let creature = world.add(Cell::new(1, 1)).unwrap();
+        cooldown.apply(&mut world, &[(creature, Decision::None)]);
+        assert!(cooldown.failed_at.is_empty());
+    }
+
+    /// The window ends with the order that got through: the creature is free to
+    /// be sent again at once, and the memory says so.
+    #[test]
+    fn an_accepted_order_ends_the_window() {
+        let mut world = test_world();
+        let mut cooldown = FailedOrderCooldown::new(3);
+        let start = Cell::new(4, 4);
+        for direction in Direction::ALL {
+            if let Some(neighbour) = start.neighbour(direction) {
+                world.passage_mut().blocked.insert(neighbour);
+            }
+        }
+        let creature = world.add(start).unwrap();
+        let index = creature.raw() as usize;
+        let refused = cooldown.apply(&mut world, &[(creature, Decision::MoveTo(1, 1))]);
+        assert!(
+            matches!(refused[0], Applied::Failed(WorldError::NoRoute)),
+            "{refused:?}"
+        );
+        assert_eq!(cooldown.failed_at[index], Some(0));
+
+        // Inside the window another target is held and reaches no search.
+        world.tick_step();
+        let held = cooldown.apply(&mut world, &[(creature, Decision::MoveTo(2, 2))]);
+        assert!(matches!(held[0], Applied::Held), "{held:?}");
+
+        // Past the window the way is open: the order is accepted and the
+        // creature is no longer held.
+        world.tick_step();
+        world.tick_step();
+        world.passage_mut().blocked.clear();
+        let accepted = cooldown.apply(&mut world, &[(creature, Decision::MoveTo(2, 2))]);
+        assert!(
+            matches!(accepted[0], Applied::Accepted { .. }),
+            "{accepted:?}"
+        );
+        assert_eq!(cooldown.failed_at[index], None);
+        assert!(
+            !cooldown.holding(creature, world.tick_number()),
+            "an accepted order must clear the window"
+        );
+    }
+
+    /// A cooldown reused with a rebuilt world meets a counter that went back to
+    /// zero: the recorded tick is ahead of it, so the subtraction must not panic
+    /// and the stale window must hold nothing.
+    #[test]
+    fn a_rebuilt_world_holds_nothing_and_does_not_panic() {
+        let mut cooldown = FailedOrderCooldown::new(10);
+        let start = Cell::new(4, 4);
+        let mut first = test_world();
+        for direction in Direction::ALL {
+            if let Some(neighbour) = start.neighbour(direction) {
+                first.passage_mut().blocked.insert(neighbour);
+            }
+        }
+        let creature = first.add(start).unwrap();
+        for _ in 0..5 {
+            first.tick_step();
+        }
+        let refused = cooldown.apply(&mut first, &[(creature, Decision::MoveTo(1, 1))]);
+        assert!(
+            matches!(refused[0], Applied::Failed(WorldError::NoRoute)),
+            "{refused:?}"
+        );
+        assert_eq!(cooldown.failed_at[creature.raw() as usize], Some(5));
+
+        // The same ids, a fresh counter — and an open map, so the order that
+        // reaches the engine is accepted rather than held.
+        let mut second = test_world();
+        let again = second.add(start).unwrap();
+        assert_eq!(
+            again, creature,
+            "the ids must coincide for the case to be real"
+        );
+        assert_eq!(second.tick_number(), 0);
+        let accepted = cooldown.apply(&mut second, &[(again, Decision::MoveTo(6, 6))]);
+        assert!(
+            matches!(accepted[0], Applied::Accepted { .. }),
+            "a window from a world that is gone must hold nothing: {accepted:?}"
         );
     }
 
