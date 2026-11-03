@@ -1,13 +1,11 @@
-//! Просмотрщик карт «Князя»: состояние, перестроение сцены, интерфейс и
-//! headless-диагностика.
+//! Просмотрщик карт «Князя»: состояние, перестроение сцены и интерфейс.
 //!
 //! Состояние ([Viewer]) и команды интерфейса отделены от отрисовки: обработчики
 //! виджетов правят только состояние и взводят [Rebuild], а сцену перестраивает
-//! одна система. Всё, что можно проверить без окна, живёт в [check].
+//! одна система. CLI parsing and the headless check live in the `kn-viewer`
+//! app crate.
 
-pub mod cli;
-
-use std::process::ExitCode;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use bevy::{
@@ -33,32 +31,6 @@ use kn_render::{
     TextureCache, clear_scene, frame_scene, ortho_scale, spawn_scene,
 };
 use kn_ui::{dark_theme, pointer_over_ui, sync_checked};
-use thiserror::Error;
-
-use crate::cli::{Cli, Format};
-
-#[derive(Debug, Error)]
-pub enum ViewerError {
-    #[error(transparent)]
-    Game(#[from] kn_game::GameError),
-    #[error("{dir}: нет карт источника {map_source}")]
-    NoMaps {
-        dir: std::path::PathBuf,
-        map_source: MapSource,
-    },
-    #[error("{map_source} {number}: карты нет в {dir}")]
-    NoSuchMap {
-        dir: std::path::PathBuf,
-        map_source: MapSource,
-        number: u32,
-    },
-    #[error("нужно --map N или --all")]
-    MapNotSelected,
-    #[error(transparent)]
-    Json(#[from] serde_json::Error),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-}
 
 /// Отладочный оверлей, который включает просмотрщик.
 ///
@@ -215,47 +187,26 @@ pub fn map_labels(maps: &[MapRef]) -> Vec<String> {
         .collect()
 }
 
-/// Окно просмотрщика: работает, пока пользователь его не закроет.
-pub fn run_viewer(cli: Cli) -> ExitCode {
-    let game = match Game::open(&cli.game_dir) {
-        Ok(game) => game,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let maps = match game.maps() {
-        Ok(maps) if !maps.is_empty() => maps,
-        Ok(_) => {
-            eprintln!("{}: нет карт", cli.game_dir.display());
-            return ExitCode::FAILURE;
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    // Неверный номер карты — ошибка, а не тихий откат на первую
-    let selected = cli.initial_map(&maps);
-    if selected.is_none()
-        && let Some(number) = cli.map
-    {
-        eprintln!(
-            "{}: нет карты {number} источника {}",
-            cli.game_dir.display(),
-            MapSource::from(cli.source)
-        );
-        return ExitCode::FAILURE;
-    }
-    let selected = selected.unwrap_or(0);
-    let labels = map_labels(&maps);
+/// Everything the viewer window needs. CLI types never cross into the frontend:
+/// the app resolves the arguments and hands over an opened game.
+pub struct ViewerConfig {
+    pub game: Game,
+    pub game_dir: PathBuf,
+    pub maps: Vec<MapRef>,
+    pub selected: usize,
+}
+
+/// The viewer window: runs until the user closes it.
+pub fn run_viewer(config: ViewerConfig) {
+    let labels = map_labels(&config.maps);
+    let selected = config.selected;
 
     App::new()
         .add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(Window {
-                        title: format!("re-konung viewer — {}", cli.game_dir.display()),
+                        title: format!("re-konung viewer — {}", config.game_dir.display()),
                         resolution: (1280, 800).into(),
                         ..default()
                     }),
@@ -272,13 +223,13 @@ pub fn run_viewer(cli: Cli) -> ExitCode {
             FrameTimeDiagnosticsPlugin::default(),
         ))
         .insert_resource(dark_theme())
-        .insert_resource(GameResource(game))
+        .insert_resource(GameResource(config.game))
         .init_resource::<TextureCache>()
         .init_resource::<ActiveRoot>()
         .init_resource::<Stats>()
         .insert_resource(Rebuild { map: true })
         .insert_resource(Viewer {
-            maps: maps.clone(),
+            maps: config.maps.clone(),
             selected,
             overlays: DEFAULT_OVERLAYS,
             playback: DEFAULT_PLAYBACK,
@@ -304,7 +255,6 @@ pub fn run_viewer(cli: Cli) -> ExitCode {
                 .before(CameraApply),
         )
         .run();
-    ExitCode::SUCCESS
 }
 
 /// Camera-control binding: applies the kn-input mechanisms to this app's camera.
@@ -750,62 +700,6 @@ fn diagnostics(
     }
 }
 
-/// Headless-проверка карт: без окна, GPU и рендерера.
-pub fn run_check(cli: &Cli, map: Option<u32>, all: bool, format: Format) -> ExitCode {
-    match check(cli, map, all, format) {
-        Ok(code) => code,
-        Err(error) => {
-            eprintln!("{error}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-/// Отчёт по картам источника: `map` — одна карта, `all` — все.
-pub fn check(
-    cli: &Cli,
-    map: Option<u32>,
-    all: bool,
-    format: Format,
-) -> Result<ExitCode, ViewerError> {
-    let game = Game::open(&cli.game_dir)?;
-    let source: MapSource = cli.source.into();
-    let available = game.maps()?;
-    let maps = if all {
-        available
-            .into_iter()
-            .filter(|map| map.source == source)
-            .collect::<Vec<_>>()
-    } else {
-        let number = map.ok_or(ViewerError::MapNotSelected)?;
-        let map_ref = MapRef { source, number };
-        if !available.contains(&map_ref) {
-            return Err(ViewerError::NoSuchMap {
-                dir: cli.game_dir.clone(),
-                map_source: source,
-                number,
-            });
-        }
-        vec![map_ref]
-    };
-    if maps.is_empty() {
-        return Err(ViewerError::NoMaps {
-            dir: cli.game_dir.clone(),
-            map_source: source,
-        });
-    }
-    let report = game.check(Some(&maps))?;
-    match format {
-        Format::Text => print!("{report}"),
-        Format::Json => println!("{}", serde_json::to_string_pretty(&report)?),
-    }
-    Ok(if report.ok() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1068,20 +962,5 @@ mod tests {
         // Выключенный слой не убирает узлы: карта остаётся собранной, и её можно
         // показать обратно без пересборки
         assert_eq!(group_visibility([false; 4]).len(), all_on.len());
-    }
-
-    #[test]
-    fn viewer_opens_only_a_real_game_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        let cli = Cli {
-            game_dir: dir.path().to_path_buf(),
-            map: None,
-            source: crate::cli::SourceArg::Game,
-            command: None,
-        };
-        assert!(matches!(
-            check(&cli, Some(1), false, Format::Text),
-            Err(ViewerError::Game(_))
-        ));
     }
 }

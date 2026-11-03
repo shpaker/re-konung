@@ -14,7 +14,8 @@ The game-layer crates are grouped under `crates/game/` (`game/k1/k1-data`, `game
 | `kn-input` | frontend input mechanisms: `pan_direction` (keyboard), `drag_delta` (mouse drag), `ZoomScroll`/`wheel_steps` (wheel accumulation) | `bevy` only — no camera types, no UI, no game rules; the bindings that wire the mechanisms to a camera live in the apps (the `CameraInput` set of `kn-render`) |
 | `kn-ui` | shared Bevy UI mechanics: the Feathers dark theme (`dark_theme`), checkbox mirroring (`sync_checked`), the pointer-capture check (`pointer_over_ui`) | `bevy` only (with `bevy_feathers`) — no rendering, no input bindings, no game rules; app-specific panels and widget state stay in the frontends |
 | `kn-render` | Bevy: кэш текстур (`textures`), куски сцены → спрайты по узлам групп (`scene`), покадровая анимация (`animation`), камера без ввода (`camera`) | Bevy 0.20, окно и GPU нужны только для запуска, не для тестов; оверлей — `Visibility` узла группы, а не пересборка карты; `animation` не знает ни о K1, ни о форматах |
-| `kn-viewer` | бинарь `re-konung-viewer`: окно с картой, Feathers-UI, воспроизведение анимации, headless-`check` | `check` работает без окна и GPU, возвращает ненулевой код при ошибке; карта собирается со всеми слоями |
+| `kn-fe-viewer` | Bevy frontend of the viewer: state (`Viewer`), the Feathers panel, overlays, playback, diagnostics, the camera binding and the App assembly; receives a `ViewerConfig` and knows no CLI | the map is built with all layers at once; toggling an overlay changes group visibility, not a rebuild |
+| `kn-viewer` | app `re-konung-viewer`: CLI, startup resolution, headless `check` | `check` creates no Bevy App, window or GPU context and returns a nonzero code on failure; bevy is linked only transitively |
 | `kn-exec` | бинарь `re-konung`: запуск игры | заготовка — стартовая карта новой игры тем же конвейером; игрового процесса нет |
 
 Будущие крейты: `k2-data`, `k2-game`. Общее выделяется, когда общность подтверждена, а не заранее, — та же логика, что в [games.md](games.md) про проверку общности движка на K2. Исключение сделано для перемещения: его механика в K1 и K2 предположительно почти одинакова (заметное отличие — бег), поэтому общий движок сразу строится в `kn-game`, а специфика части остаётся в `k1-game`.
@@ -40,7 +41,8 @@ k1-data (форматы)
   → k1-game: resources — загрузка графики из GameDir; textures — ключи текстур и RGBA-декодирование; scene — список отрисовки карты (порядок render.py)
     → kn-game: Game — фасад (open/maps/heroes/scene/textures/check); Scene/Piece/TextureId — общая модель, K1-типы наружу не выходят
       → kn-render: textures — TextureCache (RGBA → Image, один ассет на ключ); scene — куски → спрайты; animation — часы тиков и последовательности кадров на спрайтах; camera — ступенчатый масштаб, границы, запись камеры
-        → kn-viewer (re-konung-viewer) и kn-exec (re-konung) — бинарники
+        → kn-fe-viewer (window/systems) → kn-viewer app (re-konung-viewer: CLI, check) — бинарник
+        → kn-exec (re-konung) — бинарник
 
 kn-game::movement — the shared movement engine — stands aside from this chain:
 it depends on neither `k1-*` nor Bevy, and takes the part's knowledge through
@@ -584,7 +586,7 @@ just cargo-lint   # cargo fmt --check + clippy -D warnings
 
 The movement engine tests (`crates/game/kn-game/tests/movement.rs`, `movement_grid.rs`) are synthetic: they need neither game data nor Bevy — the grid, routes, a step per tick, a crowd of creatures and determinism are checked on invented walkability fields. `movement_grid.rs` is the only place in the module that knows about `k1-data`: a comparison of the grid formulas with the Python reference and with `game_state` over all 51 200 cells, not a layer dependency. The cost measurement (`movement_cost.rs`) is hidden under `#[ignore]` and is computed only by hand in release (see "Engine cost").
 
-Окно и GPU для тестов не нужны: `kn-game` и `k1-game` Bevy не используют, а `kn-render` и `kn-viewer` проверяют чистую логику — координаты и z-порядок кусков, ступени масштаба, разбор CLI, переключатели оверлеев, отчёт об ошибке, а у анимации — выбор кадра по тикам, накопление дробного остатка, пауза/выключение и пересчёт центра кадра. Сквозная проверка без окна — `check` (см. «Запуск»): на ENG все 43 карты игры и обе карты обучения собираются без ошибок, в release это ~5 с; в строке отчёта, кроме кусков и текстур, видно число анимированных кусков, их кадров и видимых в базовом кадре.
+Окно и GPU для тестов не нужны: `kn-game` и `k1-game` Bevy не используют, а `kn-render`, `kn-fe-viewer` и `kn-viewer` проверяют чистую логику — координаты и z-порядок кусков, ступени масштаба, переключатели оверлеев, разбор CLI, отчёт об ошибке, а у анимации — выбор кадра по тикам, накопление дробного остатка, пауза/выключение и пересчёт центра кадра. Сквозная проверка без окна — `check` (см. «Запуск»): на ENG все 43 карты игры и обе карты обучения собираются без ошибок, в release это ~5 с; в строке отчёта, кроме кусков и текстур, видно число анимированных кусков, их кадров и видимых в базовом кадре.
 
 Запись (`serialize`, `serialize_lights`) проверяет точную геометрию сеток до записи, а не только итоговый размер: строки 81 и 79 клеток дают верное число байтов, но сместили бы границы строк. Та же проверка добавлена в Python-эталон (PR #18) — на валидных картах реализации идентичны побайтно.
 

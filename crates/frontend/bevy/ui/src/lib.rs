@@ -1,7 +1,7 @@
 //! Shared Bevy UI mechanics for the «Князь» frontends: the Feathers theme,
 //! checkbox mirroring and the pointer-capture check.
 //!
-//! Consumers are the frontends (`kn-viewer`, `kn-exec`). Nothing here knows
+//! Consumers are the frontends (`kn-fe-viewer`, `kn-exec`). Nothing here knows
 //! about panels, widget state, input bindings, rendering or game rules.
 
 use bevy::{

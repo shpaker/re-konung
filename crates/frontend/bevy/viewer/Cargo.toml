@@ -1,0 +1,13 @@
+[package]
+name = "kn-fe-viewer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Bevy frontend of the «Князь» map viewer: window, Feathers panel, overlays, diagnostics, scene rebuild"
+
+[dependencies]
+kn-game = { path = "../../../game/kn-game" }
+kn-render = { path = "../render" }
+kn-input = { path = "../input" }
+kn-ui = { path = "../ui" }
+bevy = { version = "0.20", features = ["bevy_feathers"] }
