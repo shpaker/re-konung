@@ -7,6 +7,7 @@
 
 pub mod animation;
 pub mod camera;
+pub mod creatures;
 pub mod scene;
 pub mod textures;
 
@@ -16,6 +17,11 @@ pub use animation::{
 pub use camera::{
     CameraApply, CameraBounds, CameraInput, CameraState, MapCamera, MapCameraPlugin, PAN_SPEED,
     PendingFrame, ZOOM_LEVELS, fitting_zoom, frame_scene, ortho_scale,
+};
+pub use creatures::{
+    CreatureData, CreatureLayer, CreatureNode, CreatureRoot, CreatureShadow, DepthMap,
+    LayerAnimation, LayerData, clear_creatures, despawn_creature, spawn_creature,
+    update_creature_depth, update_shadow_depth,
 };
 pub use scene::{
     MapRoot, SceneGroup, SceneLoad, ScenePiece, Z_STEP, clear_scene, load_scene, piece_center,
