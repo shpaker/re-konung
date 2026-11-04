@@ -16,7 +16,7 @@ use k1_data::{
     repo::{GAME_FILES, GameDir},
 };
 use k1_game::{
-    creatures,
+    creatures, placement,
     rules::{self, CreatureType, Decision, Ground, GroupState, Live, Random, class, group::PLAYER},
 };
 
@@ -80,6 +80,14 @@ impl Ground for FootGround {
 }
 
 fn foot_ground(map: &KonungMap, roster: &[creatures::Creature]) -> FootGround {
+    let mut taken = blocked_foot_cells(map);
+    taken.extend(roster.iter().map(|creature| creature.cell));
+    FootGround { taken }
+}
+
+/// The map's foot data alone: what a creature may stand on before anybody
+/// stands anywhere — what `placement::place_roaming` tracks occupancy over.
+fn blocked_foot_cells(map: &KonungMap) -> HashSet<(i16, i16)> {
     let mut taken: HashSet<(i16, i16)> = HashSet::new();
     for (row, bytes) in map.foot.iter().enumerate() {
         for (column, &foot) in bytes.iter().enumerate() {
@@ -88,8 +96,7 @@ fn foot_ground(map: &KonungMap, roster: &[creatures::Creature]) -> FootGround {
             }
         }
     }
-    taken.extend(roster.iter().map(|creature| creature.cell));
-    FootGround { taken }
+    taken
 }
 
 /// A second deterministic source besides the engine's own: the determinism
@@ -357,5 +364,115 @@ fn rules_hold_their_invariants_on_every_map_of_both_editions() {
             "{edition}: {covered_maps} maps, {walks} move orders, {turns} turns, \
              {holders_on_place} holders on their places, {strayed} strayed squad members"
         );
+    }
+}
+
+/// Criterion 2 over the shipped squads: re-placing every roaming member puts
+/// it strictly inside its spawn area on a walkable cell nobody else stands
+/// on, the same seed gives the same map, and no squad of the shipped data
+/// runs out of room.
+#[test]
+fn roaming_squads_are_re_placed_on_free_cells_inside_their_areas() {
+    const SEED: u64 = 0x5eed_1234_abcd_0002;
+    for (edition, game) in game_dirs() {
+        let states = states(&game);
+        let mut squads = 0usize;
+        let mut placed_members = 0usize;
+        for number in maps(&game) {
+            let data = game
+                .map_bytes(u32::try_from(number).unwrap(), GAME_FILES)
+                .unwrap();
+            let map = map::parse(&data).unwrap();
+            for (hero, state) in &states {
+                let roster = creatures::roster(state, number, Some(*hero));
+                let roaming: Vec<&creatures::Creature> =
+                    roster.iter().filter(|creature| creature.roaming).collect();
+                if roaming.is_empty() {
+                    continue;
+                }
+                let ground = FootGround {
+                    taken: blocked_foot_cells(&map),
+                };
+                let placed = placement::place_roaming(&roster, &ground, &mut Seeded::new(SEED));
+                let replay = placement::place_roaming(&roster, &ground, &mut Seeded::new(SEED));
+                assert_eq!(
+                    placed, replay,
+                    "{edition} map {number} Game.{hero}: the same seed placed differently"
+                );
+                assert!(
+                    placed.dropped.is_empty(),
+                    "{edition} map {number} Game.{hero}: the shipped squads were trimmed \
+                     at {:#?}",
+                    placed.dropped
+                );
+
+                // Every roaming member is placed inside its spawn area,
+                // bounds included — the contract `place_one` holds and what
+                // the group-state test uses — on a walkable cell, and on a
+                // cell no other creature occupies: neither another member
+                // nor the file cell of a creature that stays where the
+                // record put it. A span of two or more keeps the candidate
+                // strictly in the interior as the original's does; a point
+                // area (some groups carry a degenerate `left==right`,
+                // `top==bottom` rectangle) can only hold its own cell. Two
+                // stayers may share a cell in the shipped data (the game
+                // draws them overlapping), so occupancy is tracked, not
+                // proven unique.
+                let stayers: HashSet<(i16, i16)> = roster
+                    .iter()
+                    .filter(|creature| !creature.roaming)
+                    .map(|creature| creature.cell)
+                    .collect();
+                let mut seen: HashSet<(i16, i16)> = HashSet::new();
+                let mut members = 0usize;
+                for (index, creature) in roster.iter().enumerate() {
+                    let cell = placed.cells[index];
+                    if !creature.roaming {
+                        assert_eq!(cell, creature.cell, "a creature that stays was moved");
+                        continue;
+                    }
+                    members += 1;
+                    let spawn = &creature.spawn;
+                    assert!(
+                        spawn.left <= cell.0
+                            && cell.0 <= spawn.right
+                            && spawn.top <= cell.1
+                            && cell.1 <= spawn.bottom,
+                        "{edition} map {number} Game.{hero}: member {} of squad {} was \
+                         placed at {cell:?}, outside its area {spawn:?}",
+                        creature.id,
+                        creature.group,
+                    );
+                    assert!(
+                        ground.is_free(cell),
+                        "{edition} map {number} Game.{hero}: member {} was placed on a \
+                         blocked cell {cell:?}",
+                        creature.id,
+                    );
+                    assert!(
+                        !stayers.contains(&cell),
+                        "{edition} map {number} Game.{hero}: member {} was placed on the \
+                         cell {cell:?} of a creature that stays",
+                        creature.id,
+                    );
+                    assert!(
+                        seen.insert(cell),
+                        "{edition} map {number} Game.{hero}: member {} shares cell {cell:?} \
+                         with another placed member",
+                        creature.id,
+                    );
+                }
+                let groups: HashSet<usize> = roaming.iter().map(|c| c.group).collect();
+                squads += groups.len();
+                placed_members += members;
+            }
+        }
+        // An absent edition skips through `game_dirs`; a present one must
+        // cover the squads its data carries (map 17 holds six of them).
+        assert!(
+            squads > 0 && placed_members > 0,
+            "{edition}: no roaming squad was ever re-placed"
+        );
+        println!("{edition}: {squads} squads, {placed_members} members re-placed");
     }
 }
