@@ -287,8 +287,12 @@ Confirmed against the reference and implemented with tests
 and both editions in `k1-game/tests/original_rules.rs`,
 `roaming_squads_are_re_placed_on_free_cells_inside_their_areas`). On map load
 the game does not leave a roaming squad (kind 0x41–0x50) at the cells its
-records carry: every member, in file order, is re-placed near the centre of
-the squad's spawn area (`game.cpp:647-656`, `game_character.cpp:328-360`):
+records carry. Squads are processed in `MapChar_ARRAY` order — the group
+table as the file holds it, group slots ascending (`game.cpp:637`,
+`game_state.cpp:364-368`) — and the members of one squad in file order, the
+contiguous `Characters` slice at `CharacterIndex + j` (`game.cpp:649`); every
+member is re-placed near the centre of the squad's spawn area
+(`game.cpp:647-656`, `game_character.cpp:328-360`):
 
 - the candidate: from the centre `((left + right + 1) / 2, (top + bottom + 1)
   / 2)` — the cell the static render already draws for the squad's first
@@ -315,7 +319,10 @@ Our differences, all three deliberate:
   the player squad) are held from the start, and so is every cell a squad has
   already been given; the original marks the ground group by group in file
   order, so an earlier squad can be placed onto a later one's villager — with
-  us the answer does not depend on the order groups are visited;
+  us what stops depending on the visit order is where a creature that is not
+  re-placed sits in it, not the order of the squads: one shared random stream
+  and sequentially taken cells make the squad order visible, and we mirror
+  the original's (`game.cpp:637`);
 - a member may not share a cell with anybody, living or dead (see above);
 - the generator is ours (`kn_game::movement::Rng`, splitmix64), asked with
   the original's draw order, so a run with a fixed seed replays.

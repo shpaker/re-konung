@@ -9,7 +9,7 @@
 //! starting positions come from. The facts and our differences are in
 //! docs/k1/creatures.md, «Roaming squad placement on map load».
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use crate::creatures::Creature;
 use crate::rules::{Ground, Random, inside};
@@ -34,20 +34,24 @@ pub struct LoadPlacement {
 }
 
 /// Re-place every roaming squad of `roster` the way the game does on map
-/// load: members in roster order, each tried for [`ATTEMPTS`] cells around
-/// the spawn area's centre, and the squad trimmed at the first member that
-/// finds no free cell.
+/// load: squads in group-slot order, members in roster order, each member
+/// tried for [`ATTEMPTS`] cells around the spawn area's centre, and the
+/// squad trimmed at the first member that finds no free cell.
 ///
 /// `ground` answers which cells a creature may stand on; taken cells are the
 /// caller's business only for what this function cannot see. What it does see
 /// it guards itself: a member never lands on a cell another member of any
 /// squad has just been given, nor on the file cell of any creature that is
 /// not re-placed — those stand where the records put them and are there when
-/// the squads arrive. The original marks the ground group by group in file
-/// order, so taking everything else from the start is our difference: the
-/// answer stops depending on squad order (docs/k1/creatures.md). A dead
-/// record is placed like everyone else — the original places before it asks
-/// who is alive (`game.cpp:651-664`).
+/// the squads arrive. The original marks a cell when that creature's own
+/// group reaches its turn (`game.cpp:660-664`), so holding everything else
+/// from the start is our difference: what stops depending on the visit order
+/// is the *position* of the creatures that are not re-placed, not the order
+/// of the squads — one shared draw stream and sequentially taken cells make
+/// that visible, and it mirrors the original's `MapChar_ARRAY` order
+/// (`game.cpp:637`; docs/k1/creatures.md). A dead record is placed like
+/// everyone else — the original places before it asks who is alive
+/// (`game.cpp:651-664`).
 ///
 /// The same seed with the same roster and ground gives the same placement;
 /// the generator is only ever asked through [`Random`].
@@ -63,21 +67,19 @@ pub fn place_roaming<G: Ground, R: Random>(
         .map(|creature| creature.cell)
         .collect();
     let mut dropped = Vec::new();
-    // Squads in first-appearance order, members in roster order: both are
-    // the file's order once `creatures::roster` has sorted by record number.
-    let mut order: Vec<usize> = Vec::new();
-    let mut squads: HashMap<usize, Vec<usize>> = HashMap::new();
+    // Squads in group-slot order — the original walks MapChar_ARRAY, the
+    // group table as the file holds it (`game.cpp:637`,
+    // `game_state.cpp:364-368`); the roster's record-number sort can
+    // invert slots. Members keep roster order: one squad's members are
+    // contiguous in the file (`Characters.at(CharacterIndex + j)`,
+    // `game.cpp:649`).
+    let mut squads: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for (index, creature) in roster.iter().enumerate() {
         if creature.roaming {
-            if !squads.contains_key(&creature.group) {
-                order.push(creature.group);
-            }
             squads.entry(creature.group).or_default().push(index);
         }
     }
-    for group in order {
-        // `expect`: the group was put into this map just above.
-        let members = squads.remove(&group).expect("squad collected above");
+    for members in squads.values() {
         let spawn = roster[members[0]].spawn;
         for position in 0..members.len() {
             let member = members[position];
@@ -392,6 +394,38 @@ mod tests {
             3,
             "squads shared a cell: {:?}",
             placed.cells
+        );
+    }
+
+    #[test]
+    fn squads_are_placed_in_group_slot_order_not_in_record_order() {
+        // The original walks `MapChar_ARRAY` — group slots ascending
+        // (`game.cpp:637`) — while the roster sorts by record number, so
+        // first appearance can put a later slot first. Overlapping areas
+        // make the shared draw stream observable: the members of slot 1
+        // must consume the first draws although they are the later
+        // records.
+        let roster = [
+            monster(3, 0, (0, 0)),
+            monster(3, 1, (0, 0)),
+            monster(1, 2, (0, 0)),
+            monster(1, 3, (0, 0)),
+        ];
+        let placed = place_roaming(&roster, &Terrain::open(), &mut Rng::new(11));
+        assert!(placed.dropped.is_empty());
+        let mut reference = Rng::new(11);
+        let mut taken = HashSet::new();
+        let mut slot_order = Vec::new();
+        for _ in 0..roster.len() {
+            // `expect`: the open terrain always has a free cell here.
+            let cell = place_one(area(), &Terrain::open(), &mut reference, &taken).expect("open");
+            taken.insert(cell);
+            slot_order.push(cell);
+        }
+        assert_eq!(
+            placed.cells,
+            [slot_order[2], slot_order[3], slot_order[0], slot_order[1]],
+            "the squad of the higher slot consumed the first draws"
         );
     }
 
