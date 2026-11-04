@@ -273,12 +273,59 @@ characters take no decision, as with villagers. By the squad state:
   only; our `Ground` also requires that nobody stands in the cell.
 
 **Our measurement**, both editions: the cells of roaming members in the file
-are not where the game puts them — the map load re-places the squad
-(criterion 2, not implemented yet) — so recomputing from the file cells flags
+are not where the game puts them — the map load re-places the squad («Roaming
+squad placement on map load» below) — so recomputing from the file cells flags
 `MemberOutside` for thousands of squad members (2 123 across the runs of
 `original_rules.rs` per edition), and every return order the rules give lands
 strictly inside the squad's spawn area and on a free cell; the test asserts
 that on all 41 maps per edition that carry creatures.
+
+### Roaming squad placement on map load (confirmed 2026-11-04)
+
+Confirmed against the reference and implemented with tests
+(`k1-game/src/placement.rs`, `place_roaming`; synthetic cases in the module
+and both editions in `k1-game/tests/original_rules.rs`,
+`roaming_squads_are_re_placed_on_free_cells_inside_their_areas`). On map load
+the game does not leave a roaming squad (kind 0x41–0x50) at the cells its
+records carry: every member, in file order, is re-placed near the centre of
+the squad's spawn area (`game.cpp:647-656`, `game_character.cpp:328-360`):
+
+- the candidate: from the centre `((left + right + 1) / 2, (top + bottom + 1)
+  / 2)` — the cell the static render already draws for the squad's first
+  member — with the original's draw order: a `y` distance `rand() %
+  ((bottom - top) / 2)` drawn only when that divisor reaches two, then a coin
+  `rand() % 2` picking subtract or add, then the `x` distance and its coin
+  (`game_character.cpp:334-354`); the spans are exclusive (`Width() = right -
+  left`, `common.h:187`), so a candidate of a span of two or more never
+  leaves `left + 1..right - 1` — arithmetic, not a measurement; the
+  placement test asserts containment of every squad of both editions, and a
+  degenerate point area can only hold its own cell (map 37 carries one);
+- the check: up to 100 attempts; a candidate is accepted when its foot cell
+  is free — `FootMap(Tile).ID == 0`, which counts cells taken by members
+  placed earlier on this load (`game_character.cpp:356-357`);
+- no free cell in 100 attempts: `GroupSize = j` and the squad stops placing —
+  that member and every later one are out of the game (`game.cpp:654-655`);
+- a dead record is placed like everyone else — the original places first and
+  asks who is alive afterwards — but it marks the ground only when alive, so
+  its cell can be given twice («по Slavik», `game.cpp:660-664`).
+
+Our differences, all three deliberate:
+
+- the cells of the creatures that are not re-placed (villagers, lone NPCs,
+  the player squad) are held from the start, and so is every cell a squad has
+  already been given; the original marks the ground group by group in file
+  order, so an earlier squad can be placed onto a later one's villager — with
+  us the answer does not depend on the order groups are visited;
+- a member may not share a cell with anybody, living or dead (see above);
+- the generator is ours (`kn_game::movement::Rng`, splitmix64), asked with
+  the original's draw order, so a run with a fixed seed replays.
+
+**Our measurement**, both editions: 379 squads, 2284 members across the 41
+maps and `Game.0`–`Game.2` — every member finds a free cell inside its area
+within the 100 attempts and no squad of the shipped data is ever trimmed; the
+same seed places the same map twice (`original_rules.rs`). The re-placement
+also explains the file cells: they are the squad's park position, not where
+the game stands it (see the measurement under «The monster decision»).
 
 ### Названия существ
 

@@ -506,6 +506,67 @@ not one direction per tick (the original creeps by one step at a time,
 `FUN_004391bc`, `game_play.cpp:1995-2013` — a 1999 limit,
 see «Вне объёма» in [creatures.md](k1/creatures.md)).
 
+### Decision: load-time placement mirrors the original, occupancy does not
+
+Criterion 2: a roaming squad does not stand where its records put it — the
+game re-places every member on map load. `k1_game::placement::place_roaming`
+follows `PlaceMob` cell for cell: jitter from the area's centre with the
+original's draw order (a distance then a coin on `y`, then on `x`, a distance
+drawn only when its half-span reaches two), one hundred tries, and the squad
+trimmed at the first member that finds no free cell (`GroupSize = j`). The
+facts and the three deliberate differences are in
+[creatures.md](k1/creatures.md), «Roaming squad placement on map load». The
+one worth restating here: the engine and the original differ on occupancy, and
+placement follows neither blindly. It holds the file cells of the creatures it
+does not move and every cell it has handed out, so a placement answer depends
+only on the roster and the ground — not on the order groups happen to be
+visited in, which is what makes it reproducible under a fixed seed and what
+`roaming_squads_are_re_placed_on_free_cells_inside_their_areas` checks over
+all 379 shipped squads.
+
+### Decision: rules and the engine stay in separate crates, wired at the seam
+
+`k1_game::rules` declares its own `Ground`, `Random` and `Live` and depends on
+no engine type; `kn_game::rules` owns the `World` and applies decisions to it.
+Neither reaches into the other, so a caller that only wants starting cells
+(criterion 2) calls `placement::place_roaming` over the rules' `Ground` with
+the engine's `Rng`, without a `World` at all. `k1-game` still cannot import
+`kn-game`, which is why `place_one` re-derives the centre and spans from the
+spawn rect rather than borrowing a grid helper.
+
+### Rules tick cost
+
+Release build, Apple M4 Pro, both editions agree to within a microsecond; the
+spread of three runs. Measured by `kn-game/tests/rules_cost.rs` under
+`#[ignore]`:
+
+```bash
+cargo test --release --manifest-path crates/Cargo.toml -p kn-game \
+    --test rules_cost -- --ignored --nocapture
+```
+
+| Operation | Time |
+|---|---|
+| decide only, calm map 17 (29 monsters, none walking) | 1.2–1.6 µs/tick |
+| decide only, map 19 (20 creatures, 14 walking) | 0.49–0.56 µs/tick |
+| full tick — decide + apply + `tick_step` — calm map 17 | 1.28–1.85 µs/tick |
+| full tick, map 19 (14 walking, routes live) | 18–22 µs/tick |
+| load of one map: foot-data load + placement (`Game.0`, averaged over all maps — 987 creatures in all) | 0.27–0.49 ms |
+
+The decide pass over dozens of creatures is 0.5–1.6 µs — three to four orders
+of magnitude under the 60 ms tick — so the rules are not the thing to cache.
+The full tick's 18–22 µs on the walking map is route search, not decisions:
+A\* across the fine grid dwarfs everything else, exactly as the movement table
+above shows (a route across the whole map is tens of microseconds), and it is
+paid by the walking creatures, not by whoever decides. Load placement — the
+foot-data load and the placement together — is a quarter of a millisecond per
+map and runs once when a map opens, so it is
+noise next to the 16–25 ms of parsing the graphics; no placement cache is
+worth its bookkeeping. The loop itself runs over the real maps in
+`kn-game/tests/original_simulation.rs` (criterion 9): map 19 with fourteen
+creatures mid-step in the same tick for 400 ticks, map 17 with its calm
+squads not taking one step.
+
 ### Open questions
 
 - The `class` module in `k1-game::rules` is load-bearing since criteria 3 and 4:
