@@ -555,6 +555,10 @@ sets a creature's world position. `CreaturePiece` and `update_shadow_depth` are 
   `body_equipment_and_shadow_ride_the_node`). Both root and node carry a `Transform`
   because `propagate_parent_transforms` reaches children only down a chain rooted at a
   `Transform`.
+- **The node and label queries are provably disjoint.** `sync_creature_nodes` moves the
+  node and its label in one system, so both take `&mut Transform`; the label query carries
+  `Without<CreatureNode>` because Bevy otherwise rejects the overlap with a `B0001` panic
+  that crashed the running viewer before anything moved (`creature_node_and_label_queries_are_disjoint`).
 - **Layers are matched by position in a self-contained list, not a global index (P2 #7).**
   `kn_game::CreatureClips` hands each layer as `CreatureLayer { base, animation }`, a
   layer carrying its resting image and its frames together, so the viewer builds the

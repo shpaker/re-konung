@@ -1191,7 +1191,9 @@ fn sync_creature_nodes(
     spawns: Res<CreatureSpawns>,
     clock: Res<Clock>,
     mut nodes: Query<(&mut CreatureNode, &mut Transform)>,
-    mut labels: Query<(&CreatureLabel, &mut Transform)>,
+    // Disjoint from `nodes`: without `Without` Bevy cannot prove an entity never
+    // carries both, so the two `&mut Transform` queries would panic (B0001).
+    mut labels: Query<(&CreatureLabel, &mut Transform), Without<CreatureNode>>,
 ) {
     let Some(ref simulation) = sim.sim else {
         return;
@@ -2150,6 +2152,27 @@ mod tests {
             got, expected,
             "a backward Step must show the forward run's state at the rewound tick"
         );
+    }
+
+    /// `sync_creature_nodes` reads two `&mut Transform` queries in one system.
+    /// Bevy panics (`B0001`) unless they are proven disjoint, and that panic used
+    /// to crash the running viewer the first frame the system ran — the movement
+    /// bug review #68 surfaced. Building the queries trips the conflict at param
+    /// init, so a plain `update` locks the `Without<CreatureNode>` guard.
+    #[test]
+    fn creature_node_and_label_queries_are_disjoint() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SimulationResource>()
+            .init_resource::<SceneDepth>()
+            .init_resource::<CreatureSpawns>()
+            .insert_resource(Clock::new(TICK_MS as f32))
+            .add_systems(Update, sync_creature_nodes);
+        app.world_mut()
+            .spawn((CreatureNode { id: 1, bottom: 0 }, Transform::default()));
+        app.world_mut()
+            .spawn((CreatureLabel { creature_id: 1 }, Transform::default()));
+        app.update();
     }
 
     fn fire_reset(mut commands: Commands, buttons: Query<Entity, With<ResetPositions>>) {
