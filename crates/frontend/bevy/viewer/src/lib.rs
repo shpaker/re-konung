@@ -616,7 +616,7 @@ fn shown(options: &SceneOptions) -> impl Fn(&Piece) -> bool + '_ {
 
 /// Builds a depth map from the scene's sorted pieces for creature z-interpolation.
 fn build_scene_depth(scene: &kn_game::Scene, cache: &TextureCache) -> DepthMap {
-    let stacks: Vec<(i32, f32)> = scene
+    let mut stacks: Vec<(i32, f32)> = scene
         .pieces
         .iter()
         .enumerate()
@@ -632,14 +632,13 @@ fn build_scene_depth(scene: &kn_game::Scene, cache: &TextureCache) -> DepthMap {
             (piece.y + height, order as f32 * Z_STEP)
         })
         .collect();
+    stacks.sort_by_key(|&(bottom, _)| bottom);
     DepthMap::build(stacks.into_iter(), -Z_STEP)
 }
 
+/// Only stacks-sorted groups participate in depth ordering.
 fn is_depth_relevant(group: PieceGroup) -> bool {
-    !matches!(
-        group,
-        PieceGroup::Lights | PieceGroup::Foot | PieceGroup::Markers
-    )
+    matches!(group, PieceGroup::Objects | PieceGroup::Characters)
 }
 
 /// Переносит переключатели слоёв в видимость групп кусков.
@@ -763,15 +762,31 @@ fn spawn_creature_labels(mut sim: ResMut<SimulationResource>, mut commands: Comm
 fn sync_creature_sprites(
     sim: Res<SimulationResource>,
     scene_depth: Res<SceneDepth>,
-    mut sprites: Query<(&CreaturePiece, &mut Transform)>,
-    mut labels: Query<(&CreatureLabel, &mut Transform)>,
+    mut sprites: Query<(&CreaturePiece, &mut Transform), Without<CreatureLabel>>,
+    mut labels: Query<(&CreatureLabel, &mut Transform), Without<CreaturePiece>>,
 ) {
     let Some(ref simulation) = sim.sim else {
         return;
     };
     let states = simulation.states();
-    let current: std::collections::HashMap<usize, (i32, i32)> =
-        states.iter().map(|s| (s.id, s.pixel)).collect();
+    let current: std::collections::HashMap<usize, (f32, f32)> = states
+        .iter()
+        .map(|s| {
+            let t = if s.step_ticks > 0 && s.step_to_pixel.is_some() {
+                (s.step_elapsed as f32 / s.step_ticks as f32).min(1.0)
+            } else {
+                0.0
+            };
+            let (ix, iy) = match s.step_to_pixel {
+                Some((tx, ty)) => (
+                    s.pixel.0 as f32 + (tx - s.pixel.0) as f32 * t,
+                    s.pixel.1 as f32 + (ty - s.pixel.1) as f32 * t,
+                ),
+                None => (s.pixel.0 as f32, s.pixel.1 as f32),
+            };
+            (s.id, (ix, iy))
+        })
+        .collect();
     let initial: std::collections::HashMap<usize, (i32, i32)> =
         sim.initial_pixels.iter().copied().collect();
     for (tag, mut transform) in &mut sprites {
@@ -781,17 +796,17 @@ fn sync_creature_sprites(
         let Some(&ini) = initial.get(&tag.creature_id) else {
             continue;
         };
-        transform.translation.x = tag.original_translation.x + (cur.0 - ini.0) as f32;
-        transform.translation.y = tag.original_translation.y - (cur.1 - ini.1) as f32;
-        let new_bottom = tag.original_bottom + (cur.1 - ini.1);
+        transform.translation.x = tag.original_translation.x + cur.0 - ini.0 as f32;
+        transform.translation.y = tag.original_translation.y - (cur.1 - ini.1 as f32);
+        let new_bottom = (tag.original_bottom as f32 + cur.1 - ini.1 as f32) as i32;
         transform.translation.z = scene_depth.map.z_for_bottom(new_bottom);
     }
     for (label, mut transform) in &mut labels {
         let Some(&cur) = current.get(&label.creature_id) else {
             continue;
         };
-        transform.translation.x = cur.0 as f32;
-        transform.translation.y = -(cur.1 as f32) - LABEL_OFFSET_Y;
+        transform.translation.x = cur.0;
+        transform.translation.y = -cur.1 - LABEL_OFFSET_Y;
     }
 }
 

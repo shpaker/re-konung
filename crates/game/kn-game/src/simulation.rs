@@ -127,7 +127,7 @@ impl Simulation {
                     u32::try_from(c.cell.0.max(0)).unwrap_or(0),
                     u32::try_from(c.cell.1.max(0)).unwrap_or(0),
                 );
-                (c.id, cell_pixel(cell))
+                (c.id, cell.centre())
             })
             .collect()
     }
@@ -163,8 +163,8 @@ impl Simulation {
         let id = *self.ids.get(index)?;
         let id = id?;
         let walk = self.world.state(id)?;
-        let (px, py) = cell_pixel(walk.cell);
-        let step_to_pixel = walk.step_to.map(cell_pixel);
+        let (px, py) = walk.cell.centre();
+        let step_to_pixel = walk.step_to.map(|c| c.centre());
         Some(CreatureState {
             id: self.roster[index].id,
             cell: (walk.cell.column, walk.cell.row),
@@ -201,28 +201,22 @@ impl Simulation {
     }
 }
 
-fn cell_pixel(cell: Cell) -> (i32, i32) {
-    let x = cell.column as i32 * crate::movement::grid::STEP_X / 2
-        - (cell.row as i32 & 1) * crate::movement::grid::ODD_ROW_SHIFT / 2;
-    let y = cell.row as i32 * crate::movement::grid::STEP_Y;
-    (x, y)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn cell_pixel_computes_isometric() {
-        let (x, y) = cell_pixel(Cell::new(2, 4));
-        assert_eq!(y, 4 * 16);
-        assert_eq!(x, 2 * 58 / 2);
+    fn cell_centre_is_isometric() {
+        let (x, y) = Cell::new(2, 4).centre();
+        // even row: shift = (2-0)*29 = 58; x = 2*58 + 58 = 174; y = 4*16 + 16 = 80
+        assert_eq!(y, 80);
+        assert_eq!(x, 174);
     }
 
     #[test]
-    fn cell_pixel_odd_row_shifts() {
-        let (even_x, _) = cell_pixel(Cell::new(4, 2));
-        let (odd_x, _) = cell_pixel(Cell::new(4, 3));
+    fn cell_centre_odd_row_shifts_left() {
+        let (even_x, _) = Cell::new(4, 2).centre();
+        let (odd_x, _) = Cell::new(4, 3).centre();
         assert!(even_x > odd_x);
     }
 }
