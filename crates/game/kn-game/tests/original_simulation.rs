@@ -122,14 +122,25 @@ struct Blocked {
     step_cancelled: bool,
 }
 
+/// Why a roster record got no engine id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Denied {
+    OutsideGrid,
+    Impassable,
+    /// An earlier record already stands on the cell — the shipped data
+    /// does put two villagers in one cell (map 7 does).
+    SharedCell,
+}
+
 /// A world over one real map with the rules loop wired to it.
 struct Simulation {
     world: World<Foot, StepDurations>,
-    /// Roster index ↔ engine id. A record sharing a cell with an earlier one
-    /// — the shipped data does put two villagers in one cell (map 7 does) —
-    /// gets no id: it is absent from the simulation, which `evaluate` is
-    /// specified for (no live picture, no decision).
+    /// Roster index ↔ engine id. A record the plan refused (see
+    /// [`Denied`]) is absent from the simulation, which `evaluate` is
+    /// specified for (no live picture, no decision); `denied` names every
+    /// such loss and the tests say what they accept of it.
     ids: Vec<Option<CreatureId>>,
+    denied: Vec<(usize, Denied)>,
     jobs: Vec<creatures::Workplace>,
     cooldown: FailedOrderCooldown,
     random: Rng,
@@ -176,9 +187,11 @@ impl Simulation {
         // order — so who gets in is planned over the cells before the world
         // exists, and the rows travel in that same order. The plan mirrors
         // `World::add` (inside the grid, walkable, unshared); the adds below
-        // assert the mirror holds.
+        // assert the mirror holds, and every record the plan refuses is
+        // recorded with its reason rather than dropped quietly.
         let mut rows: Vec<[u32; DIRECTION_COUNT]> = Vec::new();
         let mut entered: Vec<Option<(usize, Cell)>> = Vec::with_capacity(roster.len());
+        let mut denied: Vec<(usize, Denied)> = Vec::new();
         let mut occupied: HashSet<Cell> = HashSet::new();
         for (index, _) in roster.iter().enumerate() {
             let cell = placed.cells[index];
@@ -187,7 +200,18 @@ impl Simulation {
                     rows.push(durations[index]);
                     entered.push(Some((rows.len() - 1, cell)));
                 }
-                _ => entered.push(None),
+                Some(cell) if !ground.is_walkable(cell) => {
+                    denied.push((roster[index].id, Denied::Impassable));
+                    entered.push(None);
+                }
+                Some(_) => {
+                    denied.push((roster[index].id, Denied::SharedCell));
+                    entered.push(None);
+                }
+                None => {
+                    denied.push((roster[index].id, Denied::OutsideGrid));
+                    entered.push(None);
+                }
             }
         }
 
@@ -222,6 +246,7 @@ impl Simulation {
         Simulation {
             world,
             ids,
+            denied,
             jobs: creatures::job_slots(state, map_number as usize),
             cooldown: FailedOrderCooldown::new(world_rules.repath_cooldown_ticks),
             random: Rng::new(seed ^ 0xa5a5),
@@ -230,6 +255,19 @@ impl Simulation {
             blocked: None,
             recomputed: false,
         }
+    }
+
+    /// The refused records must be exactly the expected reasons, count and
+    /// order included: a simulation may not lose creatures quietly.
+    /// `denied` is indexed by record number, in roster order.
+    fn denied_are(&self, edition: &str, map_number: u32, expected: &[Denied]) {
+        let reasons: Vec<Denied> = self.denied.iter().map(|(_, reason)| *reason).collect();
+        assert_eq!(
+            reasons, expected,
+            "{edition}: map {map_number} refused these records from the \
+             world: {:?}",
+            self.denied,
+        );
     }
 
     /// The live picture indexed like the roster: records without an engine
@@ -337,6 +375,7 @@ fn villagers_walk_a_real_map_for_hundreds_of_ticks() {
         let state = state(&game, 0);
         let roster = creatures::roster(&state, MAP as usize, Some(0));
         let mut world = Simulation::new(edition, MAP, &game, &state, 0x36C0);
+        world.denied_are(edition, MAP, &[]);
         world.run(&roster, edition);
 
         // Creatures free of a workplace must produce real movement, not a
@@ -367,7 +406,10 @@ fn villagers_walk_a_real_map_for_hundreds_of_ticks() {
 
 /// Map 17 — six calm roaming squads, twenty-eight monsters: with no player
 /// in any spawn area the recomputed group state is calm for every squad, and
-/// over the whole run not one monster takes a step.
+/// over the whole run not one monster takes a step. The roster's twenty-ninth
+/// record is a lone NPC (0x53) whose file cell is blocked foot data in both
+/// editions — the engine cannot stand it, so the plan refuses it visibly
+/// rather than losing it quietly; the run holds the twenty-eight.
 #[test]
 fn calm_squads_stand_on_a_real_map_for_hundreds_of_ticks() {
     const MAP: u32 = 17;
@@ -381,12 +423,30 @@ fn calm_squads_stand_on_a_real_map_for_hundreds_of_ticks() {
              found {roaming}"
         );
         let mut world = Simulation::new(edition, MAP, &game, &state, 0x1717);
+        world.denied_are(edition, MAP, &[Denied::Impassable]);
         world.run(&roster, edition);
         assert!(
             world.movers.is_empty(),
             "{edition}: calm squads moved {} creature(s) on map {MAP}",
             world.movers.len(),
         );
-        println!("{edition}: map {MAP} — {roaming} monsters stood their ground for {TICKS} ticks");
+        let refused: Vec<String> = world
+            .denied
+            .iter()
+            .map(|(record, reason)| {
+                let creature = roster
+                    .iter()
+                    .find(|creature| creature.id == *record)
+                    .expect("a refused record is in the roster");
+                format!(
+                    "record {record} ({reason:?}, group kind {:#04x}, cell {:?})",
+                    creature.group_kind, creature.cell
+                )
+            })
+            .collect();
+        println!(
+            "{edition}: map {MAP} — {roaming} monsters stood their ground for \
+             {TICKS} ticks; out of the world: {refused:?}"
+        );
     }
 }
