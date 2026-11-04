@@ -66,6 +66,8 @@ pub struct ScenePiece;
 pub struct CreaturePiece {
     pub creature_id: usize,
     pub original_translation: Vec3,
+    /// Pixel-space bottom edge (y + height) at spawn time, for depth recomputation.
+    pub original_bottom: i32,
 }
 
 /// Центр пиксельного прямоугольника куска в мире Bevy.
@@ -192,9 +194,11 @@ pub fn spawn_scene(commands: &mut Commands, scene: &Scene, cache: &TextureCache)
             }
             if let Some(id) = piece.creature_id {
                 let transform = piece_transform(piece.x, piece.y, piece.w, piece.h, size, order);
+                let bottom = piece.y + piece.h.unwrap_or(size.y as i32);
                 entity.insert(CreaturePiece {
                     creature_id: id,
                     original_translation: transform.translation,
+                    original_bottom: bottom,
                 });
             }
             children.push(entity.id());

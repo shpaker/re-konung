@@ -24,12 +24,12 @@ use bevy::{
     ui_widgets::ValueChange,
 };
 use kn_game::simulation::Simulation;
-use kn_game::{Game, MapRef, MapSource, Piece, SceneOptions, TICK_MS, group_is_shown};
+use kn_game::{Game, MapRef, MapSource, Piece, PieceGroup, SceneOptions, TICK_MS, group_is_shown};
 use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
     AnimPlugin, CameraApply, CameraBounds, CameraInput, CameraState, Clock, CreaturePiece,
-    GameResource, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup,
-    ScenePiece, TextureCache, clear_scene, load_scene, ortho_scale,
+    DepthMap, GameResource, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState,
+    SceneGroup, ScenePiece, TextureCache, Z_STEP, clear_scene, load_scene, ortho_scale,
 };
 use kn_ui::{dark_theme, pointer_over_ui, sync_checked};
 
@@ -167,6 +167,20 @@ struct SimulationResource {
     labels_spawned: bool,
 }
 
+/// Depth map built from scene stack boundaries, used for dynamic z on creature move.
+#[derive(Resource)]
+struct SceneDepth {
+    map: DepthMap,
+}
+
+impl Default for SceneDepth {
+    fn default() -> Self {
+        Self {
+            map: DepthMap::build(Vec::new().into_iter(), 0.0),
+        }
+    }
+}
+
 /// Clock tick at which the simulation was last advanced; drives catch-up ticking.
 #[derive(Resource, Default)]
 struct SimTickTracker {
@@ -255,6 +269,7 @@ pub fn run_viewer(config: ViewerConfig) {
         .init_resource::<Stats>()
         .init_resource::<SimulationResource>()
         .init_resource::<SimTickTracker>()
+        .init_resource::<SceneDepth>()
         .insert_resource(Rebuild { map: true })
         .insert_resource(Viewer {
             maps: config.maps.clone(),
@@ -530,6 +545,7 @@ fn rebuild_scene(
     mut pending: ResMut<PendingFrame>,
     mut sim_resource: ResMut<SimulationResource>,
     mut sim_tracker: ResMut<SimTickTracker>,
+    mut scene_depth: ResMut<SceneDepth>,
 ) {
     if !rebuild.map {
         return;
@@ -589,12 +605,41 @@ fn rebuild_scene(
         commands.entity(root).despawn();
     }
     sim_tracker.last_clock_ticks = 0;
+    scene_depth.map = build_scene_depth(&scene, &cache);
 }
 
 /// Видимость куска по включённым слоям: границы сцены считают только по тому,
 /// что действительно на экране.
 fn shown(options: &SceneOptions) -> impl Fn(&Piece) -> bool + '_ {
     move |piece| group_is_shown(piece.group, options)
+}
+
+/// Builds a depth map from the scene's sorted pieces for creature z-interpolation.
+fn build_scene_depth(scene: &kn_game::Scene, cache: &TextureCache) -> DepthMap {
+    let stacks: Vec<(i32, f32)> = scene
+        .pieces
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| is_depth_relevant(p.group))
+        .map(|(order, piece)| {
+            let height = piece.h.unwrap_or_else(|| {
+                piece
+                    .texture
+                    .as_ref()
+                    .and_then(|id| cache.get(id))
+                    .map_or(0, |entry| entry.size.y as i32)
+            });
+            (piece.y + height, order as f32 * Z_STEP)
+        })
+        .collect();
+    DepthMap::build(stacks.into_iter(), -Z_STEP)
+}
+
+fn is_depth_relevant(group: PieceGroup) -> bool {
+    !matches!(
+        group,
+        PieceGroup::Lights | PieceGroup::Foot | PieceGroup::Markers
+    )
 }
 
 /// Переносит переключатели слоёв в видимость групп кусков.
@@ -717,6 +762,7 @@ fn spawn_creature_labels(mut sim: ResMut<SimulationResource>, mut commands: Comm
 
 fn sync_creature_sprites(
     sim: Res<SimulationResource>,
+    scene_depth: Res<SceneDepth>,
     mut sprites: Query<(&CreaturePiece, &mut Transform)>,
     mut labels: Query<(&CreatureLabel, &mut Transform)>,
 ) {
@@ -737,6 +783,8 @@ fn sync_creature_sprites(
         };
         transform.translation.x = tag.original_translation.x + (cur.0 - ini.0) as f32;
         transform.translation.y = tag.original_translation.y - (cur.1 - ini.1) as f32;
+        let new_bottom = tag.original_bottom + (cur.1 - ini.1);
+        transform.translation.z = scene_depth.map.z_for_bottom(new_bottom);
     }
     for (label, mut transform) in &mut labels {
         let Some(&cur) = current.get(&label.creature_id) else {
