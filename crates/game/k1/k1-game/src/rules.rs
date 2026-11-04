@@ -485,8 +485,8 @@ fn pick<G: Ground, R: Random>(context: &mut Context<'_, G, R>, limit: u64) -> i6
 /// original's player-proximity test (`game_play.cpp:1035-1042`). The
 /// "outside" the game tests for its own members is tangled by `&&`/`||`
 /// precedence into `y < top`; we use the plain negation of this test
-/// (docs/k1/creatures.md).
-fn inside(spawn: &Rect, cell: (i16, i16)) -> bool {
+/// (docs/k1/creatures.md). `placement` shares it for the same reason.
+pub(crate) fn inside(spawn: &Rect, cell: (i16, i16)) -> bool {
     spawn.left <= cell.0 && cell.0 <= spawn.right && spawn.top <= cell.1 && cell.1 <= spawn.bottom
 }
 

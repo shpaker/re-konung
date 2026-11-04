@@ -6,6 +6,7 @@
 //! проверяется headless.
 
 pub mod creatures;
+pub mod placement;
 pub mod resources;
 pub mod rules;
 pub mod scene;
