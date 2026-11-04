@@ -21,14 +21,16 @@ use serde::Serialize;
 use thiserror::Error;
 
 use k1_data::{
+    characters::WALK_ANIMATION,
     game_state::{self, GameState},
+    graph_res::DIRECTIONS,
     map,
     repo::{FileSet, GAME_FILES, GameDir, TUTORIAL_FILES},
 };
 use k1_game::{resources::Resources, scene::SceneInput, textures::TextureKey};
 
 pub use k1_data::objects_res::TICK_MS;
-pub use k1_game::scene::PieceGroup;
+pub use k1_game::scene::{PieceGroup, PoseKind};
 pub use k1_game::textures::{Rgba, TextureError};
 
 pub type Result<T> = std::result::Result<T, GameError>;
@@ -361,6 +363,55 @@ impl Game {
         ))
     }
 
+    /// Idle and walk clips per creature, keyed by `Piece::creature_id` (the
+    /// character slot). The layer order matches the creature's Characters-group
+    /// pieces in the scene built from the same state, so a consumer can swap an
+    /// [`Animator`] sequence by piece position when [`WalkState`] changes.
+    pub fn creature_animations(&self, map_ref: MapRef) -> Result<Vec<(usize, CreatureAnimation)>> {
+        let files = map_ref.source.file_set();
+        let hero = self.heroes(map_ref.source)?.first().map(|&h| h as usize);
+        let state_bytes = self.dir.state_bytes(hero.unwrap_or(0) as u32, files)?;
+        let state = game_state::parse(&state_bytes)?;
+        let entities = game_state::on_map(&state, map_ref.number as usize, hero);
+        Ok(self.resources.with_graphics(|graph, objects| {
+            let graphics = k1_game::scene::Graphics::new(graph, objects, &self.resources.tables);
+            let mut result = Vec::new();
+            for (character, x, y) in k1_data::characters::placed(&entities, &state) {
+                let (px, py) = game_state::character_position(x, y);
+                let rest = match k1_game::scene::pose_in(
+                    character,
+                    px,
+                    py,
+                    &state,
+                    &graphics,
+                    &PoseKind::of_record(character),
+                ) {
+                    Ok(Some(pose)) => clips_of(pose),
+                    _ => continue,
+                };
+                let walk: Vec<Option<CreatureClips>> = (0..DIRECTIONS as u8)
+                    .map(|direction| {
+                        k1_game::scene::pose_in(
+                            character,
+                            px,
+                            py,
+                            &state,
+                            &graphics,
+                            &PoseKind::start(WALK_STATE, direction),
+                        )
+                        .ok()
+                        .flatten()
+                        .map(clips_of)
+                    })
+                    .collect();
+                if walk.iter().any(|clip| clip.is_some()) {
+                    result.push((character.slot, CreatureAnimation { rest, walk }));
+                }
+            }
+            result
+        })?)
+    }
+
     /// RGBA-картинки ключей, позиционно параллельно `ids`.
     ///
     /// Наружу уходит и причина: потребитель решает, пропускать ли кусок, но
@@ -550,23 +601,66 @@ fn piece(from: k1_game::scene::DrawPiece) -> Piece {
         y: from.y,
         w: from.w,
         h: from.h,
-        animation: from.animation.map(|animation| Animation {
-            base: animation.base,
-            frames: animation
-                .frames
-                .into_iter()
-                .map(|frame| AnimationFrame {
-                    texture: frame.texture.map(TextureId),
-                    dx: frame.dx,
-                    dy: frame.dy,
-                    ticks: frame.ticks,
-                })
-                .collect(),
-        }),
+        animation: from.animation.map(animation),
         group: from.group,
         creature_id: from.creature_id,
     }
 }
+
+/// Кадры слоя из модели сцены: тот же пересчёт, что и в [`piece`], отделён для
+/// [`Game::creature_animations`], которое строит позы вне общего списка.
+fn animation(from: k1_game::scene::DrawAnimation) -> Animation {
+    Animation {
+        base: from.base,
+        frames: from
+            .frames
+            .into_iter()
+            .map(|frame| AnimationFrame {
+                texture: frame.texture.map(TextureId),
+                dx: frame.dx,
+                dy: frame.dy,
+                ticks: frame.ticks,
+            })
+            .collect(),
+    }
+}
+
+/// Clips of one creature's pieces: `layers` parallels the creature's
+/// Characters-group pieces in the scene, `shadow` is its ground shadow. A layer
+/// is `None` where that piece carries no animation (a single-frame layer).
+#[derive(Debug, Clone)]
+pub struct CreatureClips {
+    pub layers: Vec<Option<Animation>>,
+    pub shadow: Option<Animation>,
+}
+
+/// What a creature shows resting and walking: `walk[direction]` is the walk pose
+/// facing that sprite direction, `None` where the creature has no walk frames.
+#[derive(Debug, Clone)]
+pub struct CreatureAnimation {
+    pub rest: CreatureClips,
+    pub walk: Vec<Option<CreatureClips>>,
+}
+
+/// The pose's own clips, in the order the scene lists the creature's pieces:
+/// body then equipment, the shadow kept apart.
+fn clips_of(pose: k1_game::scene::Pose) -> CreatureClips {
+    CreatureClips {
+        layers: pose
+            .pieces
+            .into_iter()
+            .map(|piece| piece.animation.map(animation))
+            .collect(),
+        shadow: pose
+            .shadow
+            .and_then(|shadow| shadow.animation)
+            .map(animation),
+    }
+}
+
+/// The animation state a walking creature draws: the walk row of its sprite
+/// table (docs/k1/creatures.md), shared with [`k1_data::characters::walk_frame_counts`].
+const WALK_STATE: u8 = WALK_ANIMATION as u8;
 
 /// Итог headless-проверки одной карты.
 #[derive(Debug, Clone, Serialize)]

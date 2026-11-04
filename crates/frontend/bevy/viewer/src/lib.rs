@@ -5,7 +5,9 @@
 //! одна система. CLI parsing and the headless check live in the `kn-viewer`
 //! app crate.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bevy::{
@@ -23,13 +25,17 @@ use bevy::{
     ui::Checked,
     ui_widgets::ValueChange,
 };
-use kn_game::simulation::Simulation;
-use kn_game::{Game, MapRef, MapSource, Piece, PieceGroup, SceneOptions, TICK_MS, group_is_shown};
+use kn_game::simulation::{CreatureState, Simulation, WalkState};
+use kn_game::{
+    Animation, CreatureAnimation, Game, MapRef, MapSource, Piece, PieceGroup, SceneOptions,
+    TICK_MS, group_is_shown,
+};
 use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
-    AnimPlugin, CameraApply, CameraBounds, CameraInput, CameraState, Clock, CreaturePiece,
-    DepthMap, GameResource, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState,
-    SceneGroup, ScenePiece, TextureCache, Z_STEP, clear_scene, load_scene, ortho_scale,
+    AnimPlugin, Animator, CameraApply, CameraBounds, CameraInput, CameraState, Clock,
+    CreaturePiece, DepthMap, GameResource, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame,
+    PlayState, SceneGroup, ScenePiece, Sequence, TextureCache, Z_STEP, clear_scene, load_scene,
+    ortho_scale, piece_sequence,
 };
 use kn_ui::{dark_theme, pointer_over_ui, sync_checked};
 
@@ -187,6 +193,115 @@ struct SimTickTracker {
     last_clock_ticks: u64,
 }
 
+/// Idle and walk [`Sequence`]s per creature for the `WalkState` swap; rebuilt on
+/// map change together with [`SimulationResource`].
+#[derive(Resource, Default)]
+struct CreatureAnim {
+    creatures: HashMap<usize, CreatureSequences>,
+}
+
+/// Sequences for one creature's pieces: `body` by Characters-group layer index,
+/// `shadow` for its ground shadow.
+struct CreatureSequences {
+    body: HashMap<usize, LayerSequences>,
+    shadow: LayerSequences,
+}
+
+/// Resting sequence and one per walk direction for a single layer.
+struct LayerSequences {
+    rest: Option<Clip>,
+    walk: Vec<Option<Clip>>,
+}
+
+/// A built sequence and the frame it should show when play restarts.
+struct Clip {
+    sequence: Arc<Sequence>,
+    base: usize,
+}
+
+/// Decodes the walk frames the scene does not carry and builds the swap
+/// sequences; a creature whose walk cannot be decoded simply keeps its record pose.
+fn build_creature_anim(
+    game: &Game,
+    map_ref: MapRef,
+    cache: &mut TextureCache,
+    images: &mut Assets<Image>,
+) -> CreatureAnim {
+    let Ok(animations) = game.creature_animations(map_ref) else {
+        return CreatureAnim::default();
+    };
+    let mut seen = HashSet::new();
+    for (_, anim) in &animations {
+        for clips in std::iter::once(&anim.rest).chain(anim.walk.iter().flatten()) {
+            for frames in clips
+                .layers
+                .iter()
+                .chain(std::iter::once(&clips.shadow))
+                .flatten()
+                .map(|animation| &animation.frames)
+            {
+                seen.extend(frames.iter().filter_map(|frame| frame.texture));
+            }
+        }
+    }
+    if let Err(error) = cache.load(game, &seen.into_iter().collect::<Vec<_>>(), images) {
+        warn!("walk textures for {map_ref:?}: {error}");
+    }
+    CreatureAnim {
+        creatures: animations
+            .into_iter()
+            .map(|(id, anim)| (id, build_sequences(&anim, cache)))
+            .collect(),
+    }
+}
+
+/// One creature's clips → sequences, aligned by piece position with the scene.
+fn build_sequences(anim: &CreatureAnimation, cache: &TextureCache) -> CreatureSequences {
+    let body = anim
+        .rest
+        .layers
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            let rest = clip_seq(anim.rest.layers.get(index).and_then(|a| a.as_ref()), cache);
+            let walk = anim
+                .walk
+                .iter()
+                .map(|dir| {
+                    dir.as_ref()
+                        .and_then(|clips| clips.layers.get(index).and_then(|a| a.as_ref()))
+                        .and_then(|a| clip_seq(Some(a), cache))
+                })
+                .collect();
+            (index, LayerSequences { rest, walk })
+        })
+        .collect();
+    let rest = clip_seq(anim.rest.shadow.as_ref(), cache);
+    let walk = anim
+        .walk
+        .iter()
+        .map(|dir| {
+            dir.as_ref()
+                .and_then(|clips| clips.shadow.as_ref())
+                .and_then(|a| clip_seq(Some(a), cache))
+        })
+        .collect();
+    CreatureSequences {
+        body,
+        shadow: LayerSequences { rest, walk },
+    }
+}
+
+/// Frames of one layer → a swap clip; `None` when no frame decoded.
+fn clip_seq(animation: Option<&Animation>, cache: &TextureCache) -> Option<Clip> {
+    let animation = animation?;
+    let sequence = piece_sequence(animation, cache)?;
+    Some(Clip {
+        sequence,
+        base: animation.base,
+    })
+}
+
 /// World-space text label above a creature, showing `#ID`.
 #[derive(Component)]
 struct CreatureLabel {
@@ -270,6 +385,7 @@ pub fn run_viewer(config: ViewerConfig) {
         .init_resource::<SimulationResource>()
         .init_resource::<SimTickTracker>()
         .init_resource::<SceneDepth>()
+        .init_resource::<CreatureAnim>()
         .insert_resource(Rebuild { map: true })
         .insert_resource(Viewer {
             maps: config.maps.clone(),
@@ -294,6 +410,7 @@ pub fn run_viewer(config: ViewerConfig) {
                 advance_simulation,
                 spawn_creature_labels,
                 sync_creature_sprites,
+                sync_creature_animation,
                 diagnostics,
             )
                 .chain()
@@ -546,6 +663,7 @@ fn rebuild_scene(
     mut sim_resource: ResMut<SimulationResource>,
     mut sim_tracker: ResMut<SimTickTracker>,
     mut scene_depth: ResMut<SceneDepth>,
+    mut creature_anim: ResMut<CreatureAnim>,
 ) {
     if !rebuild.map {
         return;
@@ -606,6 +724,7 @@ fn rebuild_scene(
     }
     sim_tracker.last_clock_ticks = 0;
     scene_depth.map = build_scene_depth(&scene, &cache);
+    *creature_anim = build_creature_anim(&game.0, map_ref, &mut cache, &mut images);
 }
 
 /// Видимость куска по включённым слоям: границы сцены считают только по тому,
@@ -762,6 +881,7 @@ fn spawn_creature_labels(mut sim: ResMut<SimulationResource>, mut commands: Comm
 fn sync_creature_sprites(
     sim: Res<SimulationResource>,
     scene_depth: Res<SceneDepth>,
+    clock: Res<Clock>,
     mut sprites: Query<(&CreaturePiece, &mut Transform), Without<CreatureLabel>>,
     mut labels: Query<(&CreatureLabel, &mut Transform), Without<CreaturePiece>>,
 ) {
@@ -769,26 +889,12 @@ fn sync_creature_sprites(
         return;
     };
     let states = simulation.states();
-    let current: std::collections::HashMap<usize, (f32, f32)> = states
+    let sub = clock.tick_fraction();
+    let current: HashMap<usize, (f32, f32)> = states
         .iter()
-        .map(|s| {
-            let t = if s.step_ticks > 0 && s.step_to_pixel.is_some() {
-                (s.step_elapsed as f32 / s.step_ticks as f32).min(1.0)
-            } else {
-                0.0
-            };
-            let (ix, iy) = match s.step_to_pixel {
-                Some((tx, ty)) => (
-                    s.pixel.0 as f32 + (tx - s.pixel.0) as f32 * t,
-                    s.pixel.1 as f32 + (ty - s.pixel.1) as f32 * t,
-                ),
-                None => (s.pixel.0 as f32, s.pixel.1 as f32),
-            };
-            (s.id, (ix, iy))
-        })
+        .map(|state| (state.id, smooth_pixel(state, sub)))
         .collect();
-    let initial: std::collections::HashMap<usize, (i32, i32)> =
-        sim.initial_pixels.iter().copied().collect();
+    let initial: HashMap<usize, (i32, i32)> = sim.initial_pixels.iter().copied().collect();
     for (tag, mut transform) in &mut sprites {
         let Some(&cur) = current.get(&tag.creature_id) else {
             continue;
@@ -808,6 +914,81 @@ fn sync_creature_sprites(
         transform.translation.x = cur.0;
         transform.translation.y = -cur.1 - LABEL_OFFSET_Y;
     }
+}
+
+/// Where a creature is drawn this frame: the cell centre, slid towards its step
+/// target by the fraction of the step already elapsed plus the clock's sub-tick
+/// fraction — so movement is smooth between ticks, not one jump per tick.
+fn smooth_pixel(state: &CreatureState, sub: f32) -> (f32, f32) {
+    let Some((tx, ty)) = state.step_to_pixel else {
+        return (state.pixel.0 as f32, state.pixel.1 as f32);
+    };
+    if state.step_ticks == 0 {
+        return (state.pixel.0 as f32, state.pixel.1 as f32);
+    }
+    let t = ((state.step_elapsed as f32 + sub) / state.step_ticks as f32).min(1.0);
+    (
+        state.pixel.0 as f32 + (tx - state.pixel.0) as f32 * t,
+        state.pixel.1 as f32 + (ty - state.pixel.1) as f32 * t,
+    )
+}
+
+/// Swaps each creature piece's [`Animator`] between the resting and the walking
+/// sequence when the simulation's [`WalkState`] or facing direction changes,
+/// keeping body, equipment and shadow of one creature in step.
+fn sync_creature_animation(
+    sim: Res<SimulationResource>,
+    anim: Res<CreatureAnim>,
+    mut pieces: Query<(&CreaturePiece, &mut Animator)>,
+) {
+    let Some(ref simulation) = sim.sim else {
+        return;
+    };
+    let facing: HashMap<usize, (bool, u8)> = simulation
+        .states()
+        .iter()
+        .map(|state| {
+            (
+                state.id,
+                (
+                    state.walk_state == WalkState::Walk,
+                    state.direction.unwrap_or(0),
+                ),
+            )
+        })
+        .collect();
+    for (tag, mut animator) in &mut pieces {
+        let Some(&(walking, direction)) = facing.get(&tag.creature_id) else {
+            continue;
+        };
+        let Some(creature) = anim.creatures.get(&tag.creature_id) else {
+            continue;
+        };
+        let layer = if tag.is_shadow {
+            &creature.shadow
+        } else {
+            match creature.body.get(&tag.layer_index) {
+                Some(layer) => layer,
+                None => continue,
+            }
+        };
+        let clip = select_clip(layer, walking, direction);
+        let Some(clip) = clip else { continue };
+        if Arc::ptr_eq(&animator.sequence, &clip.sequence) {
+            continue;
+        }
+        animator.play(Arc::clone(&clip.sequence), clip.base);
+    }
+}
+
+/// Which clip a piece shows: the walk sequence for its facing direction while
+/// walking, otherwise the resting one. A missing walk direction falls back to
+/// resting, so an unmapped direction never blanks the creature.
+fn select_clip(layer: &LayerSequences, walking: bool, direction: u8) -> Option<&Clip> {
+    if walking && let Some(walk) = layer.walk.get(direction as usize).and_then(Option::as_ref) {
+        return Some(walk);
+    }
+    layer.rest.as_ref()
 }
 
 /// Как состояние воспроизведения подписать в диагностике.
@@ -894,6 +1075,192 @@ fn diagnostics(
 mod tests {
     use super::*;
     use kn_game::PieceGroup;
+
+    fn state(
+        pixel: (i32, i32),
+        step_to: Option<(i32, i32)>,
+        elapsed: u32,
+        ticks: u32,
+    ) -> CreatureState {
+        CreatureState {
+            id: 0,
+            cell: (0, 0),
+            pixel,
+            step_to_pixel: step_to,
+            direction: None,
+            moving: step_to.is_some(),
+            step_elapsed: elapsed,
+            step_ticks: ticks,
+            walk_state: if step_to.is_some() {
+                WalkState::Walk
+            } else {
+                WalkState::Rest
+            },
+        }
+    }
+
+    #[test]
+    fn a_step_begins_at_the_current_cell_centre() {
+        assert_eq!(
+            smooth_pixel(&state((58, 16), Some((116, 32)), 0, 4), 0.0),
+            (58.0, 16.0)
+        );
+    }
+
+    #[test]
+    fn a_half_elapsed_step_sits_midway() {
+        assert_eq!(
+            smooth_pixel(&state((0, 0), Some((100, 40)), 2, 4), 0.0),
+            (50.0, 20.0)
+        );
+    }
+
+    #[test]
+    fn the_sub_tick_fraction_pushes_the_interpolation_forward() {
+        // Two of four ticks plus half the next tick: t = 2.5/4
+        assert_eq!(
+            smooth_pixel(&state((0, 0), Some((100, 40)), 2, 4), 0.5),
+            (62.5, 25.0)
+        );
+    }
+
+    #[test]
+    fn a_completed_step_clamps_at_the_target() {
+        let landed = smooth_pixel(&state((0, 0), Some((100, 40)), 4, 4), 1.0);
+        assert_eq!(landed, (100.0, 40.0), "t never passes 1");
+    }
+
+    #[test]
+    fn a_creature_without_a_step_stays_put() {
+        assert_eq!(
+            smooth_pixel(&state((174, 80), None, 0, 0), 0.7),
+            (174.0, 80.0)
+        );
+        // step_ticks 0 with a target still must not divide by zero
+        assert_eq!(
+            smooth_pixel(&state((0, 0), Some((10, 10)), 0, 0), 0.0),
+            (0.0, 0.0)
+        );
+    }
+
+    fn clip_of(base: usize) -> Clip {
+        Clip {
+            sequence: Arc::new(Sequence::new(Vec::new())),
+            base,
+        }
+    }
+
+    /// Base frame of the clip `select_clip` picks for one walking state: the rest
+    /// clip is base 0, the walk clip of the facing direction is base 1.
+    fn chosen_base(walking: bool, direction: u8) -> usize {
+        let layer = LayerSequences {
+            rest: Some(clip_of(0)),
+            walk: (0..8)
+                .map(|d| {
+                    if walking && d == direction {
+                        Some(clip_of(1))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        };
+        select_clip(&layer, walking, direction)
+            .map(|clip| clip.base)
+            .unwrap()
+    }
+
+    #[test]
+    fn standing_shows_the_resting_sequence() {
+        assert_eq!(chosen_base(false, 3), 0, "покой — базовый кадр покоя");
+    }
+
+    #[test]
+    fn walking_shows_the_facing_direction() {
+        assert_eq!(
+            chosen_base(true, 5),
+            1,
+            "ходьба — кадр шага в направлении движения"
+        );
+    }
+
+    #[test]
+    fn an_unmapped_walk_direction_falls_back_to_rest() {
+        // Only direction 5 has a walk clip; walking west (7) must fall back to rest.
+        let layer = LayerSequences {
+            rest: Some(clip_of(0)),
+            walk: (0..8)
+                .map(|d| if d == 5 { Some(clip_of(1)) } else { None })
+                .collect(),
+        };
+        let chosen = select_clip(&layer, true, 7).unwrap();
+        assert_eq!(chosen.base, 0);
+    }
+
+    #[test]
+    fn an_out_of_range_direction_falls_back_to_rest() {
+        let layer = LayerSequences {
+            rest: Some(clip_of(0)),
+            walk: Vec::new(),
+        };
+        let chosen = select_clip(&layer, true, 200).unwrap();
+        assert_eq!(chosen.base, 0, "направление вне таблицы не роняет выбор");
+    }
+
+    #[test]
+    fn depth_boundaries_are_sorted_and_ignore_terrain() {
+        // Scene order is deliberately not bottom-sorted; build_scene_depth must
+        // sort, or DepthMap's binary search lands on the wrong stack.
+        let pieces = vec![
+            Piece {
+                texture: None,
+                x: 0,
+                y: 200,
+                w: None,
+                h: Some(0),
+                animation: None,
+                group: PieceGroup::Characters,
+                creature_id: None,
+            },
+            Piece {
+                texture: None,
+                x: 0,
+                y: 100,
+                w: None,
+                h: Some(0),
+                animation: None,
+                group: PieceGroup::Objects,
+                creature_id: None,
+            },
+            Piece {
+                texture: None,
+                x: 0,
+                y: 300,
+                w: None,
+                h: Some(0),
+                animation: None,
+                group: PieceGroup::Objects,
+                creature_id: None,
+            },
+            Piece {
+                texture: None,
+                x: 0,
+                y: 50,
+                w: None,
+                h: Some(0),
+                animation: None,
+                group: PieceGroup::Terrain,
+                creature_id: None,
+            },
+        ];
+        let scene = kn_game::Scene { pieces };
+        let map = build_scene_depth(&scene, &TextureCache::default());
+        // Bottom 200 is the piece listed first (global order 0 → z 0). Unsorted
+        // boundaries would have binary search land between 100 and 300 instead.
+        assert_eq!(map.z_for_bottom(200), 0.0);
+        // Terrain (bottom 50) is excluded: below the first stack both read the same z
+        assert_eq!(map.z_for_bottom(50), map.z_for_bottom(100));
+    }
 
     #[test]
     fn labels_show_source_and_number() {

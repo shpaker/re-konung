@@ -145,6 +145,88 @@ fn check_reports_no_errors() {
     }
 }
 
+/// Idle/walk clips line up with the scene's Characters pieces for the same creature.
+///
+/// `kn_render` swaps an `Animator` by piece position, so `rest.layers` must be as
+/// long as the creature's Characters pieces in the scene, and `walk` must carry one
+/// entry per sprite direction. A mismatch would draw the wrong layer during a step.
+#[test]
+fn creature_animation_layers_align_with_scene_pieces() {
+    use kn_game::PieceGroup;
+
+    for (edition, root) in game_roots() {
+        let game = Game::open(&root).unwrap();
+        let map_ref = game.maps().unwrap()[0];
+        let scene = game.scene(map_ref, &SceneOptions::ALL).unwrap();
+        let characters: Vec<usize> = scene
+            .pieces
+            .iter()
+            .filter(|piece| piece.group == PieceGroup::Characters)
+            .filter_map(|piece| piece.creature_id)
+            .collect();
+        assert!(
+            !characters.is_empty(),
+            "{edition}: {map_ref:?}: на карте должны быть персонажи"
+        );
+        let animations = game.creature_animations(map_ref).unwrap();
+        assert!(
+            !animations.is_empty(),
+            "{edition}: {map_ref:?}: хотя бы у одного персонажа должна быть походка"
+        );
+        for (creature, animation) in &animations {
+            let layers = characters.iter().filter(|id| *id == creature).count();
+            assert_eq!(
+                animation.rest.layers.len(),
+                layers,
+                "{edition}: {map_ref:?}: персонаж {creature}: покоящиеся слои должны \
+                 совпасть с числом его кусков Characters"
+            );
+            assert_eq!(animation.walk.len(), 8, "{edition}: восемь направлений");
+        }
+    }
+}
+
+/// Every walk frame decodes, so a creature never shows a blank sprite mid-step.
+///
+/// The scene only carries the record pose; the walk frames are decoded separately
+/// by the viewer's texture cache. A frame that fails here would render invisible.
+#[test]
+fn creature_animation_walk_frames_decode() {
+    for (edition, root) in game_roots() {
+        let game = Game::open(&root).unwrap();
+        let map_ref = game.maps().unwrap()[0];
+        let animations = game.creature_animations(map_ref).unwrap();
+        let mut ids = std::collections::HashSet::new();
+        for (_, animation) in &animations {
+            for clips in std::iter::once(&animation.rest).chain(animation.walk.iter().flatten()) {
+                for frames in clips
+                    .layers
+                    .iter()
+                    .chain(std::iter::once(&clips.shadow))
+                    .flatten()
+                    .map(|animation| &animation.frames)
+                {
+                    ids.extend(frames.iter().filter_map(|frame| frame.texture));
+                }
+            }
+        }
+        let decoded = game.textures(&ids.into_iter().collect::<Vec<_>>()).unwrap();
+        let problems = decoded
+            .iter()
+            .enumerate()
+            .filter_map(|(index, decoded)| match decoded {
+                Ok(Some(_)) => None,
+                Ok(None) => Some(format!("кадр {index}: пустой слот")),
+                Err(error) => Some(format!("кадр {index}: {error}")),
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            problems.is_empty(),
+            "{edition}: {map_ref:?}: кадры походки не декодируются: {problems:?}"
+        );
+    }
+}
+
 /// Tutorial-карты описывает `TGame.N`, а не `Game.N`.
 ///
 /// До правки `check` брал первое состояние из `Game.N` для всех источников, и
