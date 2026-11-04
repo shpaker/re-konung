@@ -220,15 +220,23 @@ pub fn simulate(
         Format::Json => println!("{}", serde_json::to_string_pretty(&reports)?),
     }
 
-    let ok = reports.iter().all(|r| r.errors.is_empty());
-    Ok(if ok {
+    Ok(if reports_ok(&reports) {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
     })
 }
 
-#[derive(serde::Serialize)]
+/// A run is only successful if no map hit an error and none left creatures
+/// unplaced: unplaced roster is a data problem to act on, not a warning to ignore
+/// (review #68).
+fn reports_ok(reports: &[SimReport]) -> bool {
+    reports
+        .iter()
+        .all(|report| report.errors.is_empty() && report.spawn_errors.is_empty())
+}
+
+#[derive(Clone, serde::Serialize)]
 struct SimReport {
     source: MapSource,
     number: u32,
@@ -304,5 +312,34 @@ mod tests {
             check(&cli, Some(1), false, Format::Text),
             Err(ViewerError::Game(_))
         ));
+    }
+
+    #[test]
+    fn unplaced_creatures_fail_a_simulate_run() {
+        let clean = SimReport {
+            source: MapSource::Game,
+            number: 1,
+            creatures: 3,
+            movers: 2,
+            steps: 5,
+            route_sets: 1,
+            tick: 10,
+            spawn_errors: Vec::new(),
+            errors: Vec::new(),
+        };
+        assert!(reports_ok(std::slice::from_ref(&clean)));
+        let unplaced = SimReport {
+            spawn_errors: vec!["roster 7: ImpassableCell".to_owned()],
+            ..clean.clone()
+        };
+        assert!(
+            !reports_ok(&[unplaced]),
+            "an unplaced roster is a failure, not a warning"
+        );
+        let errored = SimReport {
+            errors: vec!["boom".to_owned()],
+            ..clean
+        };
+        assert!(!reports_ok(&[errored]));
     }
 }

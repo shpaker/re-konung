@@ -15,6 +15,10 @@ use bevy::prelude::*;
 use crate::animation::{Animator, Sequence};
 use crate::scene::Z_STEP;
 
+/// Buckets for the per-creature z sub-slot; large enough that two creatures rarely
+/// collide, small enough that the whole span stays under one `Z_STEP`.
+const CREATURE_Z_SLOTS: u32 = 1024;
+
 /// Root of all creature nodes, separate from [`MapRoot`] so that a creature
 /// change never touches the map sprites.
 #[derive(Component, Default)]
@@ -99,6 +103,17 @@ impl DepthMap {
     pub fn shadow_z(&self) -> f32 {
         self.shadow_z
     }
+
+    /// A creature's own z: strictly in front of the static it stands on, never
+    /// exactly equal (that z-fights), and with a stable per-id sub-slot inside one
+    /// `Z_STEP` so two creatures sharing a bottom get a deterministic draw order.
+    /// The original's per-creature slot order at equal depth is unconfirmed, so any
+    /// stable order satisfies it (review #68).
+    pub fn creature_z(&self, bottom: i32, id: u32) -> f32 {
+        let base = self.z_for_bottom(bottom);
+        let sub = ((id % CREATURE_Z_SLOTS) as f32 / CREATURE_Z_SLOTS as f32) * (Z_STEP * 0.9);
+        base + Z_STEP * 0.05 + sub
+    }
 }
 
 /// Sprite data for one creature layer.
@@ -149,7 +164,7 @@ pub fn spawn_creature(
     depth: &DepthMap,
 ) -> SpawnedCreature {
     let pos = creature_position(data.x, data.y);
-    let z = depth.z_for_bottom(data.bottom);
+    let z = depth.creature_z(data.bottom, data.id);
 
     let node = commands
         .spawn((
@@ -265,7 +280,7 @@ pub fn update_creature_depth(
         return false;
     }
     node.bottom = bottom;
-    transform.translation.z = depth.z_for_bottom(bottom);
+    transform.translation.z = depth.creature_z(bottom, node.id);
     true
 }
 
@@ -354,6 +369,35 @@ mod tests {
         let depth = mock_depth();
         assert_eq!(depth.z_for_bottom(50), 10.0);
         assert_eq!(depth.z_for_bottom(999), depth.last_stack_z);
+    }
+
+    #[test]
+    fn creature_z_never_sits_on_a_static_z() {
+        // At a bottom that coincides with a stack, the creature must be strictly in
+        // front, not exactly on the static's z (that z-fights at sub-pixel scale).
+        let depth = mock_depth();
+        for bottom in [100, 150, 200, 300] {
+            let z = depth.creature_z(bottom, 7);
+            assert!(
+                z > depth.z_for_bottom(bottom),
+                "creature z {z} must clear the static z {} at bottom {bottom}",
+                depth.z_for_bottom(bottom)
+            );
+        }
+    }
+
+    #[test]
+    fn creature_z_orders_equal_depths_by_id() {
+        // Two creatures sharing a bottom must not tie: their z differ, deterministically.
+        let depth = mock_depth();
+        let a = depth.creature_z(200, 5);
+        let b = depth.creature_z(200, 6);
+        assert_ne!(a, b, "distinct ids must break the z tie");
+        assert_eq!(
+            a,
+            depth.creature_z(200, 5),
+            "the order is stable across calls"
+        );
     }
 
     #[test]

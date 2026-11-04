@@ -189,6 +189,18 @@ impl Sequence {
             .sum::<u64>()
             % self.ticks
     }
+
+    /// Phase that shows the `base`-th frame at clock tick `at_tick`, not at zero.
+    ///
+    /// The clock is global and never returns to zero, so switching a clip must
+    /// offset the phase by the current tick too — otherwise the new sequence opens
+    /// on an arbitrary frame instead of its base (review #68).
+    pub fn phase_at(&self, base: usize, at_tick: u64) -> u64 {
+        if self.ticks == 0 {
+            return 0;
+        }
+        (self.phase_for(base) + self.ticks - (at_tick % self.ticks)) % self.ticks
+    }
 }
 
 /// Позиция и размер спрайта для кадра.
@@ -265,6 +277,15 @@ impl Animator {
     /// обнуляется, чтобы [`apply_animators`] переставил спрайт на новый кадр.
     pub fn play(&mut self, sequence: Arc<Sequence>, base: usize) {
         self.phase = sequence.phase_for(base);
+        self.sequence = sequence;
+        self.shown = None;
+    }
+
+    /// As [`Self::play`], but opens the new sequence on its `base` frame at clock
+    /// tick `at_tick` so a state or direction change reads from the clip's first
+    /// frame even though the shared clock never returns to zero (review #68).
+    pub fn play_at(&mut self, sequence: Arc<Sequence>, base: usize, at_tick: u64) {
+        self.phase = sequence.phase_at(base, at_tick);
         self.sequence = sequence;
         self.shown = None;
     }
@@ -518,6 +539,24 @@ mod tests {
         assert_eq!(sequence.frame_at(0, animator.phase), 2);
         assert_eq!(animator.shown(), None);
         assert_eq!(Animator::new(sequence, 0, 0).phase, 0);
+    }
+
+    #[test]
+    fn play_at_opens_the_clip_on_its_base_frame_at_any_tick() {
+        // The clock is global and mid-cycle when a direction changes; play_at must
+        // show the new clip's base frame, not the frame the old phase pointed at.
+        let sequence = Arc::new(sequence(&[8.0; 4], &[1, 1, 1, 1]));
+        for base in 0..4 {
+            for tick in [0u64, 1, 5, 17, 1000] {
+                let mut animator = Animator::new(Arc::clone(&sequence), 0, 0);
+                animator.play_at(Arc::clone(&sequence), base, tick);
+                assert_eq!(
+                    sequence.frame_at(tick, animator.phase),
+                    base,
+                    "base {base} at tick {tick} must open on its own frame"
+                );
+            }
+        }
     }
 
     /// Живой мир Bevy без окна и рендерера: часы → что лежит на спрайте.

@@ -175,6 +175,9 @@ struct SimulationResource {
     /// Whether this map's creature nodes have been spawned; reset on rebuild and
     /// after a reset so nodes are rebuilt once.
     creatures_spawned: bool,
+    /// Why this map's simulation failed to build, if it did; surfaced in the panel
+    /// instead of silently showing a scene with no moving creatures (review #68).
+    error: Option<String>,
 }
 
 /// Depth map built from scene stack boundaries, used for dynamic z on creature move.
@@ -191,10 +194,15 @@ impl Default for SceneDepth {
     }
 }
 
-/// Clock tick at which the simulation was last advanced; drives catch-up ticking.
+/// Simulation clock, relative to an epoch: the clock tick at which the current
+/// simulation's tick 0 sits, and the ticks it has advanced since. A reset or a map
+/// change moves the epoch to the clock so the fresh simulation neither replays the
+/// ticks the old one already ran nor rewinds to absolute clock time on a backward
+/// step (review #68). The simulation's clock position is `epoch + sim_ticks`.
 #[derive(Resource, Default)]
 struct SimTickTracker {
-    last_clock_ticks: u64,
+    epoch: u64,
+    sim_ticks: u64,
 }
 
 /// Idle and walk [`Sequence`]s per creature for the `WalkState` swap; rebuilt on
@@ -539,7 +547,7 @@ pub fn run_viewer(config: ViewerConfig) {
                 sync_playboxes,
                 rebuild_scene,
                 sync_groups,
-                sync_labels,
+                sync_creature_visibility,
                 advance_simulation,
                 spawn_creature_labels,
                 spawn_creatures,
@@ -843,11 +851,19 @@ fn rebuild_scene(
         problems: loaded.problems,
         error: None,
     };
-    sim_resource.sim = game.0.simulation(map_ref, SIM_SEED).ok();
-    sim_resource.initial_pixels = sim_resource
-        .sim
-        .as_ref()
-        .map_or_else(Vec::new, |s| s.initial_pixels());
+    match game.0.simulation(map_ref, SIM_SEED) {
+        Ok(simulation) => {
+            sim_resource.error = None;
+            sim_resource.initial_pixels = simulation.initial_pixels();
+            sim_resource.sim = Some(simulation);
+        }
+        Err(error) => {
+            sim_resource.error = Some(format!("simulation for {map_ref:?}: {error}"));
+            warn!("map {map_ref:?}: simulation failed to build: {error}");
+            sim_resource.initial_pixels = Vec::new();
+            sim_resource.sim = None;
+        }
+    }
     sim_resource.labels_spawned = false;
     if let Some(root) = sim_resource.label_root.take() {
         commands.entity(root).despawn();
@@ -856,10 +872,11 @@ fn rebuild_scene(
         commands.entity(root).despawn();
     }
     sim_resource.creatures_spawned = false;
-    // The fresh simulation counts ticks from 0 while the scene clock keeps
-    // running: pin the tracker to the current tick so `advance_simulation` never
-    // replays the whole accumulated history as one catch-up burst (review #68).
-    sim_tracker.last_clock_ticks = clock.ticks;
+    // The fresh simulation starts at tick 0 from the current clock: set the epoch so
+    // `advance_simulation` neither replays the accumulated history as one burst nor
+    // rewinds to absolute clock time on a later backward step (review #68).
+    sim_tracker.epoch = clock.ticks;
+    sim_tracker.sim_ticks = 0;
     scene_depth.map = build_scene_depth(&scene, &cache);
     *creature_anim = build_creature_anim(&game.0, map_ref, &mut cache, &mut images);
     *creature_spawns =
@@ -959,29 +976,27 @@ fn sync_groups(
     }
 }
 
-/// Shows the creature-id labels with the Characters overlay.
+/// Shows creature nodes and their id labels together with the Characters overlay.
 ///
-/// They hang off their own [`LabelRoot`], not the Characters group, so hiding
-/// characters would otherwise leave the `#ID` texts floating over an empty map
-/// (review #68). `Inherited` so a map hidden on `MapRoot` stays hidden.
-fn sync_labels(
-    sim: Res<SimulationResource>,
+/// The nodes live under their own [`CreatureRoot`] and the labels under a
+/// [`LabelRoot`], neither inside the Characters scene group, so turning characters
+/// off would otherwise leave sprites and `#ID` texts floating over an empty map
+/// (review #68). `Inherited` so a map hidden on `MapRoot` stays hidden. One query over
+/// both roots so the shared `&mut Visibility` has no split-query conflict (B0001).
+#[allow(clippy::type_complexity)]
+fn sync_creature_visibility(
     viewer: Res<Viewer>,
-    mut labels: Query<&mut Visibility, With<LabelRoot>>,
+    mut roots: Query<&mut Visibility, Or<(With<CreatureRoot>, With<LabelRoot>)>>,
 ) {
-    let Some(root) = sim.label_root else {
-        return;
-    };
-    let Ok(mut visibility) = labels.get_mut(root) else {
-        return;
-    };
     let target = if viewer.is_on(Overlay::Characters) {
         Visibility::Inherited
     } else {
         Visibility::Hidden
     };
-    if *visibility != target {
-        *visibility = target;
+    for mut visibility in &mut roots {
+        if *visibility != target {
+            *visibility = target;
+        }
     }
 }
 
@@ -1000,12 +1015,13 @@ fn failed(map: MapRef, cached: usize, error: String, elapsed: Duration) -> Stats
 
 /// Advances the simulation to the clock, one logical tick per clock tick.
 ///
-/// Forward is a plain catch-up loop. A backward `Step` (`.`/`,`) rewinds the clock
-/// but the engine has no reverse tick, so we rebuild the map's simulation and
-/// replay it forward to the rewound tick: sprites and creature positions then both
-/// show that tick, instead of sprites animating backwards while creatures stand
-/// still (review #68). Replaying from seed is deterministic, so the state is the
-/// same one forward stepping reached at that tick.
+/// Time is simulation-relative: the clock tick that maps to the simulation's tick 0
+/// is the tracker's `epoch`, moved to the clock by a reset or a map change. Forward
+/// is a plain catch-up. A backward `Step` rewinds the clock, but the engine has no
+/// reverse tick, so we rebuild the map's simulation and replay it forward to the
+/// *epoch-relative* target — a reset is the zero point, so stepping back just after
+/// one replays nothing instead of the whole clock (review #68). Replaying from seed
+/// is deterministic, so the rewound state equals what forward stepping reached there.
 fn advance_simulation(
     clock: Res<Clock>,
     mut tracker: ResMut<SimTickTracker>,
@@ -1014,29 +1030,34 @@ fn advance_simulation(
     viewer: Res<Viewer>,
 ) {
     let Some(&map_ref) = viewer.maps.get(viewer.selected) else {
-        tracker.last_clock_ticks = clock.ticks;
+        tracker.epoch = clock.ticks;
+        tracker.sim_ticks = 0;
         return;
     };
     if sim.sim.is_none() {
-        tracker.last_clock_ticks = clock.ticks;
+        tracker.epoch = clock.ticks;
+        tracker.sim_ticks = 0;
         return;
     }
-    if clock.ticks < tracker.last_clock_ticks
-        && let Some(replayed) = replay_simulation(&game.0, map_ref, clock.ticks)
-    {
+    let target = clock.ticks.saturating_sub(tracker.epoch);
+    if target < tracker.sim_ticks {
+        // Backward: rebuild and replay forward to the epoch-relative target. This
+        // runs only when the clock actually moved behind the simulation, not every
+        // frame, so a shallow rewind after a reset (target near 0) is cheap.
+        let Some(replayed) = replay_simulation(&game.0, map_ref, target) else {
+            return;
+        };
         sim.initial_pixels = replayed.initial_pixels();
         sim.sim = Some(replayed);
-        // The replay left the fresh simulation at exactly `clock.ticks`, so pin the
-        // tracker there: pinning to 0 would make the catch-up loop below tick it a
-        // second `clock.ticks` times and every creature would overshoot the target.
-        tracker.last_clock_ticks = clock.ticks;
+        tracker.sim_ticks = target;
+        return;
     }
-    while let Some(simulation) = sim.sim.as_mut() {
-        if tracker.last_clock_ticks >= clock.ticks {
+    while tracker.sim_ticks < target {
+        let Some(simulation) = sim.sim.as_mut() else {
             break;
-        }
+        };
         simulation.tick();
-        tracker.last_clock_ticks += 1;
+        tracker.sim_ticks += 1;
     }
 }
 
@@ -1072,12 +1093,12 @@ fn reset_positions(
     reset_simulation(&game.0, map_ref, clock.ticks, &mut sim, &mut tracker);
 }
 
-/// Пересоздаёт симуляцию карты и ставит трекер в текущий тик часов.
+/// Rebuilds the map's simulation and pins the tracker's epoch to the clock.
 ///
-/// Трекер синхронизируется с часами: свежая симуляция не должна отыграть тики,
-/// которые уже прошла старая, иначе существа мгновенно перематываются вперёд.
-/// Узлы существ не пересоздаются — [`sync_creature_nodes`] каждый кадр ставит их
-/// по состоянию, поэтому после сброса они сами встанут над исходными точками.
+/// The fresh simulation is at tick 0 from this point: `epoch = clock_ticks` keeps it
+/// from replaying ticks the old one already ran and makes a later backward Step
+/// rewind against the reset, not absolute clock time. Creature nodes are not
+/// recreated — `sync_creature_nodes` repositions them from the state each frame.
 fn reset_simulation(
     game: &Game,
     map_ref: MapRef,
@@ -1085,12 +1106,19 @@ fn reset_simulation(
     sim: &mut SimulationResource,
     tracker: &mut SimTickTracker,
 ) {
-    let Ok(simulation) = game.simulation(map_ref, SIM_SEED) else {
-        return;
-    };
-    sim.initial_pixels = simulation.initial_pixels();
-    sim.sim = Some(simulation);
-    tracker.last_clock_ticks = clock_ticks;
+    match game.simulation(map_ref, SIM_SEED) {
+        Ok(simulation) => {
+            sim.error = None;
+            sim.initial_pixels = simulation.initial_pixels();
+            sim.sim = Some(simulation);
+        }
+        Err(error) => {
+            sim.error = Some(format!("simulation for {map_ref:?}: {error}"));
+            sim.sim = None;
+        }
+    }
+    tracker.epoch = clock_ticks;
+    tracker.sim_ticks = 0;
 }
 
 const LABEL_OFFSET_Y: f32 = 50.0;
@@ -1113,9 +1141,9 @@ fn spawn_creature_labels(mut sim: ResMut<SimulationResource>, mut commands: Comm
     }
     let states = sim.sim.as_ref().unwrap().states();
     sim.labels_spawned = true;
-    // Hidden until [`sync_labels`] shows it with the Characters overlay: a label
-    // that were `Visible` would survive Characters off (it hangs off its own root,
-    // not the Characters group) and leak creature ids over an empty map.
+    // Hidden until [`sync_creature_visibility`] shows it with the Characters overlay:
+    // a label that were `Visible` would survive Characters off (it hangs off its own
+    // root, not the Characters group) and leak creature ids over an empty map.
     let root = commands
         .spawn((LabelRoot, Transform::IDENTITY, Visibility::Hidden))
         .id();
@@ -1275,6 +1303,7 @@ fn smooth_pixel(state: &CreatureState, sub: f32) -> (f32, f32) {
 fn sync_creature_animation(
     sim: Res<SimulationResource>,
     anim: Res<CreatureAnim>,
+    clock: Res<Clock>,
     mut sprites: Query<(&CreatureSprite, &mut Animator)>,
 ) {
     let Some(ref simulation) = sim.sim else {
@@ -1322,7 +1351,10 @@ fn sync_creature_animation(
         if Arc::ptr_eq(&animator.sequence, &clip.sequence) {
             continue;
         }
-        animator.play(Arc::clone(&clip.sequence), clip.base);
+        // Start the new clip on its own base frame at the current clock tick, so a
+        // direction or rest/walk change reads from the clip's first frame even though
+        // the shared clock never returns to zero (review #68).
+        animator.play_at(Arc::clone(&clip.sequence), clip.base, clock.ticks);
     }
 }
 
@@ -1357,8 +1389,10 @@ fn piece_counts(pieces: &Query<&InheritedVisibility, With<ScenePiece>>) -> (usiz
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn diagnostics(
     stats: Res<Stats>,
+    sim: Res<SimulationResource>,
     viewer: Res<Viewer>,
     clock: Res<Clock>,
     zoom: Res<CameraState>,
@@ -1384,6 +1418,11 @@ fn diagnostics(
             } else {
                 format!(" · {} textures missing", stats.problems.len())
             };
+            // A simulation that failed to build shows its reason, not a silent still map.
+            let sim_error = sim
+                .error
+                .as_ref()
+                .map_or(String::new(), |error| format!(" · {error}"));
             // Карта без огней и движущихся объектов — без этой строки
             let playback = if stats.animated_pieces == 0 {
                 String::new()
@@ -1397,7 +1436,7 @@ fn diagnostics(
                 )
             };
             format!(
-                "{} {} · {pieces} · {} textures · {} ms{problems}\nzoom ×{} · {} fps{playback}",
+                "{} {} · {pieces} · {} textures · {} ms{problems}{sim_error}\nzoom ×{} · {} fps{playback}",
                 match map.source {
                     MapSource::Game => "map",
                     MapSource::Tutorial => "tutorial",
@@ -1913,14 +1952,16 @@ mod tests {
         );
 
         let mut tracker = SimTickTracker {
-            last_clock_ticks: 0,
+            epoch: 0,
+            sim_ticks: 0,
         };
-        // Старый трекер отстаёт от часов: сброс обязан подтянуть его к текущему
-        // тику, иначе свежая симуляция отыграет накопленное рывком
+        // The old tracker lags behind the clock: a reset must pin its epoch to the
+        // current tick, otherwise the fresh simulation replays the backlog in one jump
         reset_simulation(&game, map_ref, 517, &mut sim, &mut tracker);
+        assert_eq!(tracker.epoch, 517, "the tracker is pinned to the clock");
         assert_eq!(
-            tracker.last_clock_ticks, 517,
-            "трекер синхронизирован с часами"
+            tracker.sim_ticks, 0,
+            "a reset simulation starts its own timeline at zero"
         );
         assert_eq!(
             home(sim.sim.as_ref().unwrap()),
@@ -1981,7 +2022,8 @@ mod tests {
             .insert_resource(clock)
             .insert_resource(sim)
             .insert_resource(SimTickTracker {
-                last_clock_ticks: 0,
+                epoch: 0,
+                sim_ticks: 0,
             })
             .add_observer(reset_positions)
             .add_systems(Update, fire_reset);
@@ -1997,9 +2039,9 @@ mod tests {
             "кнопка вернула существ домой"
         );
         assert_eq!(
-            app.world().resource::<SimTickTracker>().last_clock_ticks,
+            app.world().resource::<SimTickTracker>().epoch,
             300,
-            "трекер подтянут к часам без рывка"
+            "the tracker is pinned to the clock without a jump"
         );
         let viewer = app.world().resource::<Viewer>();
         assert_eq!(viewer.overlays, overlays, "оверлеи сохранены");
@@ -2072,7 +2114,8 @@ mod tests {
             .insert_resource(sim_resource)
             .insert_resource(Clock::new(TICK_MS as f32))
             .insert_resource(SimTickTracker {
-                last_clock_ticks: 900,
+                epoch: 900,
+                sim_ticks: 0,
             })
             .add_systems(Update, advance_simulation);
         app.world_mut().resource_mut::<Clock>().ticks = 900;
@@ -2094,12 +2137,11 @@ mod tests {
         }
     }
 
-    /// A backward `Step` rewinds the clock; `advance_simulation` rebuilds the map's
-    /// simulation and replays it to the rewound tick, so creatures show the same
-    /// positions a forward run would. The replay already leaves the fresh simulation
-    /// at that tick, so the tracker must be pinned there — pinning it to 0 let the
-    /// catch-up loop tick the simulation a second `clock.ticks` times and every
-    /// creature overshot the rewound state (review #68, reverse step).
+    /// A backward `Step` rewinds the clock below the simulation's own timeline;
+    /// `advance_simulation` sees `target < sim_ticks`, replays the map from tick 0 to
+    /// the rewound target, and pins `sim_ticks` there — so creatures show the same
+    /// positions a forward run would. Pinning it back to 0 would let the catch-up loop
+    /// tick the fresh simulation a second `target` times and overshoot (review #68).
     #[test]
     fn a_backward_step_rewinds_the_simulation_to_the_clock_not_beyond_it() {
         let Some((dir, map_ref)) = game_and_first_map() else {
@@ -2132,7 +2174,8 @@ mod tests {
             .insert_resource(Clock::new(TICK_MS as f32))
             // A forward run reached tick 200; a backward Step rewinds the clock to 150.
             .insert_resource(SimTickTracker {
-                last_clock_ticks: 200,
+                epoch: 0,
+                sim_ticks: 200,
             })
             .add_systems(Update, advance_simulation);
         app.world_mut().resource_mut::<Clock>().ticks = 150;
@@ -2152,6 +2195,139 @@ mod tests {
             got, expected,
             "a backward Step must show the forward run's state at the rewound tick"
         );
+    }
+
+    /// A reset pins the simulation's epoch to the clock; a backward `Step` just after
+    /// it rewinds the clock *below* that epoch. Because time is simulation-relative,
+    /// the epoch-relative target saturates to 0 and the fresh simulation stays at its
+    /// initial positions — it does not replay the clock to absolute tick time, which
+    /// is what the old absolute-clock tracker did (review #68).
+    #[test]
+    fn a_backward_step_after_a_reset_rewinds_to_the_reset_not_the_absolute_clock() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let mut sim_resource = SimulationResource::default();
+        sim_resource.sim = game.simulation(map_ref, SIM_SEED).ok();
+        sim_resource.initial_pixels = sim_resource.sim.as_ref().unwrap().initial_pixels();
+        let initial = sim_resource.initial_pixels.clone();
+        let by_id: HashMap<usize, (i32, i32)> = initial.into_iter().collect();
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(GameResource(game))
+            .insert_resource(Viewer {
+                maps: vec![map_ref],
+                selected: 0,
+                overlays: DEFAULT_OVERLAYS,
+                playback: PlayState::Paused,
+            })
+            .insert_resource(sim_resource)
+            .insert_resource(Clock::new(TICK_MS as f32))
+            // A reset at clock tick 400 left a fresh simulation at its own tick 0.
+            .insert_resource(SimTickTracker {
+                epoch: 400,
+                sim_ticks: 0,
+            })
+            .add_systems(Update, advance_simulation);
+        // A backward Step rewinds the clock below the reset epoch.
+        app.world_mut().resource_mut::<Clock>().ticks = 395;
+        app.update();
+
+        let states = app
+            .world()
+            .resource::<SimulationResource>()
+            .sim
+            .as_ref()
+            .unwrap()
+            .states();
+        assert!(!states.is_empty(), "the map must have creatures");
+        for state in &states {
+            assert_eq!(
+                state.pixel, by_id[&state.id],
+                "a Step back after a reset rewinds to the reset, not to absolute clock tick 395"
+            );
+        }
+    }
+
+    /// Turning the Characters overlay off hides the creature nodes and their `#ID`
+    /// labels together. They hang off their own [`CreatureRoot`] / [`LabelRoot`],
+    /// outside the Characters scene group, so without this they would keep sprites and
+    /// texts floating over an empty map. A shown overlay leaves them `Inherited` so a
+    /// map hidden on `MapRoot` stays hidden; a plain [`CreatureNode`] is never touched
+    /// (review #68).
+    #[test]
+    fn the_characters_overlay_hides_the_creature_and_label_roots_together() {
+        for (characters_on, expected) in
+            [(true, Visibility::Inherited), (false, Visibility::Hidden)]
+        {
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins)
+                .insert_resource(viewer([false, false, false, characters_on]))
+                .add_systems(Update, sync_creature_visibility);
+            let creature_root = app
+                .world_mut()
+                .spawn((CreatureRoot, Visibility::Inherited))
+                .id();
+            let label_root = app
+                .world_mut()
+                .spawn((LabelRoot, Visibility::Inherited))
+                .id();
+            let node = app
+                .world_mut()
+                .spawn((CreatureNode { id: 1, bottom: 0 }, Visibility::Inherited))
+                .id();
+            app.update();
+            assert_eq!(
+                *app.world().get::<Visibility>(creature_root).unwrap(),
+                expected,
+                "creature root follows the overlay (on: {characters_on})"
+            );
+            assert_eq!(
+                *app.world().get::<Visibility>(label_root).unwrap(),
+                expected,
+                "label root follows the overlay (on: {characters_on})"
+            );
+            assert_eq!(
+                *app.world().get::<Visibility>(node).unwrap(),
+                Visibility::Inherited,
+                "a node is hidden only through its root, never pinned directly"
+            );
+        }
+    }
+
+    /// A simulation that cannot be built reports why instead of being dropped through
+    /// `.ok()`: `reset_simulation` records the reason on the resource and leaves the
+    /// simulation empty, while still pinning the epoch so a later backward Step has a
+    /// zero point (review #68).
+    #[test]
+    fn a_simulation_that_fails_to_build_records_its_reason() {
+        let Some((dir, _)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        // A map number that has no files on disk: the simulation cannot be built.
+        let bogus = MapRef {
+            source: MapSource::Game,
+            number: u32::MAX,
+        };
+        let mut sim = SimulationResource::default();
+        let mut tracker = SimTickTracker {
+            epoch: 123,
+            sim_ticks: 45,
+        };
+        reset_simulation(&game, bogus, 123, &mut sim, &mut tracker);
+        assert!(sim.sim.is_none(), "no simulation was built");
+        let reason = sim
+            .error
+            .expect("the build failure is surfaced, not swallowed by .ok()");
+        assert!(
+            reason.contains("simulation for"),
+            "the reason names the map that failed: {reason}"
+        );
+        assert_eq!(tracker.epoch, 123, "the epoch is pinned even on failure");
+        assert_eq!(tracker.sim_ticks, 0, "the timeline restarts at the reset");
     }
 
     /// `sync_creature_nodes` reads two `&mut Transform` queries in one system.
