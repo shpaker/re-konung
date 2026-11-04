@@ -146,23 +146,38 @@ pub fn simulate(
                     .collect();
                 let mut steps = 0usize;
                 let mut route_sets = 0usize;
-                let errors: Vec<String> = Vec::new();
+                // Distinct creatures that started at least one step over the whole
+                // run — not the ones caught mid-step at the last tick, which is
+                // what `movers` counts (review #68: the two must not be conflated).
+                let mut ever_walked: std::collections::HashSet<u32> =
+                    std::collections::HashSet::new();
                 for _ in 0..ticks {
                     let events = sim.tick();
                     for event in &events {
                         match event {
-                            kn_game::movement::world::Event::StepStarted { .. } => steps += 1,
+                            kn_game::movement::world::Event::StepStarted { creature, .. } => {
+                                steps += 1;
+                                ever_walked.insert(creature.raw());
+                            }
                             kn_game::movement::world::Event::RouteSet { .. } => route_sets += 1,
                             _ => {}
                         }
                     }
                 }
+                // Orders rejected for a reason other than "no route" are bugs or
+                // bad data, never a verdict to fold into a success count.
+                let errors: Vec<String> = sim
+                    .order_failures()
+                    .iter()
+                    .map(|(id, error)| format!("order of roster {id}: {error:?}"))
+                    .collect();
                 let states = sim.states();
                 let movers = states.iter().filter(|s| s.moving).count();
                 reports.push(SimReport {
                     source: map_ref.source,
                     number: map_ref.number,
                     creatures,
+                    ever_moved: ever_walked.len(),
                     movers,
                     steps,
                     route_sets,
@@ -176,6 +191,7 @@ pub fn simulate(
                     source: map_ref.source,
                     number: map_ref.number,
                     creatures: 0,
+                    ever_moved: 0,
                     movers: 0,
                     steps: 0,
                     route_sets: 0,
@@ -196,13 +212,14 @@ pub fn simulate(
                     format!(" · {} not spawned", r.spawn_errors.len())
                 };
                 println!(
-                    "{} {:>2}: {} creatures, {} moved, {} steps, {} routes, {} ticks, {} errors{spawns}",
+                    "{} {:>2}: {} creatures, {} ever moved, {} moving, {} steps, {} routes, {} ticks, {} errors{spawns}",
                     match r.source {
                         MapSource::Game => "game    ",
                         MapSource::Tutorial => "tutorial",
                     },
                     r.number,
                     r.creatures,
+                    r.ever_moved,
                     r.movers,
                     r.steps,
                     r.route_sets,
@@ -227,9 +244,11 @@ pub fn simulate(
     })
 }
 
-/// A run is only successful if no map hit an error and none left creatures
-/// unplaced: unplaced roster is a data problem to act on, not a warning to ignore
-/// (review #68).
+/// A run is only successful if no map hit an error — build failure or rejected
+/// order — and none left creatures unplaced: both are data problems or bugs to
+/// act on, not warnings to ignore (review #68). Nothing here speaks for the
+/// picture: the check runs no renderer, so render correctness is judged only
+/// by looking at the viewer or the Bevy continuity test.
 fn reports_ok(reports: &[SimReport]) -> bool {
     reports
         .iter()
@@ -241,12 +260,16 @@ struct SimReport {
     source: MapSource,
     number: u32,
     creatures: usize,
+    /// Creatures that started at least one step during the whole run.
+    ever_moved: usize,
+    /// Creatures mid-step at the last tick — a snapshot, not the run's coverage.
     movers: usize,
     steps: usize,
     route_sets: usize,
     tick: u64,
     /// Creatures the world refused to place and why, e.g. `"roster 7: ImpassableCell"`.
     spawn_errors: Vec<String>,
+    /// Build failures and orders rejected for a reason other than "no route".
     errors: Vec<String>,
 }
 
@@ -320,6 +343,7 @@ mod tests {
             source: MapSource::Game,
             number: 1,
             creatures: 3,
+            ever_moved: 3,
             movers: 2,
             steps: 5,
             route_sets: 1,

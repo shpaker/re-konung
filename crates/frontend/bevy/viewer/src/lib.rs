@@ -35,10 +35,10 @@ use kn_game::{
 use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
     AnimPlugin, AnimSet, Animator, CameraApply, CameraBounds, CameraInput, CameraState, Clock,
-    CreatureData, CreatureNode, CreatureRoot, DepthMap, GameResource, LayerAnimation, LayerData,
-    MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup, ScenePiece,
-    Sequence, TextureCache, Z_STEP, clear_scene, load_scene, ortho_scale, piece_sequence,
-    piece_size, spawn_creature, update_creature_depth,
+    CreatureData, CreatureNode, CreatureRoot, CreatureShadow, DepthMap, GameResource,
+    LayerAnimation, LayerData, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState,
+    SceneGroup, ScenePiece, Sequence, TextureCache, Z_STEP, clear_scene, load_scene, ortho_scale,
+    piece_sequence, piece_size, spawn_creature, update_creature_depth,
 };
 use kn_ui::{dark_theme, pointer_over_ui, sync_checked};
 
@@ -210,28 +210,43 @@ struct SimTickTracker {
 #[derive(Resource, Default)]
 struct CreatureAnim {
     creatures: HashMap<usize, CreatureSequences>,
-    /// Last observed `(from, to)` per creature: the first frame a step is seen on
-    /// re-anchors its clips, so the walk cycle runs step-relative like the
-    /// original's `Frame` counter (Slavik `game_play.cpp:3727-3740`) instead of
-    /// free-running against the global clock.
-    locked: HashMap<usize, StepKey>,
+    /// Last observed `(from, to)` and `step_elapsed` per creature: the first
+    /// frame a step is seen on re-anchors its clips, so the walk cycle runs
+    /// step-relative like the original's `Frame` counter (Slavik
+    /// `game_play.cpp:3727-3740`) instead of free-running against the global clock.
+    locked: HashMap<usize, (StepKey, u32)>,
 }
 
 /// What identifies the step a creature is on, for [`CreatureAnim::locked`].
 type StepKey = ((i32, i32), Option<(i32, i32)>);
 
 impl CreatureAnim {
-    /// Creatures whose step differs from the last observed one — their clips must
-    /// open on the step's base frame. The lock updates here, so a step re-anchors
-    /// exactly once, on its first observation.
+    /// Creatures whose step is new or restarted since the last observation —
+    /// their clips must open on the step's base frame. The lock updates here, so
+    /// a step re-anchors exactly once, on its first observation.
+    ///
+    /// A falling `step_elapsed` under an unchanged key is a restart: the world
+    /// can cancel a step whose destination became impassable (`cancel_step`) and
+    /// order the same `(from, to)` again, and the key alone cannot tell that
+    /// from a step still running — without re-anchoring the cycle would keep
+    /// running past the halfway point and wrap a cell behind the creature
+    /// (review #68).
     fn observe_steps(&mut self, states: &[CreatureState]) -> HashSet<usize> {
         let mut restep = HashSet::new();
         for state in states {
-            let key = (state.pixel, state.step_to_pixel);
-            if self.locked.get(&state.id) != Some(&key) {
+            let observed = ((state.pixel, state.step_to_pixel), state.step_elapsed);
+            let restarted = match self.locked.get(&state.id) {
+                Some(&(last_key, last_elapsed)) => {
+                    last_key != observed.0 || observed.1 < last_elapsed
+                }
+                None => true,
+            };
+            if restarted {
                 restep.insert(state.id);
-                self.locked.insert(state.id, key);
             }
+            // Recorded every observation, not only on a re-anchor: the restart
+            // test compares against the highest tick the step was last seen on.
+            self.locked.insert(state.id, observed);
         }
         restep
     }
@@ -291,15 +306,26 @@ enum CreatureSet {
 }
 
 /// Decodes the walk frames the scene does not carry and builds the swap
-/// sequences; a creature whose walk cannot be decoded simply keeps its record pose.
+/// sequences; a creature whose walk cannot be decoded simply keeps its record
+/// pose. Nothing about that is silent: every reason a walk is missing or
+/// partial is pushed into `problems` for the diagnostics panel (review #68) —
+/// a creature walking on its rest pose is a rendering defect, not an absence
+/// of creatures to explain away.
 fn build_creature_anim(
     game: &Game,
     map_ref: MapRef,
     cache: &mut TextureCache,
     images: &mut Assets<Image>,
+    problems: &mut Vec<String>,
 ) -> CreatureAnim {
-    let Ok(animations) = game.creature_animations(map_ref) else {
-        return CreatureAnim::default();
+    let animations = match game.creature_animations(map_ref) {
+        Ok(animations) => animations,
+        Err(error) => {
+            problems.push(format!(
+                "walk animations for {map_ref:?}: {error}; every creature keeps its record pose"
+            ));
+            return CreatureAnim::default();
+        }
     };
     let mut seen = HashSet::new();
     for (_, anim) in &animations {
@@ -324,6 +350,33 @@ fn build_creature_anim(
     }
     if let Err(error) = cache.load(game, &seen.into_iter().collect::<Vec<_>>(), images) {
         warn!("walk textures for {map_ref:?}: {error}");
+        problems.push(format!(
+            "walk textures for {map_ref:?}: {error}; undecoded walk frames draw the rest pose"
+        ));
+    }
+    let without_walk = animations
+        .iter()
+        .filter(|(_, anim)| anim.walk.iter().all(Option::is_none))
+        .count();
+    let partial_walk = animations
+        .iter()
+        .filter(|(_, anim)| {
+            anim.walk.iter().any(Option::is_some) && anim.walk.iter().any(Option::is_none)
+        })
+        .count();
+    if without_walk > 0 {
+        problems.push(format!(
+            "{without_walk} creature(s) of {} have no walk frames at all: they draw \
+             the rest pose while the simulation walks them",
+            animations.len()
+        ));
+    }
+    if partial_walk > 0 {
+        problems.push(format!(
+            "{partial_walk} creature(s) of {} lack walk frames in some directions: \
+             those steps draw the rest pose",
+            animations.len()
+        ));
     }
     CreatureAnim {
         creatures: animations
@@ -956,7 +1009,13 @@ fn rebuild_scene(
     sim_tracker.epoch = clock.ticks;
     sim_tracker.sim_ticks = 0;
     scene_depth.map = build_scene_depth(&scene, &cache);
-    *creature_anim = build_creature_anim(&game.0, map_ref, &mut cache, &mut images);
+    *creature_anim = build_creature_anim(
+        &game.0,
+        map_ref,
+        &mut cache,
+        &mut images,
+        &mut stats.problems,
+    );
     *creature_spawns =
         build_creature_spawns(&scene, &cache, &creature_anim, &sim_resource.initial_pixels);
 }
@@ -1204,29 +1263,41 @@ const LABEL_OFFSET_Y: f32 = 50.0;
 /// Temporary per-creature diagnostics for the movement/animation review: set
 /// `KN_CREATURE_DEBUG` in the environment to log, per creature id, the simulation
 /// tick, cell, step from/to, `step_elapsed`, the cell pixel the node sits on, the
-/// rendered node position, z and `GlobalTransform`, and the simulation's own
+/// node position and z as this frame writes them, and the simulation's own
 /// facing direction; [`sync_creature_animation`] adds each sprite's clip, anchor,
-/// phase and shown frame with its local and global transform. Comparing
+/// phase and shown frame with its local offset and the world position as it will
+/// be drawn (the frame's `GlobalTransform`s are only propagated at the end of the
+/// update, so reading them would log the previous frame). Comparing
 /// `sim_dir`/`from`/`to` (which change only at a logical tick) with the sprite's
-/// global separates a node jump from an image jump: the node only ever sits on
-/// cell pixels, the glide to the next cell lives in the frame offsets.
+/// world position separates a node jump from an image jump: the node only ever
+/// sits on cell pixels, the glide to the next cell lives in the frame offsets.
 static CREATURE_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 fn creature_debug() -> bool {
     *CREATURE_DEBUG.get_or_init(|| std::env::var_os("KN_CREATURE_DEBUG").is_some())
 }
 
-fn spawn_creature_labels(mut sim: ResMut<SimulationResource>, mut commands: Commands) {
+fn spawn_creature_labels(
+    mut sim: ResMut<SimulationResource>,
+    viewer: Res<Viewer>,
+    mut commands: Commands,
+) {
     if sim.labels_spawned || sim.sim.is_none() {
         return;
     }
     let states = sim.sim.as_ref().unwrap().states();
     sim.labels_spawned = true;
-    // Hidden until [`sync_creature_visibility`] shows it with the Characters overlay:
-    // a label that were `Visible` would survive Characters off (it hangs off its own
-    // root, not the Characters group) and leak creature ids over an empty map.
+    // Born with the Characters overlay's visibility, not a fixed one: a root
+    // that were `Visible` would render for the frame before
+    // [`sync_creature_visibility`] hides it, leaking creature ids over an
+    // empty map (it hangs off its own root, not the Characters group).
+    let target = if viewer.is_on(Overlay::Characters) {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
     let root = commands
-        .spawn((LabelRoot, Transform::IDENTITY, Visibility::Hidden))
+        .spawn((LabelRoot, Transform::IDENTITY, target))
         .id();
     sim.label_root = Some(root);
     let mut children = Vec::new();
@@ -1261,13 +1332,22 @@ fn spawn_creatures(
     mut sim: ResMut<SimulationResource>,
     spawns: Res<CreatureSpawns>,
     scene_depth: Res<SceneDepth>,
+    viewer: Res<Viewer>,
 ) {
     if sim.creatures_spawned || sim.sim.is_none() {
         return;
     }
     sim.creatures_spawned = true;
+    // Same rule as the label root: born visible only when the Characters
+    // overlay is on, so a map change with characters off shows nothing for a
+    // frame (review #68).
+    let target = if viewer.is_on(Overlay::Characters) {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
     let root = commands
-        .spawn((CreatureRoot, Transform::IDENTITY, Visibility::Visible))
+        .spawn((CreatureRoot, Transform::IDENTITY, target))
         .id();
     sim.creature_root = Some(root);
     for plan in &spawns.plans {
@@ -1298,16 +1378,32 @@ fn spawn_creatures(
 /// the walk frames' own offsets (docs/k1/movement.md, "Step duration"), so sliding
 /// the node along with them would double the travel and snap the image back by a
 /// cell at every cycle wrap.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn sync_creature_nodes(
     sim: Res<SimulationResource>,
     scene_depth: Res<SceneDepth>,
     spawns: Res<CreatureSpawns>,
     clock: Res<Clock>,
-    mut nodes: Query<(&mut CreatureNode, &mut Transform, &GlobalTransform)>,
-    // Disjoint from `nodes`: without `Without` Bevy cannot prove an entity never
-    // carries both, so the two `&mut Transform` queries would panic (B0001).
-    sprites: Query<(&CreatureSprite, &GlobalTransform)>,
-    mut labels: Query<(&CreatureLabel, &mut Transform), Without<CreatureNode>>,
+    // `Without<CreatureSprite>` on top of `Without<CreatureShadow>`: the node
+    // now writes the `Transform` the `sprites` query reads, and without the
+    // filter Bevy cannot prove an entity never carries both (B0001).
+    mut nodes: Query<
+        (&mut CreatureNode, &mut Transform),
+        (Without<CreatureShadow>, Without<CreatureSprite>),
+    >,
+    // `Without<CreatureShadow>` keeps shadows out: they carry `CreatureSprite`
+    // too, and this query reads the `Transform` the `shadows` query writes.
+    sprites: Query<(&CreatureSprite, &Transform), Without<CreatureShadow>>,
+    // `CreatureShadow` marks only the shadow children, disjoint from the nodes.
+    mut shadows: Query<(&CreatureShadow, &ChildOf, &mut Transform)>,
+    mut labels: Query<
+        (&CreatureLabel, &mut Transform),
+        (
+            Without<CreatureNode>,
+            Without<CreatureShadow>,
+            Without<CreatureSprite>,
+        ),
+    >,
 ) {
     let Some(ref simulation) = sim.sim else {
         return;
@@ -1316,28 +1412,36 @@ fn sync_creature_nodes(
     let drawn: HashMap<usize, (i32, i32)> =
         states.iter().map(|state| (state.id, state.pixel)).collect();
     // A label rides above the body image, not the cell: during a step the image
-    // is a cell away from the node, carried there by its walk frames.
+    // is a cell away from the node, carried there by its walk frames. The world
+    // position is the node's — this frame's cell, which the loop below writes —
+    // plus the sprite's local offset, which `apply_animators` has just updated;
+    // the sprite's own `GlobalTransform` would still carry the previous frame
+    // (propagation runs at the end of the update, review #68).
     let mut label_at: HashMap<usize, (f32, f32, usize)> = HashMap::new();
-    for (tag, global) in &sprites {
+    for (tag, transform) in &sprites {
         if tag.is_shadow {
             continue;
         }
-        let translation = global.translation();
+        let Some(&(x, y)) = drawn.get(&tag.creature_id) else {
+            continue;
+        };
+        let translation = transform.translation;
+        let (world_x, world_y) = (x as f32 + translation.x, -(y as f32) + translation.y);
         label_at
             .entry(tag.creature_id)
             .and_modify(|existing| {
                 // Keep the lowest layer index: the body, not the equipment.
                 if tag.layer < existing.2 {
-                    *existing = (translation.x, translation.y, tag.layer);
+                    *existing = (world_x, world_y, tag.layer);
                 }
             })
-            .or_insert((translation.x, translation.y, tag.layer));
+            .or_insert((world_x, world_y, tag.layer));
     }
     let label_at: HashMap<usize, (f32, f32)> = label_at
         .into_iter()
         .map(|(id, (x, y, _))| (id, (x, y)))
         .collect();
-    for (mut node, mut transform, global) in &mut nodes {
+    for (mut node, mut transform) in &mut nodes {
         let id = node.id as usize;
         let Some(&(x, y)) = drawn.get(&id) else {
             continue;
@@ -1351,10 +1455,13 @@ fn sync_creature_nodes(
         if creature_debug()
             && let Some(state) = states.iter().find(|state| state.id == id)
         {
-            let global = global.translation();
+            // The world position is the `Transform` just written: the node's
+            // parent is the identity root, and this frame's `GlobalTransform`
+            // is only propagated at the end of the update, so reading it here
+            // would log the previous frame (review #68).
             info!(
                 "creature #{id} tick={} cell=({},{}) from=({},{}) to={:?} elapsed={}/{} \
-                 pixel=({},{}) render=({:.1},{:.1}) z={:.4} global=({:.1},{:.1}) \
+                 pixel=({},{}) render=({:.1},{:.1}) z={:.4} \
                  sim_dir={:?} walk={:?}",
                 clock.ticks,
                 state.cell.0,
@@ -1369,11 +1476,22 @@ fn sync_creature_nodes(
                 transform.translation.x,
                 transform.translation.y,
                 transform.translation.z,
-                global.x,
-                global.y,
                 state.direction,
                 state.walk_state,
             );
+        }
+    }
+    // The shadow rides the node but must hold the fixed shadow band in world z:
+    // its local z cancels the node's stack z, which `update_creature_depth`
+    // rewrites whenever the bottom edge moves (review #68).
+    let shadow_z = scene_depth.map.shadow_z();
+    for (_, parent, mut transform) in &mut shadows {
+        let Ok(node) = nodes.get(parent.0) else {
+            continue;
+        };
+        let target = shadow_z - node.1.translation.z;
+        if transform.translation.z != target {
+            transform.translation.z = target;
         }
     }
     for (label, mut transform) in &mut labels {
@@ -1402,7 +1520,7 @@ fn sync_creature_animation(
     mut anim: ResMut<CreatureAnim>,
     spawns: Res<CreatureSpawns>,
     clock: Res<Clock>,
-    mut sprites: Query<(&CreatureSprite, &mut Animator, &Transform, &GlobalTransform)>,
+    mut sprites: Query<(&CreatureSprite, &mut Animator, &Transform)>,
 ) {
     let Some(ref simulation) = sim.sim else {
         return;
@@ -1422,7 +1540,7 @@ fn sync_creature_animation(
             )
         })
         .collect();
-    for (tag, mut animator, transform, global) in &mut sprites {
+    for (tag, mut animator, transform) in &mut sprites {
         let Some(&(walking, direction, elapsed)) = facing.get(&tag.creature_id) else {
             continue;
         };
@@ -1440,10 +1558,24 @@ fn sync_creature_animation(
         let clip = select_clip(layer, walking, direction);
         let Some(clip) = clip else { continue };
         if creature_debug() {
-            let global = global.translation();
+            let local = transform.translation;
+            // The world position as it will be drawn: the current tick's cell
+            // pixel, which `sync_creature_nodes` writes to the node this frame,
+            // plus this frame's local offset. The sprite's own `GlobalTransform`
+            // still holds the previous frame here — propagation runs at the end
+            // of the update (review #68).
+            let (world_x, world_y) = states
+                .iter()
+                .find(|state| state.id == tag.creature_id)
+                .map_or((local.x, local.y), |state| {
+                    (
+                        state.pixel.0 as f32 + local.x,
+                        -(state.pixel.1 as f32) + local.y,
+                    )
+                });
             info!(
                 "creature #{} {} base={} corner={:?} shown={:?} anchor=({},{}) phase={} \
-                 local=({:.1},{:.1}) global=({:.1},{:.1}) walking={walking} dir={direction}",
+                 local=({:.1},{:.1}) world=({:.1},{:.1}) walking={walking} dir={direction}",
                 tag.creature_id,
                 if tag.is_shadow { "shadow" } else { "body" },
                 clip.base,
@@ -1452,10 +1584,10 @@ fn sync_creature_animation(
                 animator.x,
                 animator.y,
                 animator.phase,
-                transform.translation.x,
-                transform.translation.y,
-                global.x,
-                global.y,
+                local.x,
+                local.y,
+                world_x,
+                world_y,
             );
         }
         if Arc::ptr_eq(&animator.sequence, &clip.sequence) && !restep.contains(&tag.creature_id) {
@@ -1630,6 +1762,27 @@ mod tests {
         // cycle keeps running from where the step opened it.
         let later = [state((58, 16), Some((116, 32)), 7, 12)];
         assert!(anim.observe_steps(&later).is_empty());
+    }
+
+    #[test]
+    fn a_restarted_step_asks_for_reanchoring_too() {
+        // `World::cancel_step` rolls a step back and the same `(from, to)` may
+        // be ordered again: the key is unchanged, but a falling `step_elapsed`
+        // is a new step and must re-anchor — otherwise the cycle keeps running
+        // mid-step and the image wraps a cell behind the creature (review #68).
+        let mut anim = CreatureAnim::default();
+        anim.observe_steps(&[state((58, 16), Some((116, 32)), 1, 12)]);
+        anim.observe_steps(&[state((58, 16), Some((116, 32)), 8, 12)]);
+        assert_eq!(
+            anim.observe_steps(&[state((58, 16), Some((116, 32)), 1, 12)]),
+            [0].into_iter().collect::<HashSet<_>>(),
+            "elapsed falling under an unchanged key is a restarted step"
+        );
+        assert!(
+            anim.observe_steps(&[state((58, 16), Some((116, 32)), 2, 12)])
+                .is_empty(),
+            "the restarted step anchors once"
+        );
     }
 
     #[test]
@@ -2636,6 +2789,67 @@ mod tests {
         assert_eq!(tracker.sim_ticks, 0, "the timeline restarts at the reset");
     }
 
+    /// A map built with the Characters overlay off must show neither creatures
+    /// nor labels for a frame: both roots are born hidden, not fixed-visible
+    /// for the sync system to catch up a frame late (review #68). Switching
+    /// the overlay on afterwards shows them through the usual sync.
+    #[test]
+    fn roots_are_born_hidden_when_characters_are_off() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let sim_resource = SimulationResource {
+            sim: game.simulation(map_ref, SIM_SEED).ok(),
+            ..Default::default()
+        };
+        assert!(sim_resource.sim.is_some(), "the map must give a simulation");
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(sim_resource)
+            .init_resource::<CreatureSpawns>()
+            .init_resource::<SceneDepth>()
+            .insert_resource(viewer([false, false, false, false]))
+            .add_systems(
+                Update,
+                (
+                    spawn_creature_labels,
+                    spawn_creatures,
+                    sync_creature_visibility,
+                )
+                    .chain(),
+            );
+        app.update();
+
+        let sim = app.world().resource::<SimulationResource>();
+        let creature_root = sim.creature_root.expect("the creature root spawned");
+        let label_root = sim.label_root.expect("the label root spawned");
+        assert_eq!(
+            *app.world().get::<Visibility>(creature_root).unwrap(),
+            Visibility::Hidden,
+            "nodes born visible would flash for a frame over a characters-off map"
+        );
+        assert_eq!(
+            *app.world().get::<Visibility>(label_root).unwrap(),
+            Visibility::Hidden,
+            "labels born visible would leak ids over a characters-off map"
+        );
+
+        app.world_mut()
+            .resource_mut::<Viewer>()
+            .set(Overlay::Characters, true);
+        app.update();
+        assert_eq!(
+            *app.world().get::<Visibility>(creature_root).unwrap(),
+            Visibility::Inherited
+        );
+        assert_eq!(
+            *app.world().get::<Visibility>(label_root).unwrap(),
+            Visibility::Inherited
+        );
+    }
+
     /// `sync_creature_nodes` reads two `&mut Transform` queries in one system.
     /// Bevy panics (`B0001`) unless they are proven disjoint, and that panic used
     /// to crash the running viewer the first frame the system ran — the movement
@@ -2693,7 +2907,11 @@ mod tests {
         let game = Game::open(&dir).unwrap();
         let mut cache = TextureCache::default();
         let mut images = Assets::<Image>::default();
-        let anim = build_creature_anim(&game, map_ref, &mut cache, &mut images);
+        let mut anim_problems = Vec::new();
+        let anim = build_creature_anim(&game, map_ref, &mut cache, &mut images, &mut anim_problems);
+        for problem in &anim_problems {
+            println!("walk diagnostics: {problem}");
+        }
         let scene = game.scene(map_ref, &SceneOptions::ALL).unwrap();
         let mut sim_resource = SimulationResource::default();
         sim_resource.sim = game.simulation(map_ref, SIM_SEED).ok();
@@ -2807,6 +3025,9 @@ mod tests {
         }
 
         let mut walking_samples = 0usize;
+        let mut judged_steps = 0usize;
+        let mut tick_distribution: std::collections::BTreeMap<u32, usize> =
+            std::collections::BTreeMap::new();
         for (id, samples) in &history {
             let mut index = 0;
             while index < samples.len() {
@@ -2819,10 +3040,13 @@ mod tests {
                     index += 1;
                 }
                 let segment = &samples[start..index];
-                if segment.len() < 12 {
-                    continue; // shorter than a step: says nothing about boundaries
+                if segment.len() < 2 {
+                    continue; // a lone sample says nothing about boundaries
                 }
                 walking_samples += segment.len();
+                for sample in segment {
+                    *tick_distribution.entry(sample.ticks).or_default() += 1;
+                }
                 for window in segment.windows(2) {
                     let (first, second) = (&window[0], &window[1]);
                     let jump = ((second.body.0 - first.body.0).powi(2)
@@ -2860,10 +3084,16 @@ mod tests {
                     let last = &segment[position - 1];
                     // Only a step seen from its first tick to its last can be
                     // judged on total travel; a partial view measures nothing.
+                    // Short-cycle gaits (1-2 tick steps, `movement::pace`) carry
+                    // no glide in their frames at all — the image snaps cell to
+                    // cell there exactly as in the original — so travel is judged
+                    // only for gaits long enough to have it.
                     if let Some(to) = first
                         .to
                         .filter(|_| first.elapsed == 1 && last.elapsed == last.ticks)
+                        .filter(|_| first.ticks >= 6)
                     {
+                        judged_steps += 1;
                         // Corners are already map space: a complete step must
                         // land the image corner on the next cell.
                         let travelled = (last.body.0 - first.body.0, last.body.1 - first.body.1);
@@ -2906,6 +3136,281 @@ mod tests {
         assert!(
             walking_samples >= 60,
             "no creature walked a step's length in 600 ticks: {walking_samples} samples"
+        );
+        // Anti-vacuous-green: the travel assertions above only run on complete
+        // steps (elapsed 1..ticks); a counter that never completed would leave
+        // the test silently unchecked.
+        assert!(
+            judged_steps >= 5,
+            "only {judged_steps} complete steps judged - the travel assertions \
+             barely ran; step tick distribution: {tick_distribution:?}"
+        );
+        println!(
+            "continuity: judged {judged_steps} complete steps, {walking_samples} \
+             walking samples, step tick distribution {tick_distribution:?}"
+        );
+    }
+
+    /// A reset through the real button must leave nothing half-stepped: every
+    /// node on its home cell pixel, every body animator back on the resting
+    /// sequence, every shadow holding the shadow band around its node, every
+    /// label above its body — all without the static scene being rebuilt (the
+    /// roots and sprites are the same entities, review #68).
+    #[test]
+    fn a_reset_returns_nodes_animators_shadows_and_labels_home() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let mut cache = TextureCache::default();
+        let mut images = Assets::<Image>::default();
+        let anim = build_creature_anim(&game, map_ref, &mut cache, &mut images, &mut Vec::new());
+        let scene = game.scene(map_ref, &SceneOptions::ALL).unwrap();
+        let simulation = game.simulation(map_ref, SIM_SEED).ok();
+        let initial = home(simulation.as_ref().unwrap());
+        let initial_by_id: HashMap<usize, (i32, i32)> = initial.iter().copied().collect();
+        let sim_resource = SimulationResource {
+            initial_pixels: simulation.as_ref().unwrap().initial_pixels(),
+            sim: simulation,
+            ..Default::default()
+        };
+        let spawns = build_creature_spawns(&scene, &cache, &anim, &sim_resource.initial_pixels);
+        assert!(!spawns.plans.is_empty(), "the map must give creatures");
+        let plan_count = spawns.plans.len();
+        let plan_ids: HashSet<usize> = spawns.plans.iter().map(|plan| plan.id as usize).collect();
+        let depth = build_scene_depth(&scene, &cache);
+        let shadow_z = depth.shadow_z();
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::transform::TransformPlugin,
+            AnimPlugin::new(TICK_MS as f32),
+        ))
+        .insert_resource(GameResource(game))
+        .insert_resource(Viewer {
+            maps: vec![map_ref],
+            selected: 0,
+            overlays: DEFAULT_OVERLAYS,
+            playback: PlayState::Paused,
+        })
+        .insert_resource(images)
+        .insert_resource(sim_resource)
+        .insert_resource(SimTickTracker::default())
+        .insert_resource(SceneDepth { map: depth })
+        .insert_resource(anim)
+        .insert_resource(spawns)
+        .add_systems(
+            Update,
+            (
+                advance_simulation,
+                spawn_creature_labels,
+                spawn_creatures,
+                sync_creature_animation.in_set(CreatureSet::Swap),
+                sync_creature_nodes.in_set(CreatureSet::Nodes),
+            )
+                .chain()
+                .after(AnimSet::Clock),
+        )
+        .add_observer(reset_positions)
+        .configure_sets(
+            Update,
+            (
+                AnimSet::Sprites.after(CreatureSet::Swap),
+                CreatureSet::Nodes.after(AnimSet::Sprites),
+            ),
+        );
+        let button = app.world_mut().spawn(ResetPositions).id();
+        app.world_mut()
+            .resource_mut::<Clock>()
+            .goto(PlayState::Paused);
+
+        // Walk somebody off its cell first: resetting a standing world proves
+        // nothing about half-finished steps.
+        let mut left_home = false;
+        for tick in 0..200u64 {
+            app.world_mut().resource_mut::<Clock>().ticks = tick;
+            app.update();
+            let sim = app.world().resource::<SimulationResource>();
+            let states = sim.sim.as_ref().unwrap().states();
+            left_home |= states
+                .iter()
+                .any(|state| initial_by_id.get(&state.id) != Some(&state.pixel));
+        }
+        assert!(left_home, "200 ticks must move at least one creature");
+        let (root_before, label_root_before) = {
+            let sim = app.world().resource::<SimulationResource>();
+            (sim.creature_root, sim.label_root)
+        };
+
+        // The button, pressed once: the observer rebuilds the simulation and a
+        // following frame re-reads it. The clock stands still across the press,
+        // so the fresh simulation is judged at its own tick 0.
+        app.world_mut().resource_mut::<Clock>().ticks = 200;
+        app.world_mut().trigger(Activate { entity: button });
+        app.update();
+
+        let mut nodes = app.world_mut().query::<(&CreatureNode, &Transform)>();
+        let mut shadows = app
+            .world_mut()
+            .query::<(&CreatureShadow, &ChildOf, &Transform)>();
+        let mut sprites = app.world_mut().query::<(&CreatureSprite, &Animator)>();
+        let mut labels = app.world_mut().query::<(&CreatureLabel, &Transform)>();
+        let mut bodies = app
+            .world_mut()
+            .query::<(&CreatureSprite, &GlobalTransform)>();
+        let world = app.world();
+        let sim = world.resource::<SimulationResource>();
+        assert_eq!(
+            sim.creature_root, root_before,
+            "the nodes are not respawned"
+        );
+        assert_eq!(
+            sim.label_root, label_root_before,
+            "the labels are not respawned"
+        );
+        let states = sim.sim.as_ref().unwrap().states();
+        assert!(!states.is_empty());
+        for state in &states {
+            assert!(!state.moving, "creature #{} still walking", state.id);
+            assert_eq!(
+                initial_by_id[&state.id], state.pixel,
+                "creature #{} not home",
+                state.id
+            );
+        }
+
+        // Every node sits on its initial pixel: live creatures on the home cell
+        // of the fresh simulation, and creatures the world refused to place on
+        // their record cell — the documented fallback, which a reset must not
+        // disturb either. A state without a node (no scene pieces) and a node
+        // without a state (unplaced) are both legitimate, so the count is
+        // judged against the plans, not against `states`.
+        let pixels: HashMap<usize, (i32, i32)> = sim.initial_pixels.iter().copied().collect();
+        let node_ids: Vec<usize> = nodes
+            .iter(world)
+            .map(|(node, _)| node.id as usize)
+            .collect();
+        assert_eq!(
+            node_ids.len(),
+            plan_count,
+            "the reset neither spawns nor drops creature nodes"
+        );
+        for (node, transform) in nodes.iter(world) {
+            let id = node.id as usize;
+            let Some(&(x, y)) = pixels.get(&id) else {
+                continue;
+            };
+            assert_eq!(
+                (transform.translation.x, transform.translation.y),
+                (x as f32, -(y as f32)),
+                "node #{id} off its initial pixel after the reset",
+            );
+        }
+        for state in &states {
+            if plan_ids.contains(&state.id) {
+                assert!(
+                    node_ids.contains(&state.id),
+                    "live creature #{} lost its node",
+                    state.id
+                );
+            }
+        }
+
+        // The shadow band survives the depth recompute a reset triggers.
+        let mut shadow_count = 0;
+        for (_, parent, shadow) in shadows.iter(world) {
+            let Some(node) = world.get::<Transform>(parent.0) else {
+                continue;
+            };
+            assert!(
+                (shadow.translation.z + node.translation.z - shadow_z).abs() < 1e-3,
+                "shadow of a reset creature left the band: local {} + node {}",
+                shadow.translation.z,
+                node.translation.z
+            );
+            shadow_count += 1;
+        }
+        assert!(shadow_count > 0, "the map must give shadows to judge");
+
+        // Every creature stands after the reset, so every body sits on its
+        // resting sequence again: a stale walk clip would keep the cycle of a
+        // step that no longer exists.
+        let creature_anim = world.resource::<CreatureAnim>();
+        let mut judged = 0;
+        for (tag, animator) in sprites.iter(world) {
+            let Some(sequences) = creature_anim.creatures.get(&tag.creature_id) else {
+                continue;
+            };
+            let layer = if tag.is_shadow {
+                &sequences.shadow
+            } else {
+                let Some(layer) = sequences.body.get(&tag.layer) else {
+                    continue;
+                };
+                layer
+            };
+            let Some(rest) = &layer.rest else { continue };
+            assert!(
+                Arc::ptr_eq(&animator.sequence, &rest.sequence),
+                "creature #{} layer {} (shadow: {}) is on a foreign sequence after the reset",
+                tag.creature_id,
+                tag.layer,
+                tag.is_shadow
+            );
+            judged += 1;
+        }
+        assert!(judged > 0, "the map must give animated sprites to judge");
+
+        // Labels ride the body image again, in the same propagated frame the
+        // sprite itself draws at.
+        let mut label_count = 0;
+        for (label, transform) in labels.iter(world) {
+            let Some((_, global)) = bodies.iter(world).find(|(tag, _)| {
+                tag.creature_id == label.creature_id && !tag.is_shadow && tag.layer == 0
+            }) else {
+                continue;
+            };
+            let body = global.translation();
+            assert!(
+                (transform.translation.x - body.x).abs() < 1e-3
+                    && (transform.translation.y - (body.y - LABEL_OFFSET_Y)).abs() < 1e-3,
+                "label #{} left its body: label {:?}, body {:?}",
+                label.creature_id,
+                transform.translation,
+                body
+            );
+            label_count += 1;
+        }
+        assert!(label_count > 0, "the map must give labels to judge");
+    }
+
+    /// The cost of the backward `Step` after a long session: replaying from
+    /// seed to an epoch-relative target is the only way back (no reverse tick),
+    /// so a 30-minute session's rewind must stay sub-second in the shipped
+    /// (release) build — measured 306 ms, 10 µs/tick, on an Apple M-series;
+    /// the same test build runs ~4.3 s, hence the debug-sized bound (review
+    /// #68; numbers also in docs/rust.md, "Decision: no reverse tick — replay").
+    #[test]
+    fn replaying_a_long_session_stays_a_bargain() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        const TICKS: u64 = 30_000; // 30 minutes at the 60 ms tick
+        let game = Game::open(&dir).unwrap();
+        let started = std::time::Instant::now();
+        let replayed = replay_simulation(&game, map_ref, TICKS).expect("replay builds");
+        let elapsed = started.elapsed();
+        println!(
+            "replay: {TICKS} ticks in {} ms ({} ns/tick)",
+            elapsed.as_millis(),
+            elapsed.as_nanos() / u128::from(TICKS)
+        );
+        assert!(!replayed.states().is_empty());
+        assert!(
+            elapsed.as_millis() < 10_000,
+            "a 30 000-tick replay took {elapsed:?} — the backward Step \
+             would stutter even in a debug build"
         );
     }
 

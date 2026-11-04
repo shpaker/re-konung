@@ -625,12 +625,35 @@ sets a creature's world position. `CreaturePiece` and `update_shadow_depth` are 
   tracker is pinned there — pinning it to 0 let the catch-up loop tick the fresh simulation
   a second `clock.ticks` times and every creature overshot
   (`a_backward_step_rewinds_the_simulation_to_the_clock_not_beyond_it`,
-  `replay_simulation_matches_forward_stepping`).
+  `replay_simulation_matches_forward_stepping`). Measured cost of the worst
+  rewind — a 30 000-tick (30 game-minute) session on the real first map, full
+  rules and engine per tick: 306 ms release (10.2 µs/tick), 4.3 s debug, on an
+  Apple M-series (`replaying_a_long_session_stays_a_bargain`, release numbers
+  from `cargo test --profile release`). A rewind is a one-off after the press,
+  not a per-frame cost, and a reset pins the epoch so rewinding just past it
+  replays almost nothing.
+- **Order outcomes are consumed, not dropped (P2 #4).** `Simulation::tick`
+  applies decisions through `rules::FailedOrderCooldown` (one route search per
+  `WorldRules::repath_cooldown_ticks` for a creature whose goals keep failing,
+  otherwise the re-deciding loop pays a search every tick) and keeps every
+  rejection that is not `NoRoute` in `Simulation::order_failures` — the rules
+  only aim at cells `Ground::is_free` vetted, so anything else is a bug or bad
+  data; the headless report lists them as errors and fails the run
+  (`a_driven_run_walks_a_strayed_monster_home_without_order_failures`,
+  `an_unreachable_spawn_costs_throttled_searches_not_order_failures`).
+  `initial_pixels` deliberately covers the whole roster, unplaced creatures
+  included: the original places a record wherever the file says, so such a
+  creature keeps rendering on its record cell while
+  `spawn_failures`/`order_failures` carry the refusal to the user
+  (`an_unplaced_creature_is_reported_and_keeps_its_record_cell_for_the_renderer`).
 - **Spawn refusals and the Characters overlay (P2 #9).** `Simulation::spawn_failures`
   carries every creature the world refused to place with its `WorldError` reason, and the
-  headless report prints it instead of dropping it silently. Creature labels hang on their
-  own `LabelRoot`, spawned `Hidden`; `sync_labels` shows them only while
-  `Overlay::Characters` is on, so turning creatures off also hides their names.
+  headless report prints it instead of dropping it silently. Creature nodes and labels
+  hang on their own `CreatureRoot`/`LabelRoot`, and both roots are born with the
+  Characters overlay's visibility — a fixed `Visible` showed the creatures for the frame
+  before `sync_creature_visibility` caught up after a map change
+  (`roots_are_born_hidden_when_characters_are_off`); while the overlay is off the roots
+  are `Hidden`, so turning creatures off also hides their names.
 - **Roads are unconfirmed (P2 #10).** There is no road layer in `Konung.N`: the `foot`
   grid has only `is_blocked` (`foot & 0x0F == 0x0F`). `MapPassage` is locked to exactly
   `!is_blocked` and no road/terrain preference is applied — `passage_is_the_confirmed_foot_rule_only`
