@@ -78,6 +78,151 @@ pub fn run_check(cli: &Cli, map: Option<u32>, all: bool, format: Format) -> Exit
     }
 }
 
+/// Headless-прогон симуляции: существа ходят, печатается отчёт.
+pub fn run_simulate(
+    cli: &Cli,
+    map: Option<u32>,
+    all: bool,
+    ticks: u64,
+    seed: u64,
+    format: Format,
+) -> ExitCode {
+    match simulate(cli, map, all, ticks, seed, format) {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Прогон симуляции по картам: `map` — одна, `all` — все.
+pub fn simulate(
+    cli: &Cli,
+    map: Option<u32>,
+    all: bool,
+    ticks: u64,
+    seed: u64,
+    format: Format,
+) -> Result<ExitCode, ViewerError> {
+    let game = Game::open(&cli.game_dir)?;
+    let source: MapSource = cli.source.into();
+    let available = game.maps()?;
+    let maps = if all {
+        available
+            .into_iter()
+            .filter(|m| m.source == source)
+            .collect::<Vec<_>>()
+    } else {
+        let number = map.ok_or(ViewerError::MapNotSelected)?;
+        let map_ref = MapRef { source, number };
+        if !available.contains(&map_ref) {
+            return Err(ViewerError::NoSuchMap {
+                dir: cli.game_dir.clone(),
+                map_source: source,
+                number,
+            });
+        }
+        vec![map_ref]
+    };
+    if maps.is_empty() {
+        return Err(ViewerError::NoMaps {
+            dir: cli.game_dir.clone(),
+            map_source: source,
+        });
+    }
+
+    let mut reports = Vec::new();
+    for &map_ref in &maps {
+        match game.simulation(map_ref, seed) {
+            Ok(mut sim) => {
+                let creatures = sim.creature_count();
+                let mut steps = 0usize;
+                let mut route_sets = 0usize;
+                let errors: Vec<String> = Vec::new();
+                for _ in 0..ticks {
+                    let events = sim.tick();
+                    for event in &events {
+                        match event {
+                            kn_game::movement::world::Event::StepStarted { .. } => steps += 1,
+                            kn_game::movement::world::Event::RouteSet { .. } => route_sets += 1,
+                            _ => {}
+                        }
+                    }
+                }
+                let states = sim.states();
+                let movers = states.iter().filter(|s| s.moving).count();
+                reports.push(SimReport {
+                    source: map_ref.source,
+                    number: map_ref.number,
+                    creatures,
+                    movers,
+                    steps,
+                    route_sets,
+                    tick: ticks,
+                    errors,
+                });
+            }
+            Err(e) => {
+                reports.push(SimReport {
+                    source: map_ref.source,
+                    number: map_ref.number,
+                    creatures: 0,
+                    movers: 0,
+                    steps: 0,
+                    route_sets: 0,
+                    tick: ticks,
+                    errors: vec![e.to_string()],
+                });
+            }
+        }
+    }
+
+    match format {
+        Format::Text => {
+            for r in &reports {
+                println!(
+                    "{} {:>2}: {} creatures, {} moved, {} steps, {} routes, {} ticks, {} errors",
+                    match r.source {
+                        MapSource::Game => "game    ",
+                        MapSource::Tutorial => "tutorial",
+                    },
+                    r.number,
+                    r.creatures,
+                    r.movers,
+                    r.steps,
+                    r.route_sets,
+                    r.tick,
+                    r.errors.len(),
+                );
+                for e in &r.errors {
+                    println!("  - {e}");
+                }
+            }
+        }
+        Format::Json => println!("{}", serde_json::to_string_pretty(&reports)?),
+    }
+
+    let ok = reports.iter().all(|r| r.errors.is_empty());
+    Ok(if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
+#[derive(serde::Serialize)]
+struct SimReport {
+    source: MapSource,
+    number: u32,
+    creatures: usize,
+    movers: usize,
+    steps: usize,
+    route_sets: usize,
+    tick: u64,
+    errors: Vec<String>,
+}
+
 /// Отчёт по картам источника: `map` — одна карта, `all` — все.
 pub fn check(
     cli: &Cli,
