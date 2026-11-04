@@ -57,8 +57,9 @@ exist. Rows that measure content rather than presence (new monsters, new locatio
 separate campaigns) carry a description instead of a mark. Where a cell rests on our own
 files, it says so; those facts come from
 `original/k1/` (never committed), from our parsers, and from the read-only reference
-[Marisa-Chan/Slavik](https://github.com/Marisa-Chan/Slavik) (cited by file and line, its
-code is not copied). Sources are attached per table; the same list with reachability
+[Marisa-Chan/Slavik](https://github.com/Marisa-Chan/Slavik) (cited by file and line as of
+the pinned commit [`cf5a332`](https://github.com/Marisa-Chan/Slavik/tree/cf5a3320dc93859e3dc51f37ee823fed30f399b6),
+its code is not copied). Sources are attached per table; the same list with reachability
 status is at the bottom.
 
 ### 1. Characters and progression
@@ -128,7 +129,7 @@ our own data ([game-state.md](k1/formats/game-state.md), [creatures.md](k1/creat
 | Caves and underground locations | ? | ? | ? |
 | Hidden items and caches | Да — a cache record exists, and a cache with a negative gold value is hidden from view; chests are the same records ([game-state.md](k1/formats/game-state.md)) | ≈ — guides describe buried and planted items that stay where left | ≈ |
 | Dropped items survive leaving the location | ≈ — the readme shipped with the ENG edition lists item persistence after the party leaves a location as a difference of the network mode, which implies the single-player default removes them | Да — plant roots, leave the location, come back later to find the plant grown, permanently ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
-| Game speed control | Да — numpad `+`/`-` change a speed multiplier that runs extra update passes per frame (our own observation of the shipped readme; [Slavik `game_input.cpp:183-190`](https://github.com/Marisa-Chan/Slavik), `game_play.cpp:122-135`) | ≈ none — "the speed is always the same" ([PandoraKvest](https://pandorakvest.ru/text/49)) | ? |
+| Game speed control | Да — numpad `+`/`-` change a speed multiplier that runs extra update passes per frame (our own observation of the shipped readme; [Slavik `game_input.cpp:183-190`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_input.cpp#L183-L190), [`game_play.cpp:122-135`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L122-L135)) | ≈ none — "the speed is always the same" ([PandoraKvest](https://pandorakvest.ru/text/49)) | ? |
 
 **K2-era additions.** Running, the world map with its random encounters, ships and naval
 battles are all documented as things the second part introduced, not as things the first
@@ -203,9 +204,9 @@ our own data ([game-state.md](k1/formats/game-state.md)).
 
 | Mechanic | «Князь 1» | «Князь 2» | «Князь 2.5» |
 |---|---|---|---|
-| Day/night cycle | Да — a day counter runs through light phases; a full cycle is 21600 ticks, about 21.6 minutes at the 60 ms tick ([Slavik `game.cpp:1764-1890`, `game.h:28`](https://github.com/Marisa-Chan/Slavik), [movement.md](k1/movement.md) for the tick) | Да — a day/night mode that can be switched on and off ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
+| Day/night cycle | Да — a day counter runs through light phases; a full cycle is 21600 ticks, about 21.6 minutes at the 60 ms tick ([Slavik `game.cpp:1764-1890`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L1764-L1890), [`game.h:28`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.h#L28), [movement.md](k1/movement.md) for the tick) | Да — a day/night mode that can be switched on and off ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
 | Lighting changes with the hour | Да — light is added to ground tiles from the evening phases of the cycle ([lights-res.md](k1/formats/lights-res.md)) | Да — guides complain about pitch darkness at night ([PandoraKvest](https://pandorakvest.ru/text/49)) | ≈ |
-| Permanent-day option | ≈ — a configuration flag read from the saved options gates the lighting computation ([Slavik `game.cpp:120`, `game.cpp:1776`, `game.h:1464`](https://github.com/Marisa-Chan/Slavik)) | Да — turning the day/night change off in the options keeps it daytime all the time ([gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
+| Permanent-day option | ≈ — a configuration flag read from the saved options gates the lighting computation ([Slavik `game.cpp:120`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L120), [`game.cpp:1776`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L1776), [`game.h:1464`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.h#L1464)) | Да — turning the day/night change off in the options keeps it daytime all the time ([gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
 | Night affects ordinary NPCs | ? | Да — civilians refuse to talk late at night, while the main characters are ready to talk at any hour ([PandoraKvest](https://pandorakvest.ru/text/49), [gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
 | Traders unavailable at night | ? | Да — part of the population is unreachable at night (the same civilian restriction) | ≈ |
 | Creatures or spirits appear at night | ? | Да — a spirit by the grave appears only at night, and only with the day/night mode switched on ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
@@ -232,8 +233,8 @@ our own data ([game-state.md](k1/formats/game-state.md), [lights-res.md](k1/form
 
 | Mechanic | «Князь 1» | «Князь 2» | «Князь 2.5» |
 |---|---|---|---|
-| Plot differs per hero | Да — each hero has his own starting map and his own parties, caches and exits ([game-state.md](k1/formats/game-state.md)) | Да — six heroes across three peoples ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)); one hero's party admits only men, another's only women | ≈ — 4 heroes with their own lines ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) |
-| Quest variety | ≈ — quests live outside the starting state, in `QUEST*.RES`, and dialogues are chosen by a record byte ([game-state.md](k1/formats/game-state.md)) | Да — main and side quests, "not always of one type" ([PandoraKvest](https://pandorakvest.ru/text/49)) | Да — 2.5 advertises more than 100 locations and more than 1000 game scenes ([SoftClub 2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy), [StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy)) |
+| Plot differs per hero | ≈ — the starting states differ per hero in our own data: own starting map, parties, caches and exits ([game-state.md](k1/formats/game-state.md)); a plot-level difference beyond the opening is not stated by a cited source | ≈ — six heroes across three peoples ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)); one hero's party admits only men, another's only women — a distinct plot per hero is not stated by a cited source | ≈ — 4 heroes with their own lines ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) |
+| Quest variety | ≈ — quests live outside the starting state, in `QUEST*.RES`, and dialogues are chosen by a record byte ([game-state.md](k1/formats/game-state.md)); the variety of quest types itself is unconfirmed | Да — main and side quests, "not always of one type" ([PandoraKvest](https://pandorakvest.ru/text/49)) | ≈ — inherited from 2; the advertised more than 100 locations and more than 1000 game scenes are a publisher content-scale claim and do not speak to quest diversity ([SoftClub 2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy), [StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy)) |
 | Reputation changes NPCs and dialogue | ≈ none | ≈ none | Да ([SoftClub 2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy), [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) |
 | Several endings | ? | ? | Да — several different endings ([SoftClub 2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy)) |
 | Voiced dialogue | ? | ? | ? |
@@ -252,7 +253,7 @@ our own data ([game-state.md](k1/formats/game-state.md)).
 |---|---|---|---|
 | Network mode | Да — a LAN/DirectPlay mode shipped with the ENG edition (`LAN_KONG.EXE`, `SERVER`, `Servers.cfg`); the RUS edition carries only `CLIENT.EXE`, so the mode is edition-specific (our own observation, [editions.md](k1/editions.md)); up to 16 players over three peoples in an amulet-carry mode, with its own party cap of two companions and persistent dropped items (our own observation of the shipped readme); official servers closed long ago ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | ≈ none — the series table marks network play as absent ([gospitaliers series page](https://gospitaliers.narod.ru/knyaz_opisanie.htm)) | ≈ none — same table; the store card lists it as single-player ([StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy)) |
 | Supported resolutions | Да — 640×480 and 800×600: interface resources exist per language for both sizes (`MENU640R/E/T.RES`, `MENU800R/E/T.RES`, and the same for `INTO`, `INTR`, `ME`, `NEW`, `NEWH`, `PLAY`, `SAVE`), and the shipped options menu offers a resolution setting (our own observation); the original topped out at 800×600 ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | ≈ 1024×768 — the publisher's minimum hardware line asks for a card supporting 1024×768 at 16 bit ([SoftClub](https://www.softclub.ru/games/pc/19815-knyaz-2)); the review only says the resolution went up ([PandoraKvest](https://pandorakvest.ru/text/49)) | ≈ 1024×768 — assumed from the base game, unconfirmed |
-| Separate story campaigns | Да — three heroes ([game-state.md](k1/formats/game-state.md)) | Да — six ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | Да — four ([gospitaliers series page](https://gospitaliers.narod.ru/knyaz_opisanie.htm)) |
+| Separate story campaigns | ≈ — three heroes with distinct starting states ([game-state.md](k1/formats/game-state.md)); the hero count alone does not establish separate campaigns | ≈ — six heroes ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)); the hero count alone does not establish separate campaigns | ≈ — four heroes ([gospitaliers series page](https://gospitaliers.narod.ru/knyaz_opisanie.htm)); the hero count alone does not establish separate campaigns |
 | Shared game base with «Князь 2» | — | the base part | Да — a standalone add-on made by a fan group on the second game's base, published by 1C, filling the gap between part 1 and part 2 ([gospitaliers series page](https://gospitaliers.narod.ru/knyaz_opisanie.htm), [StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy)) |
 | Save compatibility 2 / 2.5 | — | not confirmed | not confirmed |
 | Binary format compatibility | not confirmed | not confirmed | not confirmed |
@@ -310,6 +311,11 @@ Cells left at `?`, and the specific question each still needs answered:
 20. **Save and binary format compatibility** between 2 and 2.5, and between all three
     parts. See «Как проверить гипотезу об общем движке» above: this is the same open
     question, and the tables above do not settle it.
+21. **Separate story campaigns and a plot that differs per hero** — the hero counts and
+    the differing starting states are confirmed; no cited source states separate
+    campaigns or hero-specific plots for any part.
+22. **Quest variety in 2.5** — the location and scene counts are a publisher content
+    figure; a source that describes the quest types themselves is missing.
 
 ## Sources for the comparison
 
@@ -325,7 +331,7 @@ Checked 2026-11-04.
 | [DTF: history of the series](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz) | part 1 heroes and classes, the retinue of ten, classes removed in 2, running and the world map and naval battles as additions of 2, reputation and the active pause in 2.5, the 800×600 ceiling of part 1, the network mode of part 1 | reachable |
 | [PandoraKvest review of «Князь 2»](https://pandorakvest.ru/text/49) | a contemporary 2003 comparison with part 1: running versus game speed, no order-giving pause, night civilians, village building and masters, companion settings | reachable |
 | [StopGame: «Князь 2.5»](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy) | 2.5 as a fan-group production published by 1C, its premise, the new faction, scale figures, "somewhat changed character development" | reachable |
-| [Marisa-Chan/Slavik](https://github.com/Marisa-Chan/Slavik) | read-only reference for part 1: the day counter and light phases, the day/night option flag, the speed multiplier. Cited by file and line, its code is never copied | reachable |
+| [Marisa-Chan/Slavik](https://github.com/Marisa-Chan/Slavik) | read-only reference for part 1: the day counter and light phases, the day/night option flag, the speed multiplier. Cited by file and line as of the pinned commit [`cf5a332`](https://github.com/Marisa-Chan/Slavik/tree/cf5a3320dc93859e3dc51f37ee823fed30f399b6), its code is never copied | reachable |
 | [MobyGames: *Legend of the North: Konung*](https://www.mobygames.com/game/3325/legend-of-the-north-konung/) | intended for part 1 technical metadata | **not reachable** (403), nothing above relies on it |
 | [Cyclowiki: «Князь 2.5»](https://www.cyclowiki.org/wiki/) | intended for the 2.5 hero roster | **not reachable** (404), the hero count is taken from DTF and gospitaliers instead |
 | ag.ru catalogue page for «Князь 2.5» | intended for 2.5 heroes and requirements | **not reachable** (redirects to 404), nothing above relies on it |

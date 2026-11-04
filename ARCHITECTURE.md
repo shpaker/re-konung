@@ -24,8 +24,11 @@ implementations live side by side and each has its own role:
 
 Two properties hold across the whole Rust stack:
 
-- **Formats are byte-exact.** Read → write reproduces the original file byte for byte for every
-  file of every edition; the round-trip is what the tests assert.
+- **Written formats are byte-exact.** Read → write reproduces the original file byte for byte for
+  every file of every edition, and the round-trip is what the tests assert — today for the two
+  formats that are written at all: K1 maps (`Konung.N`) and starting states (`Game.N`). Formats
+  that are only read (`GRAPH.RES`, `Objects.res`, lights, flames, the EXE tables) carry no such
+  guarantee yet: byte-exact writing is the goal for them, not the current state.
 - **Data and game logic are Bevy-free.** `k1-data`, `k1-game` and `kn-game` compile and are tested
   headless, without a window or a GPU. Bevy appears only from layer 03 upward.
 
