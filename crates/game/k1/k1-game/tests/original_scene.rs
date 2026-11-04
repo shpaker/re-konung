@@ -714,11 +714,18 @@ fn poses_build_for_every_direction_and_both_locomotion_states() {
 /// FNV-1a over the debug form of every piece: composition, order, position, size,
 /// group and each animation frame with its own offsets and tick count. Written by
 /// hand so the number does not depend on a hashing implementation, and identical to
-/// the one that produced [`PRE_SPLIT_DIGESTS`].
+/// the one that produced [`PRE_SPLIT_DIGESTS`] — apart from the creature identity
+/// tag, which postdates the reference and is not part of the draw list: it prints
+/// last, so dropping it from the line reproduces the pre-tag form exactly.
 fn digest(pieces: &[scene::DrawPiece]) -> u64 {
     let mut text = String::with_capacity(pieces.len() * 96);
     for piece in pieces {
-        writeln!(&mut text, "{piece:?}").unwrap();
+        let line = format!("{piece:?}");
+        let body = line[..line.len() - 1]
+            .rsplit_once(", creature_id: ")
+            .expect("piece debug must end with the identity tag")
+            .0;
+        writeln!(&mut text, "{body} }}").unwrap();
     }
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in text.as_bytes() {
