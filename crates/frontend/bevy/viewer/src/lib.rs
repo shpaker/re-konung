@@ -14,7 +14,9 @@ use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     feathers::{
         FeathersPlugins,
-        controls::{FeathersCheckbox, FeathersSelect, OptionIndex, list_rows_from_strings},
+        controls::{
+            FeathersButton, FeathersCheckbox, FeathersSelect, OptionIndex, list_rows_from_strings,
+        },
         display::caption,
         theme::ThemeBackgroundColor,
         tokens,
@@ -23,7 +25,7 @@ use bevy::{
     picking::hover::Hovered,
     prelude::*,
     ui::Checked,
-    ui_widgets::ValueChange,
+    ui_widgets::{Activate, ValueChange},
 };
 use kn_game::simulation::{CreatureState, Simulation, WalkState};
 use kn_game::{
@@ -58,8 +60,8 @@ pub enum Overlay {
 /// виджет хранит состояние сам, а не читает его из [Viewer].
 pub const DEFAULT_OVERLAYS: [bool; 4] = [false, false, false, true];
 
-/// Включена ли анимация при запуске и стоит ли она на паузе. Согласовано с
-/// `Checked` чекбоксов `Animation` и `Paused` в [panel].
+/// Идёт ли симуляция при запуске. Согласовано с `Checked` чекбокса `Play` в
+/// [panel]: виджет хранит состояние сам, а не читает его из [Viewer].
 pub const DEFAULT_PLAYBACK: PlayState = PlayState::Playing;
 
 /// Что показывает просмотрщик. Правится интерфейсом, читается системами.
@@ -69,32 +71,24 @@ pub struct Viewer {
     pub selected: usize,
     /// Включённые оверлеи в порядке [Overlay]
     pub overlays: [bool; 4],
-    /// Воспроизведение анимации: пауза и выключение — разные состояния
+    /// Ход симуляции: `Playing` — существа двигаются, `Paused` — стоят. Это
+    /// единственный переключатель движения; выключение визуальной анимации
+    /// движение не останавливает (одного `Play`/`Pause` вместо прежних двух).
     pub playback: PlayState,
 }
 
-/// Переключатель `Animation`: выключенная анимация показывает базовый кадр (тот,
-/// что записан в данных), включённая — начинает с него же.
-pub fn set_animation(on: bool) -> PlayState {
-    if on {
+/// Часы под единственный переключатель `Play`: снятая галочка — пауза, а не
+/// выключение. В [`PlayState::Off`] часы не уходят ни одна ветка интерфейса,
+/// поэтому движение существ никогда не глохнет молча вместе с анимацией.
+pub fn playback_for(playing: bool) -> PlayState {
+    if playing {
         PlayState::Playing
     } else {
-        PlayState::Off
+        PlayState::Paused
     }
 }
 
-/// Переключатель `Paused`: держит текущий кадр, не трогая базовый. Пауза
-/// бессмысленна, когда анимации нет, и в этом случае остаётся `Off`.
-pub fn set_paused(playback: PlayState, paused: bool) -> PlayState {
-    match (playback, paused) {
-        (PlayState::Off, _) => PlayState::Off,
-        (_, true) => PlayState::Paused,
-        (_, false) => PlayState::Playing,
-    }
-}
-
-/// Клавиша воспроизведения: пауза и продолжение одним нажатием. Если анимация
-/// была выключена, клавиша её включает.
+/// Клавиша `Space`: пауза и продолжение одним нажатием.
 pub fn toggle_playback(playback: PlayState) -> PlayState {
     match playback {
         PlayState::Playing => PlayState::Paused,
@@ -164,7 +158,11 @@ pub struct Stats {
     pub error: Option<String>,
 }
 
-/// Simulation driving creature positions; recreated on map rebuild.
+/// Seed of the creature simulation: fixed so "Reset positions" reproduces the
+/// exact spawn of the first build (same seed, same map → same initial state).
+const SIM_SEED: u64 = 42;
+
+/// Simulation driving creature positions; recreated on map rebuild and on reset.
 #[derive(Resource, Default)]
 struct SimulationResource {
     sim: Option<Simulation>,
@@ -312,17 +310,15 @@ struct CreatureLabel {
 #[derive(Component)]
 struct LabelRoot;
 
-/// Переключатель воспроизведения: какой именно, видит компонент.
+/// Единственный переключатель движения симуляции (`Play`): [sync_playboxes]
+/// находит по нему чекбокс, чтобы зеркалить в него [Viewer::playback].
 #[derive(Component, Clone, Copy, Default)]
-struct PlaybackToggle(PlaybackKind);
+struct PlaybackToggle;
 
-/// Что переключает виджет воспроизведения.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-enum PlaybackKind {
-    #[default]
-    Animation,
-    Paused,
-}
+/// Кнопка "Reset positions": по ней [reset_positions] отличает свой `Activate`
+/// от активаций других кнопок (у выпадющего списка карт они тоже бывают).
+#[derive(Component, Clone, Copy, Default)]
+struct ResetPositions;
 
 /// Подпись элемента интерфейса, включающего оверлей.
 #[derive(Component, Clone, Copy, Default)]
@@ -497,7 +493,7 @@ fn panel(labels: Vec<String>, selected: usize) -> impl Scene {
             @caption("Overlays")
             --
             @FeathersCheckbox {
-                @caption: bsn! { @caption("Foot") }
+                @caption: bsn! { @caption("Walkability") }
             }
             OverlayToggle(Overlay::Foot)
             on(toggle_overlay)
@@ -509,7 +505,7 @@ fn panel(labels: Vec<String>, selected: usize) -> impl Scene {
             on(toggle_overlay)
             --
             @FeathersCheckbox {
-                @caption: bsn! { @caption("Markers") }
+                @caption: bsn! { @caption("Waypoints") }
             }
             OverlayToggle(Overlay::Markers)
             on(toggle_overlay)
@@ -521,20 +517,20 @@ fn panel(labels: Vec<String>, selected: usize) -> impl Scene {
             OverlayToggle(Overlay::Characters)
             on(toggle_overlay)
             --
-            @caption("Playback")
+            @caption("Simulation")
             --
             @FeathersCheckbox {
-                @caption: bsn! { @caption("Animation") }
+                @caption: bsn! { @caption("Play") }
             }
             Checked
-            PlaybackToggle(PlaybackKind::Animation)
+            PlaybackToggle
             on(change_playback)
             --
-            @FeathersCheckbox {
-                @caption: bsn! { @caption("Paused") }
+            @FeathersButton {
+                @caption: bsn! { @caption("Reset positions") }
             }
-            PlaybackToggle(PlaybackKind::Paused)
-            on(change_playback)
+            ResetPositions
+            on(reset_positions)
             --
             @caption("") Diagnostics
         ]
@@ -572,45 +568,39 @@ fn toggle_overlay(
     sync_checked(&mut commands, change.source, change.value);
 }
 
-/// Переключатели воспроизведения правят только состояние: сцена той же карты не
-/// перестраивается, меняются лишь часы анимации. Виджет подписывает
-/// [sync_playboxes] — иначе клик по `Paused` при выключенной анимации оставил бы
-/// чекбокс отмеченным, а `Space` не отразился бы на панели вовсе.
+/// Переключатель `Play` правит только состояние: сцена той же карты не
+/// перестраивается, меняются лишь часы симуляции. Галочку зеркалит
+/// [sync_playboxes] — иначе `Space` не отразился бы на панели, а пауза,
+/// поставленная шагом, оставила бы галочку отмеченной.
 fn change_playback(
     change: On<ValueChange<bool>>,
     toggles: Query<&PlaybackToggle>,
     mut viewer: ResMut<Viewer>,
 ) {
-    let Ok(kind) = toggles.get(change.source) else {
+    if toggles.get(change.source).is_err() {
         return;
-    };
-    viewer.playback = match kind.0 {
-        PlaybackKind::Animation => set_animation(change.value),
-        PlaybackKind::Paused => set_paused(viewer.playback, change.value),
-    };
-}
-
-/// Отмечен ли переключатель при этом состоянии.
-fn playback_checked(viewer: &Viewer, kind: PlaybackKind) -> bool {
-    match kind {
-        PlaybackKind::Animation => viewer.playback != PlayState::Off,
-        PlaybackKind::Paused => viewer.playback == PlayState::Paused,
     }
+    viewer.playback = playback_for(change.value);
 }
 
-/// Зеркалит состояние воспроизведения в чекбоксы.
+/// Отмечен ли единственный переключатель при этом состоянии: галочка стоит,
+/// пока симуляция идёт.
+fn playback_checked(viewer: &Viewer) -> bool {
+    viewer.playback == PlayState::Playing
+}
+
+/// Зеркалит ход симуляции в чекбокс `Play`.
 ///
 /// `Checkbox` в Bevy сам `Checked` не пишет (см. [sync_checked]), и пишет его
-/// только обработчик клика — а состояние правят и клавиши, и второй чекбокс
-/// (пауза невозможна при выключенной анимации). Поэтому признак берётся из
-/// `Viewer`, а не из того события, которое чекбокс послал.
+/// только обработчик клика — а состояние правят и клавиша `Space`, и шаг по
+/// кадру. Поэтому признак берётся из `Viewer`, а не из события чекбокса.
 fn sync_playboxes(
     viewer: Res<Viewer>,
     boxes: Query<(Entity, &PlaybackToggle, Has<Checked>)>,
     mut commands: Commands,
 ) {
-    for (entity, kind, checked) in &boxes {
-        let want = playback_checked(&viewer, kind.0);
+    for (entity, _, checked) in &boxes {
+        let want = playback_checked(&viewer);
         if want != checked {
             sync_checked(&mut commands, entity, want);
         }
@@ -631,8 +621,8 @@ fn playback_hotkeys(
         - i64::from(keys.just_pressed(KeyCode::Comma));
     if steps != 0 {
         // Шаг при идущем воспроизведении часы тут же увели бы кадр обратно,
-        // поэтому он ставит паузу; выключенную анимацию шаг не включает
-        viewer.playback = set_paused(viewer.playback, true);
+        // поэтому он ставит паузу
+        viewer.playback = PlayState::Paused;
         clock.step(steps);
     }
 }
@@ -713,7 +703,7 @@ fn rebuild_scene(
         problems: loaded.problems,
         error: None,
     };
-    sim_resource.sim = game.0.simulation(map_ref, 42).ok();
+    sim_resource.sim = game.0.simulation(map_ref, SIM_SEED).ok();
     sim_resource.initial_pixels = sim_resource
         .sim
         .as_ref()
@@ -840,6 +830,50 @@ fn advance_simulation(
         simulation.tick();
         tracker.last_clock_ticks += 1;
     }
+}
+
+/// Кнопка "Reset positions" возвращает существ в исходные позиции текущей карты.
+///
+/// Симуляция пересоздаётся с тем же зерном ([`SIM_SEED`]), поэтому маршруты,
+/// состояния походки и ГСЧ свежие. Карта, камера, масштаб, выбранный слой и
+/// пауза не трогаются: сцену не пересобираем и текстуры не грузим заново.
+fn reset_positions(
+    activate: On<Activate>,
+    markers: Query<&ResetPositions>,
+    game: Res<GameResource>,
+    viewer: Res<Viewer>,
+    clock: Res<Clock>,
+    mut sim: ResMut<SimulationResource>,
+    mut tracker: ResMut<SimTickTracker>,
+) {
+    if markers.get(activate.entity).is_err() {
+        return;
+    }
+    let Some(&map_ref) = viewer.maps.get(viewer.selected) else {
+        return;
+    };
+    reset_simulation(&game.0, map_ref, clock.ticks, &mut sim, &mut tracker);
+}
+
+/// Пересоздаёт симуляцию карты и ставит трекер в текущий тик часов.
+///
+/// Трекер синхронизируется с часами: свежая симуляция не должна отыграть тики,
+/// которые уже прошла старая, иначе существа мгновенно перематываются вперёд.
+/// Метки не пересоздаются — [`sync_creature_sprites`] каждый кадр переставляет
+/// их по состоянию, поэтому после сброса они сами встанут над исходными точками.
+fn reset_simulation(
+    game: &Game,
+    map_ref: MapRef,
+    clock_ticks: u64,
+    sim: &mut SimulationResource,
+    tracker: &mut SimTickTracker,
+) {
+    let Ok(simulation) = game.simulation(map_ref, SIM_SEED) else {
+        return;
+    };
+    sim.initial_pixels = simulation.initial_pixels();
+    sim.sim = Some(simulation);
+    tracker.last_clock_ticks = clock_ticks;
 }
 
 const LABEL_OFFSET_Y: f32 = 50.0;
@@ -1314,65 +1348,45 @@ mod tests {
     }
 
     #[test]
-    fn turning_animation_off_returns_to_the_base_frame() {
-        // Выключение — не пауза: оно показывает кадр из данных, и с него же
-        // продолжит воспроизведение
-        assert_eq!(set_animation(false), PlayState::Off);
-        assert_eq!(set_animation(true), PlayState::Playing);
-    }
-
-    #[test]
-    fn pause_never_overrides_a_stopped_animation() {
-        assert_eq!(set_paused(PlayState::Playing, true), PlayState::Paused);
-        assert_eq!(set_paused(PlayState::Paused, false), PlayState::Playing);
-        // Пауза вне анимации невозможна: она не должна её включить
-        assert_eq!(set_paused(PlayState::Off, true), PlayState::Off);
-        assert_eq!(set_paused(PlayState::Off, false), PlayState::Off);
-    }
-
-    #[test]
-    fn a_frame_step_pauses_a_playing_animation() {
-        // Шаг при идущем воспроизведении часы тут же увели бы кадр дальше,
-        // поэтому клавиша шага сначала ставит паузу — и не будит выключенную
-        assert_eq!(set_paused(PlayState::Playing, true), PlayState::Paused);
-        assert_eq!(set_paused(PlayState::Paused, true), PlayState::Paused);
-        assert_eq!(set_paused(PlayState::Off, true), PlayState::Off);
-    }
-
-    #[test]
-    fn space_toggles_playback_and_wakes_a_stopped_animation() {
-        assert_eq!(toggle_playback(PlayState::Playing), PlayState::Paused);
-        assert_eq!(toggle_playback(PlayState::Paused), PlayState::Playing);
-        assert_eq!(toggle_playback(PlayState::Off), PlayState::Playing);
-    }
-
-    #[test]
-    fn playback_checkboxes_mirror_the_state() {
-        for (playback, animation, paused) in [
-            (PlayState::Playing, true, false),
-            (PlayState::Paused, true, true),
-            (PlayState::Off, false, false),
-        ] {
-            let mut viewer = viewer([false; 4]);
-            viewer.playback = playback;
-            assert_eq!(
-                (
-                    playback_checked(&viewer, PlaybackKind::Animation),
-                    playback_checked(&viewer, PlaybackKind::Paused),
-                ),
-                (animation, paused),
-                "{playback:?}"
-            );
+    fn play_toggle_never_stops_the_animation_behind_the_simulation_s_back() {
+        // Единственный переключатель движения: снятая галочка — пауза, а не
+        // выключение. Ни одна ветка интерфейса не доводит часы до `Off`, иначе
+        // отключение визуальной анимации молча остановило бы движение существ.
+        assert_eq!(playback_for(true), PlayState::Playing);
+        assert_eq!(playback_for(false), PlayState::Paused);
+        assert_ne!(playback_for(false), PlayState::Off);
+        // Из любого рабочего состояния переключение остаётся в паре play/pause
+        for from in [PlayState::Playing, PlayState::Paused] {
+            assert_ne!(toggle_playback(from), PlayState::Off, "{from:?}");
         }
     }
 
     #[test]
-    fn default_playback_matches_its_checkboxes() {
-        // Совпадает с `Checked` у чекбоксов Animation и Paused в panel()
+    fn space_flips_between_playing_and_paused() {
+        assert_eq!(toggle_playback(PlayState::Playing), PlayState::Paused);
+        assert_eq!(toggle_playback(PlayState::Paused), PlayState::Playing);
+    }
+
+    #[test]
+    fn the_play_checkbox_mirrors_playing() {
+        for (playback, checked) in [
+            (PlayState::Playing, true),
+            (PlayState::Paused, false),
+            // `Off` интерфейсом не достижим, но если и возникнет — галочка снята
+            (PlayState::Off, false),
+        ] {
+            let mut viewer = viewer([false; 4]);
+            viewer.playback = playback;
+            assert_eq!(playback_checked(&viewer), checked, "{playback:?}");
+        }
+    }
+
+    #[test]
+    fn default_playback_is_playing() {
+        // Совпадает с `Checked` у чекбокса Play в panel()
         let viewer = viewer(DEFAULT_OVERLAYS);
         assert_eq!(viewer.playback, PlayState::Playing);
-        assert!(playback_checked(&viewer, PlaybackKind::Animation));
-        assert!(!playback_checked(&viewer, PlaybackKind::Paused));
+        assert!(playback_checked(&viewer));
     }
 
     /// Узлы групп и их видимость после [`sync_groups`] при этих переключателях.
@@ -1519,5 +1533,163 @@ mod tests {
         // Выключенный слой не убирает узлы: карта остаётся собранной, и её можно
         // показать обратно без пересборки
         assert_eq!(group_visibility([false; 4]).len(), all_on.len());
+    }
+
+    // --- Reset positions -----------------------------------------------------
+
+    /// First game directory with data and its first map, or `None` to skip.
+    fn game_and_first_map() -> Option<(PathBuf, MapRef)> {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../original/k1");
+        for edition in ["rus", "eng"] {
+            let dir = root.join(edition).join("game");
+            if dir.is_dir() {
+                let game = Game::open(&dir).ok()?;
+                let map_ref = *game.maps().ok()?.first()?;
+                return Some((dir, map_ref));
+            }
+        }
+        eprintln!("пропуск: нет original/k1/{{rus,eng}}/game (docs/k1/editions.md)");
+        None
+    }
+
+    fn home(sim: &Simulation) -> Vec<(usize, (i32, i32))> {
+        sim.states().iter().map(|s| (s.id, s.pixel)).collect()
+    }
+
+    #[test]
+    fn reset_returns_creatures_home_and_resyncs_the_tracker() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+
+        let mut sim = SimulationResource::default();
+        sim.sim = game.simulation(map_ref, SIM_SEED).ok();
+        sim.initial_pixels = sim.sim.as_ref().unwrap().initial_pixels();
+        sim.labels_spawned = true;
+        let root = Entity::PLACEHOLDER;
+        sim.label_root = Some(root);
+        let initial = home(sim.sim.as_ref().unwrap());
+
+        // Уводим существ: без движения проверка сброса ничего не доказала бы
+        for _ in 0..200 {
+            sim.sim.as_mut().unwrap().tick();
+        }
+        let initial_by_id: HashMap<usize, (i32, i32)> = initial.iter().copied().collect();
+        assert!(
+            home(sim.sim.as_ref().unwrap())
+                .iter()
+                .any(|(id, pixel)| initial_by_id.get(id) != Some(pixel)),
+            "за 200 тиков хотя бы один персонаж должен был сойти с места"
+        );
+
+        let mut tracker = SimTickTracker {
+            last_clock_ticks: 0,
+        };
+        // Старый трекер отстаёт от часов: сброс обязан подтянуть его к текущему
+        // тику, иначе свежая симуляция отыграет накопленное рывком
+        reset_simulation(&game, map_ref, 517, &mut sim, &mut tracker);
+        assert_eq!(
+            tracker.last_clock_ticks, 517,
+            "трекер синхронизирован с часами"
+        );
+        assert_eq!(
+            home(sim.sim.as_ref().unwrap()),
+            initial,
+            "существа вернулись домой"
+        );
+        assert!(sim.labels_spawned, "метки не пересоздаются");
+        assert_eq!(sim.label_root, Some(root), "корень меток сохранён");
+
+        // ГСЧ свежий: сброшенная симуляция повторяет только что созданную один в один
+        let mut reference = game.simulation(map_ref, SIM_SEED).unwrap();
+        for _ in 0..120 {
+            reference.tick();
+        }
+        let expected = home(&reference);
+        for _ in 0..120 {
+            sim.sim.as_mut().unwrap().tick();
+        }
+        assert_eq!(
+            home(sim.sim.as_ref().unwrap()),
+            expected,
+            "сброс заново сеет ГСЧ"
+        );
+    }
+
+    /// The reset button leaves the panel settings and the pause state alone and
+    /// does not flag a map rebuild.
+    #[test]
+    fn reset_keeps_the_panel_settings() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+
+        let mut sim = SimulationResource::default();
+        sim.sim = game.simulation(map_ref, SIM_SEED).ok();
+        sim.initial_pixels = sim.sim.as_ref().unwrap().initial_pixels();
+        let initial = home(sim.sim.as_ref().unwrap());
+        for _ in 0..200 {
+            sim.sim.as_mut().unwrap().tick();
+        }
+
+        let overlays = [true, false, true, false];
+        let mut clock = Clock::new(TICK_MS as f32);
+        clock.goto(PlayState::Paused);
+        clock.ticks = 300;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(GameResource(game))
+            .insert_resource(Viewer {
+                maps: vec![map_ref],
+                selected: 0,
+                overlays,
+                playback: PlayState::Paused,
+            })
+            .insert_resource(Rebuild { map: false })
+            .insert_resource(clock)
+            .insert_resource(sim)
+            .insert_resource(SimTickTracker {
+                last_clock_ticks: 0,
+            })
+            .add_observer(reset_positions)
+            .add_systems(Update, fire_reset);
+        app.world_mut().spawn(ResetPositions);
+
+        app.update();
+        app.update();
+
+        let sim = app.world().resource::<SimulationResource>();
+        assert_eq!(
+            home(sim.sim.as_ref().unwrap()),
+            initial,
+            "кнопка вернула существ домой"
+        );
+        assert_eq!(
+            app.world().resource::<SimTickTracker>().last_clock_ticks,
+            300,
+            "трекер подтянут к часам без рывка"
+        );
+        let viewer = app.world().resource::<Viewer>();
+        assert_eq!(viewer.overlays, overlays, "оверлеи сохранены");
+        assert_eq!(viewer.selected, 0, "карта выбрана та же");
+        assert_eq!(viewer.playback, PlayState::Paused, "пауза сохранена");
+        assert_eq!(
+            app.world().resource::<Clock>().state,
+            PlayState::Paused,
+            "часы на паузе"
+        );
+        assert!(
+            !app.world().resource::<Rebuild>().map,
+            "карта не пересобирается"
+        );
+    }
+
+    fn fire_reset(mut commands: Commands, buttons: Query<Entity, With<ResetPositions>>) {
+        for button in &buttons {
+            commands.trigger(Activate { entity: button });
+        }
     }
 }
