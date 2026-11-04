@@ -47,8 +47,23 @@ pub struct DepthMap {
 }
 
 impl DepthMap {
+    /// `stacks` are `(bottom, sort_key)` pairs of the **static** pieces a creature
+    /// must interleave with — the caller excludes the dynamic creature pieces
+    /// themselves. The input arrives in scene-draw order, not bottom order, so it
+    /// is sorted here for [`DepthMap::z_for_bottom`]'s binary search; two statics
+    /// that share a bottom collapse to one boundary at their higher sort key, so
+    /// overlapping stacks resolve to the one drawn on top and never make the
+    /// search land between them (review #68).
     pub fn build(stacks: impl Iterator<Item = (i32, f32)>, shadow_z: f32) -> DepthMap {
-        let boundaries: Vec<(i32, f32)> = stacks.collect();
+        let mut sorted: Vec<(i32, f32)> = stacks.collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        let mut boundaries: Vec<(i32, f32)> = Vec::with_capacity(sorted.len());
+        for (bottom, z) in sorted {
+            match boundaries.last_mut() {
+                Some(last) if last.0 == bottom => last.1 = last.1.max(z),
+                _ => boundaries.push((bottom, z)),
+            }
+        }
         let first_stack_z = boundaries.first().map_or(0.0, |&(_, z)| z);
         let last_stack_z = boundaries
             .last()
@@ -108,19 +123,31 @@ pub struct CreatureData {
     pub layers: Vec<LayerData>,
     pub animations: Vec<Option<LayerAnimation>>,
     pub shadow: Option<LayerData>,
+    /// Walk/rest frames for the shadow, when the original animates it; anchored on
+    /// the shadow's own local offset like the body layers.
+    pub shadow_animation: Option<LayerAnimation>,
 }
 
 fn creature_position(x: i32, y: i32) -> Vec2 {
     Vec2::new(x as f32, -(y as f32))
 }
 
-/// Spawn a creature under `parent`. Returns the creature entity.
+/// The entities a creature spawn created: the node and its ordered children, so
+/// the caller can tag each sprite with which layer it is.
+pub struct SpawnedCreature {
+    pub node: Entity,
+    /// Body and equipment children, in the order of [`CreatureData::layers`].
+    pub layers: Vec<Entity>,
+    pub shadow: Option<Entity>,
+}
+
+/// Spawn a creature under `parent`, returning its node and children.
 pub fn spawn_creature(
     commands: &mut Commands,
     parent: Entity,
     data: &CreatureData,
     depth: &DepthMap,
-) -> Entity {
+) -> SpawnedCreature {
     let pos = creature_position(data.x, data.y);
     let z = depth.z_for_bottom(data.bottom);
 
@@ -135,7 +162,8 @@ pub fn spawn_creature(
         ))
         .id();
 
-    let mut children = Vec::with_capacity(data.layers.len() + usize::from(data.shadow.is_some()));
+    let mut body = Vec::with_capacity(data.layers.len());
+    let mut shadow_entity: Option<Entity> = None;
 
     for (index, layer) in data.layers.iter().enumerate() {
         let local_z = index as f32 * Z_STEP;
@@ -156,10 +184,14 @@ pub fn spawn_creature(
                     },
                     Visibility::Inherited,
                     Transform::from_xyz(center.x, center.y, local_z),
+                    // The node carries the creature's world position, so the
+                    // animator anchors on the layer's local offset: apply_animators
+                    // then writes the per-frame center relative to the node, never
+                    // a world center that would double-count the node's move.
                     Animator::with_base(
                         seq,
-                        data.x + layer.offset.x as i32,
-                        data.y + layer.offset.y as i32,
+                        layer.offset.x as i32,
+                        layer.offset.y as i32,
                         anim.base,
                     ),
                 ))
@@ -178,7 +210,7 @@ pub fn spawn_creature(
                 ))
                 .id()
         };
-        children.push(child);
+        body.push(child);
     }
 
     if let Some(shadow) = &data.shadow {
@@ -186,25 +218,40 @@ pub fn spawn_creature(
             shadow.offset.x + shadow.size.x / 2.0,
             -(shadow.offset.y + shadow.size.y / 2.0),
         );
-        let shadow_local_z = depth.shadow_z() - z;
-        let child = commands
-            .spawn((
-                CreatureShadow,
-                Sprite {
-                    image: shadow.image.clone(),
-                    custom_size: Some(shadow.size),
-                    ..Default::default()
-                },
-                Visibility::Inherited,
-                Transform::from_xyz(center.x, center.y, shadow_local_z),
-            ))
-            .id();
-        children.push(child);
+        // Constant local z below the body layers: it rides the node, so the shadow
+        // stays under its creature's feet as the node's world z changes and never
+        // needs recomputing on a move.
+        let anim = data.shadow_animation.as_ref();
+        let mut spawn = commands.spawn((
+            CreatureShadow,
+            Sprite {
+                image: shadow.image.clone(),
+                custom_size: Some(shadow.size),
+                ..Default::default()
+            },
+            Visibility::Inherited,
+            Transform::from_xyz(center.x, center.y, depth.shadow_z()),
+        ));
+        if let Some(anim) = anim {
+            spawn.insert(Animator::with_base(
+                Arc::clone(&anim.sequence),
+                shadow.offset.x as i32,
+                shadow.offset.y as i32,
+                anim.base,
+            ));
+        }
+        shadow_entity = Some(spawn.id());
     }
 
+    let mut children = body.clone();
+    children.extend(shadow_entity);
     commands.entity(node).add_children(&children);
     commands.entity(parent).add_child(node);
-    node
+    SpawnedCreature {
+        node,
+        layers: body,
+        shadow: shadow_entity,
+    }
 }
 
 /// Update a creature's depth when its bottom edge changed. Returns `true` if written.
@@ -220,11 +267,6 @@ pub fn update_creature_depth(
     node.bottom = bottom;
     transform.translation.z = depth.z_for_bottom(bottom);
     true
-}
-
-/// Recompute shadow local z after a parent depth change.
-pub fn update_shadow_depth(shadow_transform: &mut Transform, parent_z: f32, depth: &DepthMap) {
-    shadow_transform.translation.z = depth.shadow_z() - parent_z;
 }
 
 /// Despawn a creature entity and its children.
@@ -312,6 +354,26 @@ mod tests {
         let depth = mock_depth();
         assert_eq!(depth.z_for_bottom(50), 10.0);
         assert_eq!(depth.z_for_bottom(999), depth.last_stack_z);
+    }
+
+    #[test]
+    fn equal_bottoms_collapse_to_the_highest_sort_key() {
+        // Two statics share a bottom edge: the search must resolve to the one
+        // drawn on top (higher sort key), never to a z between the duplicates.
+        let depth = DepthMap::build(vec![(100, 10.0), (150, 5.0), (150, 30.0)].into_iter(), 1.0);
+        assert_eq!(
+            depth.z_for_bottom(150),
+            30.0,
+            "equal bottom keeps the top stack"
+        );
+        // Unsorted input still lands correctly because build sorts before search.
+        let unsorted =
+            DepthMap::build(vec![(300, 30.0), (100, 10.0), (200, 20.0)].into_iter(), 1.0);
+        assert_eq!(
+            unsorted.z_for_bottom(200),
+            20.0,
+            "build sorts regardless of input order"
+        );
     }
 
     #[test]

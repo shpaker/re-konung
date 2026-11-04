@@ -7,7 +7,6 @@
 //! FloatOrd(transform.z)`), поэтому каждый следующий кусок сцены выше
 //! предыдущего на [`Z_STEP`].
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use bevy::prelude::*;
@@ -61,20 +60,6 @@ impl SceneGroup {
 /// кадра нет.
 #[derive(Component)]
 pub struct ScenePiece;
-
-/// Marks a sprite as belonging to a specific creature for simulation updates.
-#[derive(Component)]
-pub struct CreaturePiece {
-    pub creature_id: usize,
-    pub original_translation: Vec3,
-    /// Pixel-space bottom edge (y + height) at spawn time, for depth recomputation.
-    pub original_bottom: i32,
-    /// Position among the creature's pieces of its own kind (body+gear, or the
-    /// shadow), in scene order; indexes [`kn_game::CreatureClips::layers`].
-    pub layer_index: usize,
-    /// True for the ground-shadow piece, false for body and equipment.
-    pub is_shadow: bool,
-}
 
 /// Центр пиксельного прямоугольника куска в мире Bevy.
 ///
@@ -166,13 +151,17 @@ pub fn spawn_scene(commands: &mut Commands, scene: &Scene, cache: &TextureCache)
         .spawn((MapRoot, Transform::IDENTITY, Visibility::Visible))
         .id();
     let mut nodes = Vec::with_capacity(PieceGroup::ALL.len());
-    let mut body_layers: HashMap<usize, usize> = HashMap::new();
-    let mut shadow_layers: HashMap<usize, usize> = HashMap::new();
     for (group, orders) in group_orders(scene) {
         let mut children = Vec::new();
         let mut bounds = None;
         for order in orders {
             let piece = &scene.pieces[order];
+            // Creatures are drawn by their stable [`CreatureNode`] children, not as
+            // scene sprites: spawning both would give every creature two competing
+            // sprites for the same body (review #68).
+            if piece.creature_id.is_some() {
+                continue;
+            }
             let base = piece.texture.as_ref().and_then(|id| cache.get(id));
             let sequence = piece
                 .animation
@@ -199,25 +188,6 @@ pub fn spawn_scene(commands: &mut Commands, scene: &Scene, cache: &TextureCache)
                     piece.y,
                     animation.base,
                 ));
-            }
-            if let Some(id) = piece.creature_id {
-                let transform = piece_transform(piece.x, piece.y, piece.w, piece.h, size, order);
-                let bottom = piece.y + piece.h.unwrap_or(size.y as i32);
-                let is_shadow = group == PieceGroup::CharacterShadows;
-                let counter = if is_shadow {
-                    &mut shadow_layers
-                } else {
-                    &mut body_layers
-                };
-                let layer_index = counter.entry(id).or_default();
-                entity.insert(CreaturePiece {
-                    creature_id: id,
-                    original_translation: transform.translation,
-                    original_bottom: bottom,
-                    layer_index: *layer_index,
-                    is_shadow,
-                });
-                *layer_index += 1;
             }
             children.push(entity.id());
             bounds = merge(bounds, piece_bounds(piece, cache));

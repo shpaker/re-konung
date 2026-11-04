@@ -625,13 +625,24 @@ fn animation(from: k1_game::scene::DrawAnimation) -> Animation {
     }
 }
 
-/// Clips of one creature's pieces: `layers` parallels the creature's
-/// Characters-group pieces in the scene, `shadow` is its ground shadow. A layer
-/// is `None` where that piece carries no animation (a single-frame layer).
+/// One creature layer: its own static base and its animation together. `base`
+/// is the layer's resting image (the piece texture), `animation` its frames —
+/// `None` where the layer never moves. Carrying both from one source lets a
+/// consumer build a stable creature node by the layer's position in this list
+/// instead of joining animation to scene pieces by a global index (review #68).
+#[derive(Debug, Clone)]
+pub struct CreatureLayer {
+    pub base: Option<TextureId>,
+    pub animation: Option<Animation>,
+}
+
+/// Clips of one creature's pieces: `layers` are the creature's body and
+/// equipment in pose order, `shadow` its ground shadow. The list is self-
+/// contained — every layer carries its own base and animation.
 #[derive(Debug, Clone)]
 pub struct CreatureClips {
-    pub layers: Vec<Option<Animation>>,
-    pub shadow: Option<Animation>,
+    pub layers: Vec<CreatureLayer>,
+    pub shadow: Option<CreatureLayer>,
 }
 
 /// What a creature shows resting and walking: `walk[direction]` is the walk pose
@@ -646,15 +657,15 @@ pub struct CreatureAnimation {
 /// body then equipment, the shadow kept apart.
 fn clips_of(pose: k1_game::scene::Pose) -> CreatureClips {
     CreatureClips {
-        layers: pose
-            .pieces
-            .into_iter()
-            .map(|piece| piece.animation.map(animation))
-            .collect(),
-        shadow: pose
-            .shadow
-            .and_then(|shadow| shadow.animation)
-            .map(animation),
+        layers: pose.pieces.into_iter().map(creature_layer).collect(),
+        shadow: pose.shadow.map(creature_layer),
+    }
+}
+
+fn creature_layer(piece: k1_game::scene::DrawPiece) -> CreatureLayer {
+    CreatureLayer {
+        base: piece.texture.map(TextureId),
+        animation: piece.animation.map(animation),
     }
 }
 

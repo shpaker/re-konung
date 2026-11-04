@@ -355,7 +355,10 @@ engine's business.
   thrash.
 - **Rewinding.** The engine runs one way: `Event` is enough to rebuild state by
   stepping forward through the ticks, and whether rewinding backwards is needed
-  (epic #33 part 5) is decided there.
+  (epic #33 part 5) is decided there. A viewer `Step` back is deliberately *not*
+  an engine reverse — it rebuilds the map's `Simulation` and replays it forward to
+  the rewound clock tick, so the display shows that tick without the core gaining a
+  reverse tick it was never designed for (review #68, `replay_simulation`).
 - **Differences in K2.** Running changes only the step duration, and that comes
   from data; no other movement differences in K2 have been looked into yet.
 
@@ -528,8 +531,80 @@ Bevy 0.20; окно и GPU нужны только чтобы запустить
 - **Интерфейс просмотрщика** — Bevy Feathers (фича `bevy_feathers`): состояние (`Viewer`) отделено от виджетов, обработчики правят только его. `Rebuild` остаётся для одного случая — смены карты: сцена пересобирается, камера наводится заново. Переключение оверлея запрос не взводит: система `sync_groups` переносит флаги `Viewer` в видимость узлов групп (как `sync_playboxes` переносит состояние воспроизведения в чекбоксы), и кадр не обходится в despawn/spawn тысяч спрайтов. Героя просмотрщик не выбирает: `SceneOptions.hero` остаётся `None`, и состояние берётся по источнику карты. `Checkbox` в Bevy считает новое значение как `!Has<Checked>` и сам `Checked` не пишет, поэтому обработчик синхронизирует его вручную (как `checkbox_self_update`) — иначе каждый клик шлёт `true`. Подписи на английском: у встроенного шрифта Feathers нет гарантии кириллицы. Персонажи включены по умолчанию (`DEFAULT_OVERLAYS`), и `Checked` у этого чекбокса должен этому соответствовать. Колесо над панелью карту не масштабирует — по тому же принципу, что и перетаскивание; чтобы блокировка действовала и над пустыми промежутками панели, `Hovered` висит и на её корневом `Node` (Bevy обновляет компонент только у тех, у кого он уже есть, а Feathers кладёт его лишь на свои контролы). The mirroring helper `sync_checked` now lives in `kn-ui` — a single implementation for all frontends.
 - **Диагностика считает спрайты в мире.** Панель показывает `видимых/собраных` кусков: карта собирается со всеми слоями, и одно число без другого сказало бы не то, что на экране. Видимым считается спрайт с истинной `InheritedVisibility` — в неё уже входит и скрытая группа, и кадр анимации без картинки, поэтому счёт по детям групп завышал бы первое.
 - **Playback and the simulation share one clock.** A single `Play` checkbox (`DEFAULT_PLAYBACK`) drives creature movement; `Space` toggles play/pause and `.`/`,` step one tick. There is no second "animation off" checkbox: the old pair (`Animation` + `Paused`) let turning off the *visual* sprite cycling silently freeze movement, because both the sprite frames (`apply_animators`) and the simulation (`advance_simulation`) read the same `Clock.ticks`. With one control, pausing freezes frames and movement together (an unambiguous pause), and `playback_for`/`toggle_playback` never reach `PlayState::Off` from the UI (`play_toggle_never_stops_the_animation_behind_the_simulation_s_back`). Like an overlay toggle it is state-only: no `Rebuild`, no scene rebuild — `apply_playback` just moves `Clock` to match `Viewer.playback`. `sync_playboxes` mirrors `Viewer.playback == Playing` into the checkbox, because a Bevy `Checkbox` never writes `Checked` itself and the state is also driven by the hotkeys.
-- **Reset positions rebuilds the simulation, not the map.** The button is a `FeathersButton`; a click emits `bevy_ui_widgets::Activate`, and `reset_positions` filters its own by the `ResetPositions` marker (the map `FeathersSelect` fires `Activate` too). It recreates the `Simulation` via `Game::simulation(map_ref, SIM_SEED)` — so routes, walk states and the RNG are fresh — and pins `SimTickTracker` to the current `Clock.ticks`, otherwise the fresh simulation would replay the ticks the old one had already burned and lurch forward. It keeps the overlays, selected map, camera/zoom and the pause state, and never touches `Rebuild` or the texture cache: no scene rebuild, no texture reload. Labels are kept — `sync_creature_sprites` repositions them from the simulation each frame, so they settle over the spawn points on their own. The seed is shared with `rebuild_scene` so a reset reproduces the exact first spawn.
+- **Reset positions rebuilds the simulation, not the map.** The button is a `FeathersButton`; a click emits `bevy_ui_widgets::Activate`, and `reset_positions` filters its own by the `ResetPositions` marker (the map `FeathersSelect` fires `Activate` too). It recreates the `Simulation` via `Game::simulation(map_ref, SIM_SEED)` — so routes, walk states and the RNG are fresh — and pins `SimTickTracker` to the current `Clock.ticks`, otherwise the fresh simulation would replay the ticks the old one had already burned and lurch forward. It keeps the overlays, selected map, camera/zoom and the pause state, and never touches `Rebuild` or the texture cache: no scene rebuild, no texture reload. Labels are kept — `sync_creature_nodes` repositions them from the simulation each frame, so they settle over the spawn points on their own. The seed is shared with `rebuild_scene` so a reset reproduces the exact first spawn.
 - **Проблемы данных видны.** `TextureCache::load` отдаёт текст причин по ключам, картинка которых не собралась: бинарники пишут их в лог, а просмотрщик показывает счётчик в диагностике — вместо молчаливой карты без части спрайтов. Неверный номер карты в CLI — ошибка с ненулевым кодом возврата, а не переход на первую.
+
+### Creature nodes (`kn-render::creatures`)
+
+Review #68 collapsed the display of a creature onto **one** model: a creature is a
+single stable [`kn_render::CreatureNode`] entity under a `CreatureRoot`, the node owns
+its world position, and its body, equipment and shadow sprites are its children that
+carry only local offsets and per-frame deltas. The branch had started with two
+competing models — the node and separately-moving `CreaturePiece` entities — and both
+wrote the same `Transform`; that is what made a creature slide and bounce at once. One
+per-tick writer is the invariant (P2 #5): `sync_creature_nodes` is the only system that
+sets a creature's world position. `CreaturePiece` and `update_shadow_depth` are gone.
+
+- **The node owns the world, the children own the frame (P1 #1).** The node gets
+  `x, −y` from the simulation and its depth z; `apply_animators` writes each animated
+  child's centre relative to that child's own base offset (`Animator::with_base`), never
+  a world centre, so the two no longer double-count a move. The node carries no
+  `Animator`, so a frame change resizes and repositions a sprite *inside* the creature
+  but cannot translate the creature in the world
+  (`an_animation_frame_change_does_not_move_the_node_world_position`,
+  `body_equipment_and_shadow_ride_the_node`). Both root and node carry a `Transform`
+  because `propagate_parent_transforms` reaches children only down a chain rooted at a
+  `Transform`.
+- **Layers are matched by position in a self-contained list, not a global index (P2 #7).**
+  `kn_game::CreatureClips` hands each layer as `CreatureLayer { base, animation }`, a
+  layer carrying its resting image and its frames together, so the viewer builds the
+  node by the layer's place in the list instead of joining animation to scene pieces by
+  an index that shifts when a frame omits a layer. Body and equipment keep the scene's
+  pose order in their local z, so equipment reads over the body
+  (`body_layers_keep_their_scene_order_depth`).
+- **Depth comes from the static stacks only, and the shadow is its own layer (P1 #4, P2 #6).**
+  `DepthMap` is built from `PieceGroup::Objects` bottoms (`is_depth_relevant` matches only
+  `Objects`), never from characters, terrain or markers — those must not decide what a
+  creature stands behind. Equal bottoms collapse to the highest sort key, so two statics
+  sharing an edge resolve to the one drawn on top rather than a z between them
+  (`depth_map_uses_only_static_object_stacks`, `equal_bottoms_collapse_to_the_highest_sort_key`).
+  The shadow sits at a constant local z below every body layer, so it stays under the
+  body and rides the node together with it (`the_shadow_sits_below_the_body_layers`).
+- **The visual step is offset by one tick; the logical tick is not (P1 #2).** A walk step
+  commits at `step_elapsed == 1`, which is faithful to the original (Slavik increments the
+  frame counter before the first render, so the first *visible* frame is index 1) and is
+  kept as the logical contract the engine and tests see. The bug was in the display
+  interpolation, which read that `1` as "one tick already spent" and jumped a whole step
+  forward the instant a step began. `smooth_pixel` maps visual progress to
+  `(step_elapsed − 1 + sub_tick)`, clamped to `[0, step_ticks]` — continuous at both step
+  boundaries (`one_tick_into_a_four_tick_step_sits_a_quarter_across`, and the
+  1/2/4-tick continuity test `movement_is_continuous_across_step_boundaries`).
+- **The simulation's own direction is single-valued per step; the display is what bounced.**
+  A creature carries one `direction` for the whole step, so it never flickers between
+  neighbours on its own — the earlier left/right jitter was purely the interpolation above,
+  now fixed. To tell the two apart at runtime, `KN_CREATURE_DEBUG=1` logs per creature id:
+  the sim tick, cell, step from/to, `step_elapsed`, the interpolated pixel and the rendered
+  position.
+- **A map change and a reset both pin the tracker; a backward `Step` rebuilds and replays (P1 #3, P2 #8).**
+  `rebuild_scene` and `reset_simulation` pin `SimTickTracker` to the current `Clock.ticks`
+  so a fresh simulation does not re-run the whole tick history in one frame
+  (`map_change_pins_the_tracker_so_history_is_not_replayed`). The engine has no reverse
+  tick, so `advance_simulation` rewinds by rebuilding the map's simulation and replaying it
+  forward to the rewound clock tick; the replay already lands at `clock.ticks`, so the
+  tracker is pinned there — pinning it to 0 let the catch-up loop tick the fresh simulation
+  a second `clock.ticks` times and every creature overshot
+  (`a_backward_step_rewinds_the_simulation_to_the_clock_not_beyond_it`,
+  `replay_simulation_matches_forward_stepping`).
+- **Spawn refusals and the Characters overlay (P2 #9).** `Simulation::spawn_failures`
+  carries every creature the world refused to place with its `WorldError` reason, and the
+  headless report prints it instead of dropping it silently. Creature labels hang on their
+  own `LabelRoot`, spawned `Hidden`; `sync_labels` shows them only while
+  `Overlay::Characters` is on, so turning creatures off also hides their names.
+- **Roads are unconfirmed (P2 #10).** There is no road layer in `Konung.N`: the `foot`
+  grid has only `is_blocked` (`foot & 0x0F == 0x0F`). `MapPassage` is locked to exactly
+  `!is_blocked` and no road/terrain preference is applied — `passage_is_the_confirmed_foot_rule_only`
+  fails if a future unconfirmed rule is added. The original's route *preference* for roads,
+  if any, is not recovered and is not invented here ([k1/movement.md](k1/movement.md)).
 
 ### Цена переключения слоёв
 

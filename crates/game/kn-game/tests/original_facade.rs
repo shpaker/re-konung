@@ -199,10 +199,15 @@ fn creature_animation_walk_frames_decode() {
         let mut ids = std::collections::HashSet::new();
         for (_, animation) in &animations {
             for clips in std::iter::once(&animation.rest).chain(animation.walk.iter().flatten()) {
-                for frames in clips
-                    .layers
-                    .iter()
-                    .chain(std::iter::once(&clips.shadow))
+                let body = clips.layers.iter().map(|layer| layer.animation.as_ref());
+                let shadow = std::iter::once(
+                    clips
+                        .shadow
+                        .as_ref()
+                        .and_then(|layer| layer.animation.as_ref()),
+                );
+                for frames in body
+                    .chain(shadow)
                     .flatten()
                     .map(|animation| &animation.frames)
                 {

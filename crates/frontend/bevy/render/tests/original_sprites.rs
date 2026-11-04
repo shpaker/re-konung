@@ -117,13 +117,18 @@ fn spawn_map(edition: &'static str, dir: PathBuf) -> (App, Scene, Entity) {
 }
 
 /// Кусок становится спрайтом, если у него есть хоть одна картинка: базовый кадр
-/// или кадр анимации.
+/// или кадр анимации — и он не существо.
+///
+/// Куски персонажей рисует устойчивый [`kn_render::CreatureNode`], а не сцена
+/// (review #68), поэтому [`spawn_scene`] их пропускает: проверка ожидает ровно
+/// те спрайты, которые сцена реально раскладывает по узлам групп.
 fn spawns(piece: &Piece) -> bool {
-    piece.texture.is_some()
-        || piece
-            .animation
-            .iter()
-            .any(|animation| animation.frames.iter().any(|frame| frame.texture.is_some()))
+    piece.creature_id.is_none()
+        && (piece.texture.is_some()
+            || piece
+                .animation
+                .iter()
+                .any(|animation| animation.frames.iter().any(|frame| frame.texture.is_some())))
 }
 
 /// Спрайты по узлам групп: группа → (номер куска в списке отрисовки, спрайт).
@@ -301,8 +306,13 @@ fn group_bounds_cover_the_pieces_a_layer_shows() {
                 .map(|group| bounds[&group].expect("узел группы с кусками без границ"))
                 .reduce(|(a_min, a_max), (b_min, b_max)| (a_min.min(b_min), a_max.max(b_max)))
         };
+        // Только куски, которые сцена раскладывает спрайтами: существ рисует
+        // CreatureNode, их под узлами групп нет (review #68), поэтому и границы
+        // сверяются без них
         for options in [SceneOptions::default(), SceneOptions::ALL] {
-            let want = scene_bounds(&scene, cache, |piece| group_is_shown(piece.group, &options));
+            let want = scene_bounds(&scene, cache, |piece: &Piece| {
+                group_is_shown(piece.group, &options) && piece.creature_id.is_none()
+            });
             assert_eq!(
                 union(&options),
                 want,
@@ -323,10 +333,10 @@ fn animated_pieces_keep_their_animators() {
             .pieces
             .iter()
             .filter(|piece| {
-                piece
-                    .animation
-                    .iter()
-                    .any(|animation| animation.frames.iter().any(|frame| frame.texture.is_some()))
+                piece.creature_id.is_none()
+                    && piece.animation.iter().any(|animation| {
+                        animation.frames.iter().any(|frame| frame.texture.is_some())
+                    })
             })
             .count();
         let got = groups

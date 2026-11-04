@@ -20,12 +20,12 @@ pub use camera::{
 };
 pub use creatures::{
     CreatureData, CreatureLayer, CreatureNode, CreatureRoot, CreatureShadow, DepthMap,
-    LayerAnimation, LayerData, clear_creatures, despawn_creature, spawn_creature,
-    update_creature_depth, update_shadow_depth,
+    LayerAnimation, LayerData, SpawnedCreature, clear_creatures, despawn_creature, spawn_creature,
+    update_creature_depth,
 };
 pub use scene::{
-    CreaturePiece, MapRoot, SceneGroup, SceneLoad, ScenePiece, Z_STEP, clear_scene, load_scene,
-    piece_center, piece_sequence, piece_size, piece_transform, scene_bounds, spawn_scene,
+    MapRoot, SceneGroup, SceneLoad, ScenePiece, Z_STEP, clear_scene, load_scene, piece_center,
+    piece_sequence, piece_size, piece_transform, scene_bounds, spawn_scene,
 };
 pub use textures::{TextureCache, TextureEntry};
 

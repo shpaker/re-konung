@@ -137,6 +137,13 @@ pub fn simulate(
         match game.simulation(map_ref, seed) {
             Ok(mut sim) => {
                 let creatures = sim.creature_count();
+                // Creatures the world refused to place are a data problem, not a
+                // silent gap: report each with the reason instead of dropping it.
+                let spawn_errors: Vec<String> = sim
+                    .spawn_failures()
+                    .iter()
+                    .map(|(id, error)| format!("roster {id}: {error:?}"))
+                    .collect();
                 let mut steps = 0usize;
                 let mut route_sets = 0usize;
                 let errors: Vec<String> = Vec::new();
@@ -160,6 +167,7 @@ pub fn simulate(
                     steps,
                     route_sets,
                     tick: ticks,
+                    spawn_errors,
                     errors,
                 });
             }
@@ -172,6 +180,7 @@ pub fn simulate(
                     steps: 0,
                     route_sets: 0,
                     tick: ticks,
+                    spawn_errors: Vec::new(),
                     errors: vec![e.to_string()],
                 });
             }
@@ -181,8 +190,13 @@ pub fn simulate(
     match format {
         Format::Text => {
             for r in &reports {
+                let spawns = if r.spawn_errors.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {} not spawned", r.spawn_errors.len())
+                };
                 println!(
-                    "{} {:>2}: {} creatures, {} moved, {} steps, {} routes, {} ticks, {} errors",
+                    "{} {:>2}: {} creatures, {} moved, {} steps, {} routes, {} ticks, {} errors{spawns}",
                     match r.source {
                         MapSource::Game => "game    ",
                         MapSource::Tutorial => "tutorial",
@@ -197,6 +211,9 @@ pub fn simulate(
                 );
                 for e in &r.errors {
                     println!("  - {e}");
+                }
+                for e in &r.spawn_errors {
+                    println!("  ! {e}");
                 }
             }
         }
@@ -220,6 +237,8 @@ struct SimReport {
     steps: usize,
     route_sets: usize,
     tick: u64,
+    /// Creatures the world refused to place and why, e.g. `"roster 7: ImpassableCell"`.
+    spawn_errors: Vec<String>,
     errors: Vec<String>,
 }
 

@@ -13,7 +13,7 @@ use crate::movement::CreatureId;
 use crate::movement::grid::{Cell, DIRECTION_COUNT, FINE_HEIGHT, FINE_WIDTH, Grid};
 use crate::movement::passage::Passage;
 use crate::movement::rng::Rng;
-use crate::movement::world::{Event, World, WorldRules};
+use crate::movement::world::{Event, World, WorldError, WorldRules};
 use crate::step_durations::StepDurations;
 use k1_game::creatures::{self, Creature, Workplace};
 use k1_game::rules::{Context, Decision, Live};
@@ -74,6 +74,10 @@ pub struct Simulation {
     jobs: Vec<Workplace>,
     rng: Rng,
     tick: u64,
+    /// Creatures the world refused to place (impassable or taken cell), with the
+    /// roster `Creature.id` and the reason; never dropped silently, the caller
+    /// reports them.
+    spawn_failures: Vec<(usize, WorldError)>,
 }
 
 impl Simulation {
@@ -93,11 +97,18 @@ impl Simulation {
 
         let roster = creatures::roster(state, map_number, hero);
         let mut ids = Vec::with_capacity(roster.len());
+        let mut spawn_failures = Vec::new();
         for creature in &roster {
             let column = u32::try_from(creature.cell.0.max(0)).unwrap_or(0);
             let row = u32::try_from(creature.cell.1.max(0)).unwrap_or(0);
             let cell = Cell::new(column, row);
-            ids.push(world.add(cell).ok());
+            match world.add(cell) {
+                Ok(id) => ids.push(Some(id)),
+                Err(error) => {
+                    ids.push(None);
+                    spawn_failures.push((creature.id, error));
+                }
+            }
         }
 
         Simulation {
@@ -107,7 +118,15 @@ impl Simulation {
             jobs,
             rng: Rng::new(seed ^ 0xDEAD_BEEF),
             tick: 0,
+            spawn_failures,
         }
+    }
+
+    /// Creatures the world refused to place at spawn, each with the roster
+    /// `Creature.id` and the reason; a non-empty list is a data problem the
+    /// consumer should surface, not a silent gap in [`Simulation::states`].
+    pub fn spawn_failures(&self) -> &[(usize, WorldError)] {
+        &self.spawn_failures
     }
 
     pub fn tick_number(&self) -> u64 {
@@ -218,5 +237,40 @@ mod tests {
         let (even_x, _) = Cell::new(4, 2).centre();
         let (odd_x, _) = Cell::new(4, 3).centre();
         assert!(even_x > odd_x);
+    }
+
+    /// Routes gate movement on exactly the confirmed foot rule and nothing more.
+    ///
+    /// A cell is impassable iff the low nibble of its `foot` byte is `0xF`
+    /// (docs/k1/formats/map.md, `is_blocked`). No road, terrain or other modifier
+    /// belongs here unless it is confirmed — the original's route *preference* for
+    /// roads (if any) is unconfirmed and must not be invented (review #68). This
+    /// locks `MapPassage` to `!is_blocked` so a future unconfirmed rule fails here.
+    #[test]
+    fn passage_is_the_confirmed_foot_rule_only() {
+        let row_a = [0x00u8, 0x0F, 0x40, 0x4F, 0x1F, 0x0E, 0xFF];
+        let row_b: Vec<u8> = row_a
+            .iter()
+            .map(|byte| byte | map::FOOT_STOPS_ARROWS)
+            .collect();
+        let foot = vec![row_a.to_vec(), row_b];
+        let map = KonungMap {
+            ground: Vec::new(),
+            overlay: Vec::new(),
+            foot: foot.clone(),
+            decorations: Vec::new(),
+            objects: Vec::new(),
+        };
+        let passage = MapPassage::from_map(&map);
+        for (row, bytes) in foot.iter().enumerate() {
+            for (column, &byte) in bytes.iter().enumerate() {
+                let cell = Cell::new(column as u32, row as u32);
+                assert_eq!(
+                    passage.is_walkable(cell),
+                    !map::is_blocked(byte),
+                    "foot byte {byte:#04x} at ({column}, {row})"
+                );
+            }
+        }
     }
 }
