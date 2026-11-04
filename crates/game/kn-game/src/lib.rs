@@ -74,6 +74,23 @@ pub struct Piece {
     pub creature_id: Option<usize>,
 }
 
+impl Piece {
+    /// Whether this piece is an object's fire: flames are drawn together with
+    /// the object they belong to and are no standing objects of their own —
+    /// depth orderers must treat them as part of the object, not as extra
+    /// stacks (review #68).
+    pub fn is_flame(&self) -> bool {
+        let flame = |id: &TextureId| matches!(id.0, TextureKey::FlameFrame { .. });
+        self.texture.as_ref().is_some_and(flame)
+            || self.animation.as_ref().is_some_and(|animation| {
+                animation
+                    .frames
+                    .iter()
+                    .any(|frame| frame.texture.as_ref().is_some_and(flame))
+            })
+    }
+}
+
 /// Показываются ли куски группы при этих опциях.
 ///
 /// Порядок наложения задаёт позиция куска в [`Scene::pieces`], поэтому видимость
@@ -805,6 +822,30 @@ mod tests {
             dy: 0,
             ticks: 1,
         }
+    }
+
+    #[test]
+    fn flame_pieces_are_recognised_as_part_of_their_object() {
+        // Flames share their object's draw slot, so a depth orderer must not
+        // see them as extra stacks (review #68); detection covers the base
+        // texture and every animation frame.
+        assert!(piece(TextureKey::FlameFrame { index: 5 }).is_flame());
+        assert!(
+            !piece(TextureKey::Solid {
+                color: [1, 2, 3, 4],
+            })
+            .is_flame()
+        );
+        let animated = Piece {
+            animation: Some(Animation {
+                frames: vec![frame(Some(TextureKey::FlameFrame { index: 1 }))],
+                base: 0,
+            }),
+            ..piece(TextureKey::Solid {
+                color: [1, 2, 3, 4],
+            })
+        };
+        assert!(animated.is_flame());
     }
 
     #[test]
