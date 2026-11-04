@@ -1,8 +1,10 @@
 # Rust-реализация
 
+The general architecture overview — components, boundaries, the diagram, current versus target shape — lives in the root [ARCHITECTURE.md](../ARCHITECTURE.md); this page keeps the Rust-side detail.
+
 Cargo-workspace в `crates/` (edition 2024). Повторяет Python-пакет `konung/` слой за слоем; Python — эталон, и при расхождении прав Python (AGENTS.md). Пока Rust ничего не заменяет: Python-CLI и расширение Tiled остаются как есть.
 
-The game-layer crates are grouped under `crates/game/` (`game/k1/k1-data`, `game/k1/k1-game`, `game/kn-game`); the display crates and the binaries move under `crates/frontend/` and `crates/apps/` in the following steps of the layout refactor. Directory grouping changes no package name and no dependency.
+The game-layer crates are grouped under `crates/game/` (`game/k1/k1-data`, `game/k1/k1-game`, `game/kn-game`); the display crates live under `crates/frontend/bevy/` and the binaries under `crates/apps/` — the layout refactor is complete. Directory grouping changes no package name and no dependency.
 
 ## Крейты
 
