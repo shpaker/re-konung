@@ -74,6 +74,16 @@ pub struct Simulation {
     jobs: Vec<Workplace>,
     rng: Rng,
     tick: u64,
+    /// Orders the world rejected for a reason other than "no route": the rules
+    /// send no orders that should fail — an unknown creature or an off-grid
+    /// goal is a bug or bad data — so they are kept for the caller to report
+    /// instead of being dropped.
+    order_failures: Vec<(usize, WorldError)>,
+    /// The rules re-decide every tick and may pick a fresh cell each time:
+    /// without this a creature whose goal is unreachable would pay a route
+    /// search per tick. The world throttles only a repeated goal; the window
+    /// here is `WorldRules::repath_cooldown_ticks` for any goal that failed.
+    cooldown: rules::FailedOrderCooldown,
     /// Creatures the world refused to place (impassable or taken cell), with the
     /// roster `Creature.id` and the reason; never dropped silently, the caller
     /// reports them.
@@ -118,6 +128,8 @@ impl Simulation {
             jobs,
             rng: Rng::new(seed ^ 0xDEAD_BEEF),
             tick: 0,
+            order_failures: Vec::new(),
+            cooldown: rules::FailedOrderCooldown::new(WorldRules::default().repath_cooldown_ticks),
             spawn_failures,
         }
     }
@@ -129,6 +141,14 @@ impl Simulation {
         &self.spawn_failures
     }
 
+    /// Orders rejected on some tick for a reason other than "no route" —
+    /// "no route" is a normal verdict the rules may aim at an unreachable goal,
+    /// these are bugs or bad data. A non-empty list must be reported by the
+    /// consumer like [`Self::spawn_failures`], not swallowed.
+    pub fn order_failures(&self) -> &[(usize, WorldError)] {
+        &self.order_failures
+    }
+
     pub fn tick_number(&self) -> u64 {
         self.tick
     }
@@ -138,6 +158,12 @@ impl Simulation {
     }
 
     /// Initial pixel position for each creature, keyed by `Creature.id`.
+    ///
+    /// The whole roster, including creatures the world refused to place: those
+    /// never appear in [`Self::states`], so a renderer that shows them draws
+    /// them from this record cell — the original places a record wherever the
+    /// file says and refuses nobody. The refusal is [`Self::spawn_failures`],
+    /// which the consumer must report next to such a static creature.
     pub fn initial_pixels(&self) -> Vec<(usize, (i32, i32))> {
         self.roster
             .iter()
@@ -162,13 +188,34 @@ impl Simulation {
             states: &group_states,
         };
         let decisions = k1_game::rules::evaluate(&self.roster, &live, &mut context);
-        let commands: Vec<(CreatureId, Decision)> = self
+        let commands: Vec<(usize, CreatureId, Decision)> = self
             .ids
             .iter()
+            .enumerate()
             .zip(decisions.iter())
-            .filter_map(|(id, decision)| id.map(|id| (id, *decision)))
+            .filter_map(|((index, id), decision)| {
+                (*id).map(|id| (self.roster[index].id, id, *decision))
+            })
             .collect();
-        rules::apply(&mut self.world, &commands);
+        let pairs: Vec<(CreatureId, Decision)> = commands
+            .iter()
+            .map(|&(_, id, decision)| (id, decision))
+            .collect();
+        // Through the cooldown: the rules re-decide every tick and may pick a
+        // fresh cell, so a creature with an unreachable goal would otherwise
+        // pay a search per tick (docs/rust.md, "Decision: repathing without
+        // thrash"). The outcomes are never dropped: "no route" is the rules'
+        // normal verdict, every other rejection is a bug or bad data.
+        let applied = self.cooldown.apply(&mut self.world, &pairs);
+        self.order_failures
+            .extend(commands.iter().zip(applied.iter()).filter_map(
+                |((creature_id, _, _), outcome)| match outcome {
+                    rules::Applied::Failed(error) if *error != WorldError::NoRoute => {
+                        Some((*creature_id, *error))
+                    }
+                    _ => None,
+                },
+            ));
         self.world.tick_step()
     }
 
@@ -272,5 +319,222 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── the rules driving the world through tick() ──
+
+    use k1_data::game_state::{Character, Group, Rect};
+
+    const MAP_NUMBER: usize = 3;
+    /// Record numbers below this stay empty: the hero would own 0 and 1.
+    const FIRST_RECORD: usize = 2;
+
+    /// A fine grid of the engine's size; `blocked` picks impassable cells
+    /// (`is_blocked` reads the low nibble, so `0x0F` is the wall byte).
+    fn open_map(blocked: impl Fn(u32, u32) -> bool) -> KonungMap {
+        let foot = (0..FINE_HEIGHT)
+            .map(|row| {
+                (0..FINE_WIDTH)
+                    .map(|column| if blocked(column, row) { 0x0F } else { 0x00 })
+                    .collect()
+            })
+            .collect();
+        KonungMap {
+            ground: Vec::new(),
+            overlay: Vec::new(),
+            foot,
+            decorations: Vec::new(),
+            objects: Vec::new(),
+        }
+    }
+
+    /// One roaming squad of `cells`, on [`MAP_NUMBER`], inside `spawn`: the
+    /// minimum `Game.N` the roster reads (`Group` kind in the roaming range,
+    /// `size` consecutive character records).
+    fn roaming_state(spawn: Rect, cells: &[(i16, i16)]) -> GameState {
+        let group = Group {
+            slot: 1,
+            first_character: FIRST_RECORD as i16,
+            size: cells.len() as u8,
+            max_size: cells.len() as u8,
+            growth_limit: cells.len() as u8,
+            kind: k1_game::rules::group::FIRST_ROAMING,
+            map_id: MAP_NUMBER as u8,
+            spawn,
+            ..Group::default()
+        };
+        let mut characters: Vec<Option<Character>> =
+            (0..FIRST_RECORD + cells.len()).map(|_| None).collect();
+        for (offset, &(x, y)) in cells.iter().enumerate() {
+            characters[FIRST_RECORD + offset] = Some(Character {
+                slot: FIRST_RECORD + offset,
+                x,
+                y,
+                group: 1,
+                class_id: k1_game::rules::class::WARRIOR,
+                ..Character::default()
+            });
+        }
+        GameState {
+            items: Vec::new(),
+            groups: vec![None, Some(group)],
+            loot: Vec::new(),
+            exits: Vec::new(),
+            characters,
+            villages: Vec::new(),
+        }
+    }
+
+    fn simulation(map: &KonungMap, state: &GameState, creatures: usize) -> Simulation {
+        Simulation::new(
+            map,
+            state,
+            MAP_NUMBER,
+            None,
+            vec![[2; DIRECTION_COUNT]; creatures],
+            Vec::new(),
+            7,
+        )
+    }
+
+    fn inside(spawn: &Rect, cell: (u32, u32)) -> bool {
+        let (column, row) = (cell.0 as i16, cell.1 as i16);
+        spawn.left <= column && column <= spawn.right && spawn.top <= row && row <= spawn.bottom
+    }
+
+    /// The full loop over production data structures: a strayed monster is seen
+    /// outside its area, the return order reaches the world, the creature
+    /// really walks it — and nothing on the way is rejected for a reason
+    /// other than "no route". The rules only aim at cells `Ground::is_free`
+    /// has vetted, so any other rejection is a bug; this is the guard.
+    #[test]
+    fn a_driven_run_walks_a_strayed_monster_home_without_order_failures() {
+        let map = open_map(|_, _| false);
+        let spawn = Rect {
+            left: 4,
+            top: 4,
+            right: 8,
+            bottom: 8,
+        };
+        let state = roaming_state(spawn, &[(12, 12)]);
+        let mut sim = simulation(&map, &state, 1);
+
+        let mut walked = false;
+        let mut went_home = false;
+        for _ in 0..300 {
+            let events = sim.tick();
+            walked |= events
+                .iter()
+                .any(|event| matches!(event, Event::StepFinished { .. }));
+            assert!(
+                sim.order_failures().is_empty(),
+                "{:?}",
+                sim.order_failures()
+            );
+            if inside(&spawn, sim.states()[0].cell) {
+                went_home = true;
+                break;
+            }
+        }
+        assert!(walked, "the order must produce real steps");
+        assert!(went_home, "the monster must reach its spawn area");
+    }
+
+    /// An unreachable spawn area is the rules' normal verdict, not a failure:
+    /// the re-deciding loop may aim at it every tick, so `NoRoute` must not
+    /// pollute [`Simulation::order_failures`], and the connected
+    /// `FailedOrderCooldown` must keep the searches far below one per tick.
+    #[test]
+    fn an_unreachable_spawn_costs_throttled_searches_not_order_failures() {
+        const TICKS: usize = 130;
+        let ring = |column: u32, row: u32| {
+            (3..=9).contains(&column) && (row == 3 || row == 9)
+                || (3..=9).contains(&row) && (column == 3 || column == 9)
+        };
+        let map = open_map(ring);
+        let spawn = Rect {
+            left: 4,
+            top: 4,
+            right: 8,
+            bottom: 8,
+        };
+        let state = roaming_state(spawn, &[(13, 13)]);
+        let mut sim = simulation(&map, &state, 1);
+
+        let mut no_route = 0;
+        for _ in 0..TICKS {
+            let events = sim.tick();
+            no_route += events
+                .iter()
+                .filter(|event| matches!(event, Event::NoRoute { .. }))
+                .count();
+        }
+        assert!(
+            sim.order_failures().is_empty(),
+            "\"no route\" is the rules' normal verdict, never an order failure: {:?}",
+            sim.order_failures()
+        );
+        assert!(
+            no_route >= 1,
+            "the return order must have been issued and searched"
+        );
+        assert!(
+            no_route * 4 <= TICKS,
+            "the rules re-decide every tick; the cooldown must hold it far below \
+             one search per tick: {no_route} in {TICKS}"
+        );
+        assert_eq!(
+            sim.states()[0].cell,
+            (13, 13),
+            "an unreachable area moves nobody"
+        );
+    }
+
+    /// A creature the world refuses to place is never dropped silently and
+    /// never invented back into the live picture: it is reported once in
+    /// `spawn_failures`, absent from `states`, and still offered in
+    /// `initial_pixels` so the renderer can stand it on its record cell —
+    /// the documented fallback, matching the original, which places everyone.
+    #[test]
+    fn an_unplaced_creature_is_reported_and_keeps_its_record_cell_for_the_renderer() {
+        let map = open_map(|column, row| column == 20 && row == 20);
+        let spawn = Rect {
+            left: 24,
+            top: 24,
+            right: 26,
+            bottom: 26,
+        };
+        let state = roaming_state(spawn, &[(20, 20), (25, 25)]);
+        let mut sim = simulation(&map, &state, 2);
+
+        assert_eq!(
+            sim.spawn_failures(),
+            [(2, WorldError::ImpassableCell)],
+            "the record on the impassable cell is refused and reported"
+        );
+        for _ in 0..10 {
+            sim.tick();
+        }
+        assert!(
+            sim.order_failures().is_empty(),
+            "{:?}",
+            sim.order_failures()
+        );
+        assert_eq!(
+            sim.states()
+                .iter()
+                .map(|state| state.id)
+                .collect::<Vec<_>>(),
+            vec![3],
+            "the refused creature never enters the live picture"
+        );
+        assert_eq!(
+            sim.initial_pixels(),
+            vec![
+                (2, Cell::new(20, 20).centre()),
+                (3, Cell::new(25, 25).centre()),
+            ],
+            "the renderer still gets the refused creature at its record cell"
+        );
     }
 }
