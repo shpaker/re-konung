@@ -12,6 +12,7 @@
 
 pub mod movement;
 pub mod rules;
+pub mod simulation;
 pub mod step_durations;
 
 use std::path::PathBuf;
@@ -325,6 +326,38 @@ impl Game {
             source: MapSource::Game,
             number: game_state::start_map(hero as usize) as u32,
         }
+    }
+
+    /// Headless simulation of one map: creatures walk, rules decide, engine ticks.
+    pub fn simulation(&self, map_ref: MapRef, seed: u64) -> Result<simulation::Simulation> {
+        let files = map_ref.source.file_set();
+        let map_bytes = self.dir.map_bytes(map_ref.number, files)?;
+        let konung_map = map::parse(&map_bytes)?;
+        let hero = self.heroes(map_ref.source)?.first().map(|&h| h as usize);
+        let state_bytes = match hero {
+            Some(hero) => Some(self.dir.state_bytes(hero as u32, files)?),
+            None => None,
+        };
+        let state = state_bytes
+            .as_ref()
+            .map(|bytes| game_state::parse(bytes))
+            .transpose()?;
+        let state = state
+            .ok_or_else(|| GameError::Io(std::io::Error::other("no game state for simulation")))?;
+        let jobs = k1_game::creatures::job_slots(&state, map_ref.number as usize);
+        let step_table = self.resources.with_graphics(|graph, objects| {
+            let roster = k1_game::creatures::roster(&state, map_ref.number as usize, hero);
+            k1_game::creatures::step_durations(&state, &roster, graph, objects)
+        })?;
+        Ok(simulation::Simulation::new(
+            &konung_map,
+            &state,
+            map_ref.number as usize,
+            hero,
+            step_table,
+            jobs,
+            seed,
+        ))
     }
 
     /// RGBA-картинки ключей, позиционно параллельно `ids`.
