@@ -68,6 +68,7 @@ pub struct Piece {
     pub h: Option<i32>,
     pub animation: Option<Animation>,
     pub group: PieceGroup,
+    pub creature_id: Option<usize>,
 }
 
 /// Показываются ли куски группы при этих опциях.
@@ -563,6 +564,7 @@ fn piece(from: k1_game::scene::DrawPiece) -> Piece {
                 .collect(),
         }),
         group: from.group,
+        creature_id: from.creature_id,
     }
 }
 
@@ -670,6 +672,7 @@ mod tests {
             h: None,
             animation: None,
             group: PieceGroup::Terrain,
+            creature_id: None,
         }
     }
 
@@ -773,6 +776,7 @@ mod tests {
                     frames: vec![frame(None), frame(Some(gear)), frame(Some(body))],
                 }),
                 group: PieceGroup::Characters,
+                creature_id: None,
             }],
         };
         assert_eq!(scene.texture_ids(), [TextureId(gear), TextureId(body)]);

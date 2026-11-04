@@ -61,6 +61,12 @@ impl SceneGroup {
 #[derive(Component)]
 pub struct ScenePiece;
 
+/// Marks a sprite as belonging to a specific creature for simulation updates.
+#[derive(Component)]
+pub struct CreaturePiece {
+    pub creature_id: usize,
+}
+
 /// Центр пиксельного прямоугольника куска в мире Bevy.
 ///
 /// Кусок задан левым верхним углом в пикселях карты (y вниз), а спрайт
@@ -182,6 +188,9 @@ pub fn spawn_scene(commands: &mut Commands, scene: &Scene, cache: &TextureCache)
                     piece.y,
                     animation.base,
                 ));
+            }
+            if let Some(id) = piece.creature_id {
+                entity.insert(CreaturePiece { creature_id: id });
             }
             children.push(entity.id());
             bounds = merge(bounds, piece_bounds(piece, cache));
@@ -447,6 +456,7 @@ mod tests {
                 ],
             }),
             group: PieceGroup::Objects,
+            creature_id: None,
         };
         // Границы считают по базовому кадру и по каждому кадру анимации:
         // крупный огонь больше своего базового кадра, и без этого он ушёл бы за
@@ -466,6 +476,7 @@ mod tests {
             h: None,
             animation: None,
             group,
+            creature_id: None,
         }
     }
 

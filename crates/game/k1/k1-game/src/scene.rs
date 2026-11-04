@@ -43,6 +43,7 @@ pub struct DrawPiece {
     pub h: Option<i32>,
     pub animation: Option<DrawAnimation>,
     pub group: PieceGroup,
+    pub creature_id: Option<usize>,
 }
 
 /// Кадр анимированного куска: картинка (`None` — слоя в этом кадре не видно) и
@@ -224,6 +225,7 @@ impl DrawPiece {
             h: None,
             animation: None,
             group,
+            creature_id: None,
         }
     }
 
@@ -237,6 +239,7 @@ impl DrawPiece {
             h: None,
             animation: track.animation,
             group,
+            creature_id: None,
         }
     }
 
@@ -249,6 +252,7 @@ impl DrawPiece {
             h: Some(h),
             animation: None,
             group,
+            creature_id: None,
         }
     }
 }
@@ -834,11 +838,16 @@ fn character_pose(
     let mut pieces = Vec::new();
     for (_, frames) in tracks {
         if let Some(track) = layer_track(frames, base, ONE_TICK) {
-            pieces.push(DrawPiece::track(PieceGroup::Characters, track));
+            let mut p = DrawPiece::track(PieceGroup::Characters, track);
+            p.creature_id = Some(record.slot);
+            pieces.push(p);
         }
     }
-    let shadow = layer_track(shadows_by_frame, base, ONE_TICK)
-        .map(|track| DrawPiece::track(PieceGroup::CharacterShadows, track));
+    let shadow = layer_track(shadows_by_frame, base, ONE_TICK).map(|track| {
+        let mut p = DrawPiece::track(PieceGroup::CharacterShadows, track);
+        p.creature_id = Some(record.slot);
+        p
+    });
     Ok(Some(Pose {
         key: (bottom, 1, record.slot),
         pieces,

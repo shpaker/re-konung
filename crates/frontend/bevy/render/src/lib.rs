@@ -24,8 +24,8 @@ pub use creatures::{
     update_creature_depth, update_shadow_depth,
 };
 pub use scene::{
-    MapRoot, SceneGroup, SceneLoad, ScenePiece, Z_STEP, clear_scene, load_scene, piece_center,
-    piece_sequence, piece_size, piece_transform, scene_bounds, spawn_scene,
+    CreaturePiece, MapRoot, SceneGroup, SceneLoad, ScenePiece, Z_STEP, clear_scene, load_scene,
+    piece_center, piece_sequence, piece_size, piece_transform, scene_bounds, spawn_scene,
 };
 pub use textures::{TextureCache, TextureEntry};
 
