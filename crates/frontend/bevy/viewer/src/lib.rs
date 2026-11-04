@@ -29,16 +29,16 @@ use bevy::{
 };
 use kn_game::simulation::{CreatureState, Simulation, WalkState};
 use kn_game::{
-    Animation, CreatureAnimation, Game, MapRef, MapSource, Piece, PieceGroup, SceneOptions,
-    TICK_MS, group_is_shown,
+    CreatureAnimation, CreatureClips, CreatureLayer, Game, MapRef, MapSource, Piece, PieceGroup,
+    SceneOptions, TICK_MS, group_is_shown,
 };
 use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
-    AnimPlugin, Animator, CameraApply, CameraBounds, CameraInput, CameraState, Clock, CreatureData,
-    CreatureNode, CreatureRoot, DepthMap, GameResource, LayerAnimation, LayerData, MapCamera,
-    MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup, ScenePiece, Sequence,
-    TextureCache, Z_STEP, clear_scene, load_scene, ortho_scale, piece_sequence, piece_size,
-    spawn_creature, update_creature_depth,
+    AnimPlugin, AnimSet, Animator, CameraApply, CameraBounds, CameraInput, CameraState, Clock,
+    CreatureData, CreatureNode, CreatureRoot, DepthMap, GameResource, LayerAnimation, LayerData,
+    MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup, ScenePiece,
+    Sequence, TextureCache, Z_STEP, clear_scene, load_scene, ortho_scale, piece_sequence,
+    piece_size, spawn_creature, update_creature_depth,
 };
 use kn_ui::{dark_theme, pointer_over_ui, sync_checked};
 
@@ -225,10 +225,14 @@ struct LayerSequences {
     walk: Vec<Option<Clip>>,
 }
 
-/// A built sequence and the frame it should show when play restarts.
+/// A built sequence and the frame it should show when play restarts. `corner`
+/// is the clip's base-frame corner in absolute map pixels: a swap re-anchors
+/// the animator on `corner` minus the creature's origin, because the clip's
+/// frame offsets are relative to that corner, not to the resting piece's.
 struct Clip {
     sequence: Arc<Sequence>,
     base: usize,
+    corner: (i32, i32),
 }
 
 /// One [`CreatureData`] per creature to spawn, rebuilt with the scene. Kept as a
@@ -239,6 +243,9 @@ struct CreatureSpawns {
     /// Body height in pixels per creature (`CreatureData::bottom - origin.y`),
     /// used to turn a live cell into an occlusion bottom without a scene lookup.
     heights: HashMap<usize, i32>,
+    /// Spawn pixel per creature, the origin every clip corner is reduced
+    /// against when a swap re-anchors its animator.
+    origins: HashMap<usize, (i32, i32)>,
 }
 
 /// A sprite under a [`CreatureNode`]: which creature it belongs to and which of
@@ -248,6 +255,14 @@ struct CreatureSprite {
     creature_id: usize,
     layer: usize,
     is_shadow: bool,
+}
+
+/// Slots pinning the creature pipeline around [`kn_render::AnimSet::Sprites`]:
+/// clips are chosen before the frame write and nodes placed after it.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum CreatureSet {
+    Swap,
+    Nodes,
 }
 
 /// Decodes the walk frames the scene does not carry and builds the swap
@@ -293,46 +308,32 @@ fn build_creature_anim(
     }
 }
 
-/// One creature's clips → sequences, aligned by layer position with the scene.
+/// One creature's clips → sequences, aligned to the scene's layers by
+/// [`kn_game::LayerKey`], never by position: see [`pose_matched_layers`].
 fn build_sequences(anim: &CreatureAnimation, cache: &TextureCache) -> CreatureSequences {
+    let matched = pose_matched_layers(&anim.rest.layers, &anim.walk);
     let body = anim
         .rest
         .layers
         .iter()
         .enumerate()
-        .map(|(index, _)| {
-            let rest = clip_seq(
-                anim.rest
-                    .layers
-                    .get(index)
-                    .and_then(|l| l.animation.as_ref()),
-                cache,
-            );
-            let walk = anim
-                .walk
+        .map(|(index, rest_layer)| {
+            let rest = clip_seq(Some(rest_layer), cache);
+            let walk = matched[index]
                 .iter()
-                .map(|dir| {
-                    dir.as_ref()
-                        .and_then(|clips| {
-                            clips.layers.get(index).and_then(|l| l.animation.as_ref())
-                        })
-                        .and_then(|a| clip_seq(Some(a), cache))
-                })
+                .map(|layer| clip_seq(*layer, cache))
                 .collect();
             (index, LayerSequences { rest, walk })
         })
         .collect();
-    let rest = clip_seq(
-        anim.rest.shadow.as_ref().and_then(|l| l.animation.as_ref()),
-        cache,
-    );
+    let rest = clip_seq(anim.rest.shadow.as_ref(), cache);
     let walk = anim
         .walk
         .iter()
         .map(|dir| {
             dir.as_ref()
-                .and_then(|clips| clips.shadow.as_ref().and_then(|l| l.animation.as_ref()))
-                .and_then(|a| clip_seq(Some(a), cache))
+                .and_then(|clips| clips.shadow.as_ref())
+                .and_then(|layer| clip_seq(Some(layer), cache))
         })
         .collect();
     CreatureSequences {
@@ -341,13 +342,42 @@ fn build_sequences(anim: &CreatureAnimation, cache: &TextureCache) -> CreatureSe
     }
 }
 
+/// For each rest layer, the layer of every walk pose that draws the same part.
+///
+/// The match is by [`kn_game::LayerKey`]: pose tracks are ordered by first
+/// appearance within one pose, so a walk pose may list the same layers in
+/// another order, and an index join would bolt one part's walk clip onto
+/// another's piece — equipment sliding across the sprite on every step
+/// (review #68).
+fn pose_matched_layers<'a>(
+    rest: &'a [CreatureLayer],
+    walk: &'a [Option<CreatureClips>],
+) -> Vec<Vec<Option<&'a CreatureLayer>>> {
+    rest.iter()
+        .map(|rest_layer| {
+            walk.iter()
+                .map(|dir| {
+                    dir.as_ref().and_then(|clips| {
+                        clips
+                            .layers
+                            .iter()
+                            .find(|layer| layer.key == rest_layer.key)
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// Frames of one layer → a swap clip; `None` when no frame decoded.
-fn clip_seq(animation: Option<&Animation>, cache: &TextureCache) -> Option<Clip> {
-    let animation = animation?;
+fn clip_seq(layer: Option<&CreatureLayer>, cache: &TextureCache) -> Option<Clip> {
+    let layer = layer?;
+    let animation = layer.animation.as_ref()?;
     let sequence = piece_sequence(animation, cache)?;
     Some(Clip {
         sequence,
         base: animation.base,
+        corner: layer.corner,
     })
 }
 
@@ -366,6 +396,7 @@ fn build_creature_spawns(
 ) -> CreatureSpawns {
     let mut plans = Vec::new();
     let mut heights = HashMap::new();
+    let mut origins = HashMap::new();
     for &(id, origin) in initial_pixels {
         let pieces: Vec<&Piece> = scene
             .pieces
@@ -378,8 +409,13 @@ fn build_creature_spawns(
         let (plan, height) = build_creature_plan(pieces, cache, anim, id, origin);
         plans.push(plan);
         heights.insert(id, height);
+        origins.insert(id, origin);
     }
-    CreatureSpawns { plans, heights }
+    CreatureSpawns {
+        plans,
+        heights,
+        origins,
+    }
 }
 
 /// One creature's pieces → spawn data, with body height reported for depth.
@@ -416,9 +452,9 @@ fn build_creature_plan(
     let animations = layers
         .iter()
         .enumerate()
-        .map(|(index, _)| rest_animation(sequences.and_then(|c| c.body.get(&index))))
+        .map(|(index, _)| rest_animation(sequences.and_then(|c| c.body.get(&index)), origin))
         .collect();
-    let shadow_animation = sequences.and_then(|c| rest_animation(Some(&c.shadow)));
+    let shadow_animation = sequences.and_then(|c| rest_animation(Some(&c.shadow), origin));
     (
         CreatureData {
             id: id as u32,
@@ -434,12 +470,15 @@ fn build_creature_plan(
     )
 }
 
-/// The resting [`LayerAnimation`] of a layer, if it has a resting sequence.
-fn rest_animation(layer: Option<&LayerSequences>) -> Option<LayerAnimation> {
+/// The resting [`LayerAnimation`] of a layer, if it has a resting sequence,
+/// anchored on the clip's own base corner relative to the creature's origin —
+/// the same coordinates the node lives in.
+fn rest_animation(layer: Option<&LayerSequences>, origin: (i32, i32)) -> Option<LayerAnimation> {
     let clip = layer?.rest.as_ref()?;
     Some(LayerAnimation {
         sequence: Arc::clone(&clip.sequence),
         base: clip.base,
+        anchor: (clip.corner.0 - origin.0, clip.corner.1 - origin.1),
     })
 }
 
@@ -551,13 +590,26 @@ pub fn run_viewer(config: ViewerConfig) {
                 advance_simulation,
                 spawn_creature_labels,
                 spawn_creatures,
-                sync_creature_nodes,
-                sync_creature_animation,
+                sync_creature_animation.in_set(CreatureSet::Swap),
+                sync_creature_nodes.in_set(CreatureSet::Nodes),
                 diagnostics,
             )
                 .chain()
+                // The frame's clock position must be settled before the simulation
+                // catches up to it and before the creature systems read it, and
+                // clips must be chosen before `apply_animators` writes sprites and
+                // the nodes placed after them — never left to the scheduler's
+                // placement of two unconstrained chains (review #68).
+                .after(AnimSet::Clock)
                 .after(CameraInput)
                 .before(CameraApply),
+        )
+        .configure_sets(
+            Update,
+            (
+                AnimSet::Sprites.after(CreatureSet::Swap),
+                CreatureSet::Nodes.after(AnimSet::Sprites),
+            ),
         )
         .run();
 }
@@ -1126,9 +1178,12 @@ const LABEL_OFFSET_Y: f32 = 50.0;
 /// Temporary per-creature diagnostics for the movement/animation review: set
 /// `KN_CREATURE_DEBUG` in the environment to log, per creature id, the simulation
 /// tick, cell, step from/to, `step_elapsed`, the interpolated pixel, the rendered
-/// node position and z, and the simulation's own facing direction. Comparing
+/// node position, z and `GlobalTransform`, and the simulation's own facing
+/// direction; [`sync_creature_animation`] adds each sprite's clip, anchor, phase
+/// and shown frame with its local and global transform. Comparing
 /// `sim_dir`/`from`/`to` (which change only at a logical tick) with `render` shows
-/// whether the simulation itself moves or only the display shifts.
+/// whether the simulation itself moves or only the display shifts; comparing the
+/// sprite's global with the node's separates a node jump from an image jump.
 static CREATURE_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 fn creature_debug() -> bool {
@@ -1218,7 +1273,7 @@ fn sync_creature_nodes(
     scene_depth: Res<SceneDepth>,
     spawns: Res<CreatureSpawns>,
     clock: Res<Clock>,
-    mut nodes: Query<(&mut CreatureNode, &mut Transform)>,
+    mut nodes: Query<(&mut CreatureNode, &mut Transform, &GlobalTransform)>,
     // Disjoint from `nodes`: without `Without` Bevy cannot prove an entity never
     // carries both, so the two `&mut Transform` queries would panic (B0001).
     mut labels: Query<(&CreatureLabel, &mut Transform), Without<CreatureNode>>,
@@ -1232,7 +1287,7 @@ fn sync_creature_nodes(
         .iter()
         .map(|state| (state.id, smooth_pixel(state, sub)))
         .collect();
-    for (mut node, mut transform) in &mut nodes {
+    for (mut node, mut transform, global) in &mut nodes {
         let id = node.id as usize;
         let Some(&(x, y)) = drawn.get(&id) else {
             continue;
@@ -1246,9 +1301,11 @@ fn sync_creature_nodes(
         if creature_debug()
             && let Some(state) = states.iter().find(|state| state.id == id)
         {
+            let global = global.translation();
             info!(
                 "creature #{id} tick={} cell=({},{}) from=({},{}) to={:?} elapsed={}/{} \
-                 interp=({x:.1},{y:.1}) render=({:.1},{:.1}) z={:.4} sim_dir={:?} walk={:?}",
+                 interp=({x:.1},{y:.1}) render=({:.1},{:.1}) z={:.4} global=({:.1},{:.1}) \
+                 sim_dir={:?} walk={:?}",
                 clock.ticks,
                 state.cell.0,
                 state.cell.1,
@@ -1260,6 +1317,8 @@ fn sync_creature_nodes(
                 transform.translation.x,
                 transform.translation.y,
                 transform.translation.z,
+                global.x,
+                global.y,
                 state.direction,
                 state.walk_state,
             );
@@ -1300,11 +1359,17 @@ fn smooth_pixel(state: &CreatureState, sub: f32) -> (f32, f32) {
 /// Swaps each creature sprite's [`Animator`] between the resting and the walking
 /// sequence when the simulation's [`WalkState`] or facing direction changes,
 /// keeping body, equipment and shadow of one creature in step.
+///
+/// The swap re-anchors the animator on the clip's own base corner: every clip's
+/// frame offsets are relative to that corner, so an animator left on the
+/// resting corner would render the new clip displaced by the corner difference
+/// — the periodic image jump of review #68.
 fn sync_creature_animation(
     sim: Res<SimulationResource>,
     anim: Res<CreatureAnim>,
+    spawns: Res<CreatureSpawns>,
     clock: Res<Clock>,
-    mut sprites: Query<(&CreatureSprite, &mut Animator)>,
+    mut sprites: Query<(&CreatureSprite, &mut Animator, &Transform, &GlobalTransform)>,
 ) {
     let Some(ref simulation) = sim.sim else {
         return;
@@ -1322,7 +1387,7 @@ fn sync_creature_animation(
             )
         })
         .collect();
-    for (tag, mut animator) in &mut sprites {
+    for (tag, mut animator, transform, global) in &mut sprites {
         let Some(&(walking, direction)) = facing.get(&tag.creature_id) else {
             continue;
         };
@@ -1340,22 +1405,50 @@ fn sync_creature_animation(
         let clip = select_clip(layer, walking, direction);
         let Some(clip) = clip else { continue };
         if creature_debug() {
+            let global = global.translation();
             info!(
-                "creature #{} {} base={} walking={walking} dir={direction} shown={:?}",
+                "creature #{} {} base={} corner={:?} shown={:?} anchor=({},{}) phase={} \
+                 local=({:.1},{:.1}) global=({:.1},{:.1}) walking={walking} dir={direction}",
                 tag.creature_id,
                 if tag.is_shadow { "shadow" } else { "body" },
                 clip.base,
+                clip.corner,
                 animator.shown(),
+                animator.x,
+                animator.y,
+                animator.phase,
+                transform.translation.x,
+                transform.translation.y,
+                global.x,
+                global.y,
             );
         }
         if Arc::ptr_eq(&animator.sequence, &clip.sequence) {
             continue;
         }
-        // Start the new clip on its own base frame at the current clock tick, so a
-        // direction or rest/walk change reads from the clip's first frame even though
-        // the shared clock never returns to zero (review #68).
-        animator.play_at(Arc::clone(&clip.sequence), clip.base, clock.ticks);
+        let Some(&origin) = spawns.origins.get(&tag.creature_id) else {
+            continue;
+        };
+        apply_clip(&mut animator, clip, origin, clock.ticks);
     }
+}
+
+/// Point one animator at one clip: open it on the clip's base frame at the
+/// current clock tick and re-anchor on the clip's own corner, reduced to the
+/// creature's local coordinates.
+///
+/// Both halves are load-bearing (review #68): the shared clock never returns to
+/// zero, so without a per-clip phase the swap would show a foreign frame; and
+/// every clip's frame offsets are relative to its own base corner, so an
+/// animator left on the previous corner would render the image displaced by the
+/// corner difference — the periodic one-cell jump.
+fn apply_clip(animator: &mut Animator, clip: &Clip, origin: (i32, i32), at_tick: u64) {
+    animator.play_at(
+        Arc::clone(&clip.sequence),
+        clip.base,
+        at_tick,
+        (clip.corner.0 - origin.0, clip.corner.1 - origin.1),
+    );
 }
 
 /// Which clip a piece shows: the walk sequence for its facing direction while
@@ -1458,7 +1551,7 @@ fn diagnostics(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kn_game::PieceGroup;
+    use kn_game::{LayerKey, PieceGroup};
 
     fn state(
         pixel: (i32, i32),
@@ -1564,7 +1657,137 @@ mod tests {
         Clip {
             sequence: Arc::new(Sequence::new(Vec::new())),
             base,
+            corner: (0, 0),
         }
+    }
+
+    fn data_layer(key: LayerKey, corner: (i32, i32)) -> CreatureLayer {
+        CreatureLayer {
+            base: None,
+            animation: None,
+            corner,
+            key,
+        }
+    }
+
+    /// A walk pose may list the same layers in another order than the resting
+    /// one (tracks are ordered by first appearance per pose), so a join by
+    /// position would bolt the gear's walk clip onto the body's piece and the
+    /// body's onto the gear's — equipment sliding across the sprite on every
+    /// step. The join must follow [`LayerKey`].
+    #[test]
+    fn walk_layers_join_to_their_part_not_their_position() {
+        let rest = [
+            data_layer(LayerKey::Body, (0, 0)),
+            data_layer(LayerKey::Gear { slot: 1 }, (4, 40)),
+        ];
+        // Direction 0 lists the layers reversed, direction 1 has no gear at all.
+        let reversed = CreatureClips {
+            layers: vec![
+                data_layer(LayerKey::Gear { slot: 1 }, (6, 44)),
+                data_layer(LayerKey::Body, (2, 1)),
+            ],
+            shadow: None,
+        };
+        let gearless = CreatureClips {
+            layers: vec![data_layer(LayerKey::Body, (3, 2))],
+            shadow: None,
+        };
+        let walk = [Some(reversed), Some(gearless), None];
+
+        let matched = pose_matched_layers(&rest, &walk);
+        assert_eq!(matched.len(), 2);
+        assert_eq!(
+            matched[0][0].map(|layer| layer.key),
+            Some(LayerKey::Body),
+            "the body's walk clip must be the body's, not the first listed"
+        );
+        assert_eq!(
+            matched[0][0].map(|layer| layer.corner),
+            Some((2, 1)),
+            "the body's clip keeps the walk pose's own corner"
+        );
+        assert_eq!(
+            matched[1][0].map(|layer| layer.key),
+            Some(LayerKey::Gear { slot: 1 }),
+            "the gear's walk clip must be the gear's, not the second listed"
+        );
+        assert!(
+            matched[1][1].is_none(),
+            "a pose without the part contributes no clip"
+        );
+        assert!(
+            matched[0][2].is_none(),
+            "a missing pose contributes nothing"
+        );
+    }
+
+    /// A swap re-anchors the animator on the clip's own corner reduced to the
+    /// creature's origin: leaving the resting anchor there displaced the image
+    /// by the corner difference — the periodic jump review #68 is about.
+    #[test]
+    fn apply_clip_reanchors_on_the_clips_own_corner() {
+        let rest_sequence = Arc::new(Sequence::new(Vec::new()));
+        let walk_sequence = Arc::new(Sequence::new(Vec::new()));
+        let mut animator = Animator::with_base(Arc::clone(&rest_sequence), 4, 40, 0);
+        let walk = Clip {
+            sequence: Arc::clone(&walk_sequence),
+            base: 0,
+            corner: (62, 26),
+        };
+
+        apply_clip(&mut animator, &walk, (4, 10), 9);
+
+        assert_eq!(
+            (animator.x, animator.y),
+            (58, 16),
+            "the anchor is the clip corner in the creature's local coordinates"
+        );
+        assert!(Arc::ptr_eq(&animator.sequence, &walk_sequence));
+        assert_eq!(animator.shown(), None, "the swap forces a sprite rewrite");
+        assert_eq!(
+            walk_sequence.frame_at(9, animator.phase),
+            walk.base,
+            "the clip opens on its base frame at the current tick"
+        );
+    }
+
+    /// The resting clip must be anchored exactly where the scene draws the
+    /// piece, or a creature would be born displaced and only the swaps would
+    /// read correct. Both come from one pose build, so they must agree on
+    /// every real creature (data test, skips without `original/`).
+    #[test]
+    fn the_rest_clips_are_anchored_where_the_scene_draws_the_layer() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let scene = game.scene(map_ref, &SceneOptions::ALL).unwrap();
+        let mut checked = 0;
+        for (slot, anim) in game.creature_animations(map_ref).unwrap() {
+            let pieces: Vec<&Piece> = scene
+                .pieces
+                .iter()
+                .filter(|piece| {
+                    piece.creature_id == Some(slot) && piece.group != PieceGroup::CharacterShadows
+                })
+                .collect();
+            assert_eq!(
+                pieces.len(),
+                anim.rest.layers.len(),
+                "creature {slot}: the scene and the resting clips list the same layers"
+            );
+            for (piece, layer) in pieces.iter().zip(&anim.rest.layers) {
+                assert_eq!(
+                    (piece.x, piece.y),
+                    layer.corner,
+                    "creature {slot} layer {:?}: the resting clip anchors on the scene piece",
+                    layer.key
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "the map has creatures to check");
     }
 
     /// Base frame of the clip `select_clip` picks for one walking state: the rest

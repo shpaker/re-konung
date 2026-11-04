@@ -12,7 +12,7 @@ pub mod scene;
 pub mod textures;
 
 pub use animation::{
-    AnimPlugin, Animator, Clock, Frame, PlayState, Sequence, SpriteView, frame_view,
+    AnimPlugin, AnimSet, Animator, Clock, Frame, PlayState, Sequence, SpriteView, frame_view,
 };
 pub use camera::{
     CameraApply, CameraBounds, CameraInput, CameraState, MapCamera, MapCameraPlugin, PAN_SPEED,

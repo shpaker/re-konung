@@ -63,6 +63,7 @@ fn creature_data() -> CreatureData {
             Some(LayerAnimation {
                 sequence: Arc::new(Sequence::new(frames())),
                 base: 0,
+                anchor: (5, 40),
             }),
             None,
         ],
@@ -219,4 +220,49 @@ fn the_node_is_a_parented_creature_node() {
     assert!(app.world().get::<CreatureNode>(node).is_some());
     // Parented under a root, so hiding that root hides the whole creature.
     assert!(app.world().get::<ChildOf>(node).is_some());
+}
+
+#[test]
+fn a_clip_swap_reanchors_the_image_and_never_moves_the_node() {
+    // The #68 jump: a walk clip is composed around its own base corner, so
+    // swapping the sequence must move the anchor with it. Left on the resting
+    // anchor the sprite renders displaced by the corner difference — the
+    // periodic one-cell image jump — while the node itself must stay put.
+    let (mut app, holder) = scene();
+    let child = holder.layers[0];
+    let before = *app.world().get::<Transform>(node(&holder)).unwrap();
+
+    // A walk clip anchored at (33, 26): base frame 12×24 at dx=dy=0.
+    let walk = Arc::new(Sequence::new(vec![Frame {
+        image: Some(Handle::default()),
+        size: Vec2::new(12.0, 24.0),
+        offset: Vec2::ZERO,
+        ticks: 1,
+    }]));
+    {
+        let mut animator = app
+            .world_mut()
+            .get_mut::<kn_render::Animator>(child)
+            .unwrap();
+        animator.play_at(Arc::clone(&walk), 0, 7, (33, 26));
+    }
+    app.update();
+
+    let after = *app.world().get::<Transform>(node(&holder)).unwrap();
+    assert_eq!(
+        after.translation, before.translation,
+        "a clip swap is a display change, not a world move"
+    );
+    let transform = app.world().get::<Transform>(child).unwrap();
+    assert_eq!(
+        (transform.translation.x, transform.translation.y),
+        (39.0, -38.0),
+        "the base frame sits on the new clip's own corner, not the resting one"
+    );
+    let global = *app.world().get::<GlobalTransform>(child).unwrap();
+    assert_eq!(
+        (global.translation().x, global.translation().y),
+        (139.0, -238.0),
+        "the image rides the node, composited over the new anchor"
+    );
 }

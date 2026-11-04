@@ -359,6 +359,11 @@ impl MapScene {
 pub struct Pose {
     pub key: SortKey,
     pub pieces: Vec<DrawPiece>,
+    /// The [`LayerKey`] of each piece, parallel to [`Pose::pieces`]. A consumer
+    /// that swaps a piece between poses (rest ↔ walk) must match layers by this
+    /// key, not by position: the track order is first-appearance per pose and
+    /// two poses of one creature may list the same layers differently.
+    pub layer_keys: Vec<LayerKey>,
     pub shadow: Option<DrawPiece>,
 }
 
@@ -836,11 +841,13 @@ fn character_pose(
         return Ok(None);
     };
     let mut pieces = Vec::new();
-    for (_, frames) in tracks {
+    let mut layer_keys = Vec::new();
+    for (key, frames) in tracks {
         if let Some(track) = layer_track(frames, base, ONE_TICK) {
             let mut p = DrawPiece::track(PieceGroup::Characters, track);
             p.creature_id = Some(record.slot);
             pieces.push(p);
+            layer_keys.push(key);
         }
     }
     let shadow = layer_track(shadows_by_frame, base, ONE_TICK).map(|track| {
@@ -851,6 +858,7 @@ fn character_pose(
     Ok(Some(Pose {
         key: (bottom, 1, record.slot),
         pieces,
+        layer_keys,
         shadow,
     }))
 }

@@ -559,13 +559,30 @@ sets a creature's world position. `CreaturePiece` and `update_shadow_depth` are 
   node and its label in one system, so both take `&mut Transform`; the label query carries
   `Without<CreatureNode>` because Bevy otherwise rejects the overlap with a `B0001` panic
   that crashed the running viewer before anything moved (`creature_node_and_label_queries_are_disjoint`).
-- **Layers are matched by position in a self-contained list, not a global index (P2 #7).**
-  `kn_game::CreatureClips` hands each layer as `CreatureLayer { base, animation }`, a
-  layer carrying its resting image and its frames together, so the viewer builds the
-  node by the layer's place in the list instead of joining animation to scene pieces by
-  an index that shifts when a frame omits a layer. Body and equipment keep the scene's
-  pose order in their local z, so equipment reads over the body
-  (`body_layers_keep_their_scene_order_depth`).
+- **Layers keep their identity by `LayerKey`, not by position (P2 #7, review #68).**
+  `kn_game::CreatureClips` hands each layer as `CreatureLayer { base, animation, corner, key }`:
+  a layer carrying its resting image, its frames, the absolute corner its base frame was
+  composed at and the sprite part it draws (`Pose::layer_keys` in `k1-game` carries the key
+  out of the pose build). Within one pose the viewer still builds the node by the layer's
+  place in the list — scene pieces and resting clips come from the same build and agree
+  (`the_rest_clips_are_anchored_where_the_scene_draws_the_layer`). Across poses the match
+  is by `key` (`pose_matched_layers`): track order is first-appearance *per pose*, so a
+  walk pose may list the same layers differently and an index join bolts one part's walk
+  clip onto another's piece (`walk_layers_join_to_their_part_not_their_position`). Body
+  and equipment keep the scene's pose order in their local z, so equipment reads over the
+  body (`body_layers_keep_their_scene_order_depth`).
+- **A clip swap re-anchors on the clip's own base corner; the old anchor was the jump (review #68).**
+  Every clip's frame `dx/dy` are offsets from *that clip's* base-frame corner
+  (`layer_track` in `k1-game`), and the rest and walk poses of one creature are composed
+  around different corners. Swapping the sequence while leaving the `Animator` on the
+  resting corner rendered the new clip displaced by the corner difference — the periodic
+  one-cell image jump at every direction or rest/walk change. `Animator::play_at` now takes
+  the anchor and moves it with the sequence (`apply_clip` reduces the clip's absolute
+  corner to the creature's local coordinates); the frame change and the anchor change are
+  one atomic write (`play_at_reanchors_the_piece_on_the_new_clip_corner`,
+  `a_clip_swap_reanchors_the_image_and_never_moves_the_node`,
+  `apply_clip_reanchors_on_the_clips_own_corner`). The node is never touched by a swap —
+  the jump was always the image, never the world position.
 - **Depth comes from the static stacks only, and the shadow is its own layer (P1 #4, P2 #6).**
   `DepthMap` is built from `PieceGroup::Objects` bottoms (`is_depth_relevant` matches only
   `Objects`), never from characters, terrain or markers — those must not decide what a
@@ -587,8 +604,18 @@ sets a creature's world position. `CreaturePiece` and `update_shadow_depth` are 
   A creature carries one `direction` for the whole step, so it never flickers between
   neighbours on its own — the earlier left/right jitter was purely the interpolation above,
   now fixed. To tell the two apart at runtime, `KN_CREATURE_DEBUG=1` logs per creature id:
-  the sim tick, cell, step from/to, `step_elapsed`, the interpolated pixel and the rendered
-  position.
+  the sim tick, cell, step from/to, `step_elapsed`, the interpolated pixel, the rendered
+  node position and its `GlobalTransform`; `sync_creature_animation` adds every sprite's
+  chosen clip, base corner, anchor, phase and shown frame with its local and global
+  transform. Comparing the sprite's global with the node's separates a node jump from an
+  image jump without guessing.
+- **The creature pipeline is ordered, not left to the scheduler (review #68).**
+  `AnimPlugin` registers its systems in the `AnimSet::Clock`/`AnimSet::Sprites` sets and
+  the viewer pins its own chain `.after(AnimSet::Clock)` with
+  `AnimSet::Sprites` configured between `CreatureSet::Swap` and `CreatureSet::Nodes`:
+  the clock settles, the simulation catches up to it, clips are chosen, sprites are
+  written, then the nodes are placed — never one frame stale by scheduler accident, and
+  never a clip applied after the nodes were read.
 - **A map change and a reset both pin the tracker; a backward `Step` rebuilds and replays (P1 #3, P2 #8).**
   `rebuild_scene` and `reset_simulation` pin `SimTickTracker` to the current `Clock.ticks`
   so a fresh simulation does not re-run the whole tick history in one frame

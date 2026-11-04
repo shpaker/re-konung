@@ -123,10 +123,14 @@ pub struct LayerData {
     pub offset: Vec2,
 }
 
-/// Animation sequence for a creature layer.
+/// Animation sequence for one creature layer, anchored on the layer's own
+/// base-frame corner (local to the node). `apply_animators` positions every
+/// frame from this anchor, so the corner a clip was composed around is the
+/// only origin that keeps the picture where the data put it.
 pub struct LayerAnimation {
     pub sequence: Arc<Sequence>,
     pub base: usize,
+    pub anchor: (i32, i32),
 }
 
 /// Complete data for spawning a creature.
@@ -200,15 +204,10 @@ pub fn spawn_creature(
                     Visibility::Inherited,
                     Transform::from_xyz(center.x, center.y, local_z),
                     // The node carries the creature's world position, so the
-                    // animator anchors on the layer's local offset: apply_animators
-                    // then writes the per-frame center relative to the node, never
-                    // a world center that would double-count the node's move.
-                    Animator::with_base(
-                        seq,
-                        layer.offset.x as i32,
-                        layer.offset.y as i32,
-                        anim.base,
-                    ),
+                    // animator anchors on the clip's own base corner: a swap to
+                    // another clip must re-anchor the same way (Animator::play_at),
+                    // or the new clip renders displaced by the corner difference.
+                    Animator::with_base(seq, anim.anchor.0, anim.anchor.1, anim.base),
                 ))
                 .id()
         } else {
@@ -250,8 +249,8 @@ pub fn spawn_creature(
         if let Some(anim) = anim {
             spawn.insert(Animator::with_base(
                 Arc::clone(&anim.sequence),
-                shadow.offset.x as i32,
-                shadow.offset.y as i32,
+                anim.anchor.0,
+                anim.anchor.1,
                 anim.base,
             ));
         }

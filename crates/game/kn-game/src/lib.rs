@@ -29,6 +29,7 @@ use k1_data::{
 };
 use k1_game::{resources::Resources, scene::SceneInput, textures::TextureKey};
 
+pub use k1_data::characters::LayerKey;
 pub use k1_data::objects_res::TICK_MS;
 pub use k1_game::scene::{PieceGroup, PoseKind};
 pub use k1_game::textures::{Rgba, TextureError};
@@ -630,10 +631,17 @@ fn animation(from: k1_game::scene::DrawAnimation) -> Animation {
 /// `None` where the layer never moves. Carrying both from one source lets a
 /// consumer build a stable creature node by the layer's position in this list
 /// instead of joining animation to scene pieces by a global index (review #68).
+///
+/// `corner` is the layer's base-frame corner in absolute map pixels, and
+/// `key` the sprite part it draws. A consumer swapping a layer between poses
+/// must re-anchor on `corner` (every clip's frame offsets are relative to its
+/// own base corner) and match layers across poses by `key`, never by position.
 #[derive(Debug, Clone)]
 pub struct CreatureLayer {
     pub base: Option<TextureId>,
     pub animation: Option<Animation>,
+    pub corner: (i32, i32),
+    pub key: LayerKey,
 }
 
 /// Clips of one creature's pieces: `layers` are the creature's body and
@@ -657,15 +665,24 @@ pub struct CreatureAnimation {
 /// body then equipment, the shadow kept apart.
 fn clips_of(pose: k1_game::scene::Pose) -> CreatureClips {
     CreatureClips {
-        layers: pose.pieces.into_iter().map(creature_layer).collect(),
-        shadow: pose.shadow.map(creature_layer),
+        layers: pose
+            .pieces
+            .into_iter()
+            .zip(pose.layer_keys)
+            .map(|(piece, key)| creature_layer(piece, key))
+            .collect(),
+        shadow: pose
+            .shadow
+            .map(|piece| creature_layer(piece, LayerKey::Shadow)),
     }
 }
 
-fn creature_layer(piece: k1_game::scene::DrawPiece) -> CreatureLayer {
+fn creature_layer(piece: k1_game::scene::DrawPiece, key: LayerKey) -> CreatureLayer {
     CreatureLayer {
         base: piece.texture.map(TextureId),
         animation: piece.animation.map(animation),
+        corner: (piece.x, piece.y),
+        key,
     }
 }
 

@@ -272,23 +272,40 @@ impl Animator {
         self.shown
     }
 
-    /// Меняет последовательность, не пересоздавая кусок: анимация персонажа
-    /// переключается между покоем и ходьбой на месте, а [`Self::shown`]
-    /// обнуляется, чтобы [`apply_animators`] переставил спрайт на новый кадр.
-    pub fn play(&mut self, sequence: Arc<Sequence>, base: usize) {
-        self.phase = sequence.phase_for(base);
-        self.sequence = sequence;
-        self.shown = None;
-    }
-
-    /// As [`Self::play`], but opens the new sequence on its `base` frame at clock
-    /// tick `at_tick` so a state or direction change reads from the clip's first
-    /// frame even though the shared clock never returns to zero (review #68).
-    pub fn play_at(&mut self, sequence: Arc<Sequence>, base: usize, at_tick: u64) {
+    /// Swaps the sequence in place and re-anchors the piece on the new clip's
+    /// base corner.
+    ///
+    /// Every clip's frame offsets are relative to its own base-frame corner, so
+    /// a swap that kept the old anchor would render the new clip displaced by
+    /// the corner difference — the periodic one-cell image jump the review
+    /// found (#68). `anchor` is the new clip's base corner in the same local
+    /// coordinates the animator was built with; [`Self::shown`] resets so
+    /// [`apply_animators`] repositions the sprite onto the new frame.
+    pub fn play_at(
+        &mut self,
+        sequence: Arc<Sequence>,
+        base: usize,
+        at_tick: u64,
+        anchor: (i32, i32),
+    ) {
         self.phase = sequence.phase_at(base, at_tick);
         self.sequence = sequence;
+        self.x = anchor.0;
+        self.y = anchor.1;
         self.shown = None;
     }
+}
+
+/// Ordered slots of the animation plugin, so a consumer can pin its own systems
+/// around them instead of trusting the scheduler's chain placement: creature
+/// sync must read the clock after [`AnimSet::Clock`] and swap clips before
+/// [`AnimSet::Sprites`] applies them (review #68).
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AnimSet {
+    /// [`advance_clock`]: moves the scene clock for the frame.
+    Clock,
+    /// [`apply_animators`]: writes the per-frame sprite transforms.
+    Sprites,
 }
 
 /// Плагин кадровой анимации. `tick_ms` — длительность одного тика сцены.
@@ -304,8 +321,14 @@ impl AnimPlugin {
 
 impl Plugin for AnimPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Clock::new(self.tick_ms))
-            .add_systems(Update, (advance_clock, apply_animators).chain());
+        app.insert_resource(Clock::new(self.tick_ms)).add_systems(
+            Update,
+            (
+                advance_clock.in_set(AnimSet::Clock),
+                apply_animators.in_set(AnimSet::Sprites),
+            )
+                .chain(),
+        );
     }
 }
 
@@ -549,7 +572,7 @@ mod tests {
         for base in 0..4 {
             for tick in [0u64, 1, 5, 17, 1000] {
                 let mut animator = Animator::new(Arc::clone(&sequence), 0, 0);
-                animator.play_at(Arc::clone(&sequence), base, tick);
+                animator.play_at(Arc::clone(&sequence), base, tick, (0, 0));
                 assert_eq!(
                     sequence.frame_at(tick, animator.phase),
                     base,
@@ -557,6 +580,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn play_at_reanchors_the_piece_on_the_new_clip_corner() {
+        // A walk clip is composed around its own base corner, not the resting one:
+        // the swap must move the anchor with it, or the image displaces by the
+        // corner difference the moment the clip changes (the #68 jump).
+        let sequence = Arc::new(sequence(&[8.0; 4], &[1, 1, 1, 1]));
+        let mut animator = Animator::with_base(Arc::clone(&sequence), 4, 40, 0);
+        animator.play_at(Arc::clone(&sequence), 0, 7, (33, 26));
+        assert_eq!((animator.x, animator.y), (33, 26));
+        assert_eq!(animator.shown(), None, "the swap forces a sprite rewrite");
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_systems(Update, apply_animators)
+            .insert_resource(Clock::new(60.0));
+        app.world_mut()
+            .resource_mut::<Clock>()
+            .goto(PlayState::Paused);
+        let child = app
+            .world_mut()
+            .spawn((
+                Sprite::default(),
+                Transform::default(),
+                Visibility::default(),
+                animator,
+            ))
+            .id();
+        app.update();
+        // Base frame of this synthetic clip: dx=dy=0, 8×8 → center of the corner (33, 26).
+        let transform = app.world().get::<Transform>(child).unwrap();
+        assert_eq!(transform.translation, Vec3::new(37.0, -30.0, 0.0));
     }
 
     /// Живой мир Bevy без окна и рендерера: часы → что лежит на спрайте.
