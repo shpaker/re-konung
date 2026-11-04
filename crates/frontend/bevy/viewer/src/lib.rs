@@ -210,6 +210,31 @@ struct SimTickTracker {
 #[derive(Resource, Default)]
 struct CreatureAnim {
     creatures: HashMap<usize, CreatureSequences>,
+    /// Last observed `(from, to)` per creature: the first frame a step is seen on
+    /// re-anchors its clips, so the walk cycle runs step-relative like the
+    /// original's `Frame` counter (Slavik `game_play.cpp:3727-3740`) instead of
+    /// free-running against the global clock.
+    locked: HashMap<usize, StepKey>,
+}
+
+/// What identifies the step a creature is on, for [`CreatureAnim::locked`].
+type StepKey = ((i32, i32), Option<(i32, i32)>);
+
+impl CreatureAnim {
+    /// Creatures whose step differs from the last observed one — their clips must
+    /// open on the step's base frame. The lock updates here, so a step re-anchors
+    /// exactly once, on its first observation.
+    fn observe_steps(&mut self, states: &[CreatureState]) -> HashSet<usize> {
+        let mut restep = HashSet::new();
+        for state in states {
+            let key = (state.pixel, state.step_to_pixel);
+            if self.locked.get(&state.id) != Some(&key) {
+                restep.insert(state.id);
+                self.locked.insert(state.id, key);
+            }
+        }
+        restep
+    }
 }
 
 /// Sequences for one creature's pieces: `body` by Characters-group layer index,
@@ -305,6 +330,7 @@ fn build_creature_anim(
             .into_iter()
             .map(|(id, anim)| (id, build_sequences(&anim, cache)))
             .collect(),
+        locked: HashMap::new(),
     }
 }
 
@@ -1177,13 +1203,13 @@ const LABEL_OFFSET_Y: f32 = 50.0;
 
 /// Temporary per-creature diagnostics for the movement/animation review: set
 /// `KN_CREATURE_DEBUG` in the environment to log, per creature id, the simulation
-/// tick, cell, step from/to, `step_elapsed`, the interpolated pixel, the rendered
-/// node position, z and `GlobalTransform`, and the simulation's own facing
-/// direction; [`sync_creature_animation`] adds each sprite's clip, anchor, phase
-/// and shown frame with its local and global transform. Comparing
-/// `sim_dir`/`from`/`to` (which change only at a logical tick) with `render` shows
-/// whether the simulation itself moves or only the display shifts; comparing the
-/// sprite's global with the node's separates a node jump from an image jump.
+/// tick, cell, step from/to, `step_elapsed`, the cell pixel the node sits on, the
+/// rendered node position, z and `GlobalTransform`, and the simulation's own
+/// facing direction; [`sync_creature_animation`] adds each sprite's clip, anchor,
+/// phase and shown frame with its local and global transform. Comparing
+/// `sim_dir`/`from`/`to` (which change only at a logical tick) with the sprite's
+/// global separates a node jump from an image jump: the node only ever sits on
+/// cell pixels, the glide to the next cell lives in the frame offsets.
 static CREATURE_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 fn creature_debug() -> bool {
@@ -1267,7 +1293,11 @@ fn spawn_creatures(
 ///
 /// The node owns the creature's world position and z; its sprite children carry
 /// only local offsets and per-frame deltas, so they follow the node untouched and
-/// body, equipment and shadow stay in lockstep (review #68).
+/// body, equipment and shadow stay in lockstep (review #68). The node sits on the
+/// simulation cell's pixel for the whole step: the glide to the next cell lives in
+/// the walk frames' own offsets (docs/k1/movement.md, "Step duration"), so sliding
+/// the node along with them would double the travel and snap the image back by a
+/// cell at every cycle wrap.
 fn sync_creature_nodes(
     sim: Res<SimulationResource>,
     scene_depth: Res<SceneDepth>,
@@ -1276,27 +1306,47 @@ fn sync_creature_nodes(
     mut nodes: Query<(&mut CreatureNode, &mut Transform, &GlobalTransform)>,
     // Disjoint from `nodes`: without `Without` Bevy cannot prove an entity never
     // carries both, so the two `&mut Transform` queries would panic (B0001).
+    sprites: Query<(&CreatureSprite, &GlobalTransform)>,
     mut labels: Query<(&CreatureLabel, &mut Transform), Without<CreatureNode>>,
 ) {
     let Some(ref simulation) = sim.sim else {
         return;
     };
     let states = simulation.states();
-    let sub = clock.tick_fraction();
-    let drawn: HashMap<usize, (f32, f32)> = states
-        .iter()
-        .map(|state| (state.id, smooth_pixel(state, sub)))
+    let drawn: HashMap<usize, (i32, i32)> =
+        states.iter().map(|state| (state.id, state.pixel)).collect();
+    // A label rides above the body image, not the cell: during a step the image
+    // is a cell away from the node, carried there by its walk frames.
+    let mut label_at: HashMap<usize, (f32, f32, usize)> = HashMap::new();
+    for (tag, global) in &sprites {
+        if tag.is_shadow {
+            continue;
+        }
+        let translation = global.translation();
+        label_at
+            .entry(tag.creature_id)
+            .and_modify(|existing| {
+                // Keep the lowest layer index: the body, not the equipment.
+                if tag.layer < existing.2 {
+                    *existing = (translation.x, translation.y, tag.layer);
+                }
+            })
+            .or_insert((translation.x, translation.y, tag.layer));
+    }
+    let label_at: HashMap<usize, (f32, f32)> = label_at
+        .into_iter()
+        .map(|(id, (x, y, _))| (id, (x, y)))
         .collect();
     for (mut node, mut transform, global) in &mut nodes {
         let id = node.id as usize;
         let Some(&(x, y)) = drawn.get(&id) else {
             continue;
         };
-        transform.translation.x = x;
-        transform.translation.y = -y;
+        transform.translation.x = x as f32;
+        transform.translation.y = -(y as f32);
         // Occlusion bottom from the live cell and this creature's body height.
         let height = spawns.heights.get(&id).copied().unwrap_or(0);
-        let bottom = (y.round() + height as f32).max(0.0) as i32;
+        let bottom = (y + height).max(0);
         update_creature_depth(&mut node, &mut transform, bottom, &scene_depth.map);
         if creature_debug()
             && let Some(state) = states.iter().find(|state| state.id == id)
@@ -1304,7 +1354,7 @@ fn sync_creature_nodes(
             let global = global.translation();
             info!(
                 "creature #{id} tick={} cell=({},{}) from=({},{}) to={:?} elapsed={}/{} \
-                 interp=({x:.1},{y:.1}) render=({:.1},{:.1}) z={:.4} global=({:.1},{:.1}) \
+                 pixel=({},{}) render=({:.1},{:.1}) z={:.4} global=({:.1},{:.1}) \
                  sim_dir={:?} walk={:?}",
                 clock.ticks,
                 state.cell.0,
@@ -1314,6 +1364,8 @@ fn sync_creature_nodes(
                 state.step_to_pixel,
                 state.step_elapsed,
                 state.step_ticks,
+                x,
+                y,
                 transform.translation.x,
                 transform.translation.y,
                 transform.translation.z,
@@ -1325,35 +1377,12 @@ fn sync_creature_nodes(
         }
     }
     for (label, mut transform) in &mut labels {
-        let Some(&(x, y)) = drawn.get(&label.creature_id) else {
+        let Some(&(x, y)) = label_at.get(&label.creature_id) else {
             continue;
         };
         transform.translation.x = x;
-        transform.translation.y = -y - LABEL_OFFSET_Y;
+        transform.translation.y = y - LABEL_OFFSET_Y;
     }
-}
-
-/// Where a creature is drawn this frame: the cell centre slid towards its step
-/// target by the fraction of the step already elapsed.
-///
-/// `step_elapsed` starts at 1 (the logical tick a walk step commits on, kept for
-/// the engine's tick contract), so the visible fraction is `(elapsed - 1 + sub)`
-/// over the step length: a creature leaves its cell at 0 progress and reaches the
-/// target as the step's last tick ends, continuous at both step boundaries instead
-/// of jumping one frame-slice forward the instant it steps (review #68).
-fn smooth_pixel(state: &CreatureState, sub: f32) -> (f32, f32) {
-    let Some((tx, ty)) = state.step_to_pixel else {
-        return (state.pixel.0 as f32, state.pixel.1 as f32);
-    };
-    if state.step_ticks == 0 {
-        return (state.pixel.0 as f32, state.pixel.1 as f32);
-    }
-    let elapsed = (state.step_elapsed as f32 - 1.0 + sub).clamp(0.0, state.step_ticks as f32);
-    let t = (elapsed / state.step_ticks as f32).min(1.0);
-    (
-        state.pixel.0 as f32 + (tx - state.pixel.0) as f32 * t,
-        state.pixel.1 as f32 + (ty - state.pixel.1) as f32 * t,
-    )
 }
 
 /// Swaps each creature sprite's [`Animator`] between the resting and the walking
@@ -1363,10 +1392,14 @@ fn smooth_pixel(state: &CreatureState, sub: f32) -> (f32, f32) {
 /// The swap re-anchors the animator on the clip's own base corner: every clip's
 /// frame offsets are relative to that corner, so an animator left on the
 /// resting corner would render the new clip displaced by the corner difference
-/// — the periodic image jump of review #68.
+/// — the periodic image jump of review #68. A step seen for the first time
+/// re-anchors too, opening the cycle `(elapsed - 1)` frames in: the walk frames
+/// carry the travel across a step, so their index must run with the step like the
+/// original's `Frame` counter (Slavik `game_play.cpp:3727-3740`), not free-run
+/// against the global clock and wrap to the first frame mid-step.
 fn sync_creature_animation(
     sim: Res<SimulationResource>,
-    anim: Res<CreatureAnim>,
+    mut anim: ResMut<CreatureAnim>,
     spawns: Res<CreatureSpawns>,
     clock: Res<Clock>,
     mut sprites: Query<(&CreatureSprite, &mut Animator, &Transform, &GlobalTransform)>,
@@ -1374,8 +1407,9 @@ fn sync_creature_animation(
     let Some(ref simulation) = sim.sim else {
         return;
     };
-    let facing: HashMap<usize, (bool, u8)> = simulation
-        .states()
+    let states = simulation.states();
+    let restep = anim.observe_steps(&states);
+    let facing: HashMap<usize, (bool, u8, u32)> = states
         .iter()
         .map(|state| {
             (
@@ -1383,12 +1417,13 @@ fn sync_creature_animation(
                 (
                     state.walk_state == WalkState::Walk,
                     state.direction.unwrap_or(0),
+                    state.step_elapsed,
                 ),
             )
         })
         .collect();
     for (tag, mut animator, transform, global) in &mut sprites {
-        let Some(&(walking, direction)) = facing.get(&tag.creature_id) else {
+        let Some(&(walking, direction, elapsed)) = facing.get(&tag.creature_id) else {
             continue;
         };
         let Some(creature) = anim.creatures.get(&tag.creature_id) else {
@@ -1423,13 +1458,19 @@ fn sync_creature_animation(
                 global.y,
             );
         }
-        if Arc::ptr_eq(&animator.sequence, &clip.sequence) {
+        if Arc::ptr_eq(&animator.sequence, &clip.sequence) && !restep.contains(&tag.creature_id) {
             continue;
         }
         let Some(&origin) = spawns.origins.get(&tag.creature_id) else {
             continue;
         };
-        apply_clip(&mut animator, clip, origin, clock.ticks);
+        // The step began `elapsed - 1` ticks ago: opening the clip on its base
+        // frame there puts the shown frame at base + elapsed - 1 now — the
+        // step-relative index, correct even when catch-up first saw the step late.
+        let step_start = clock
+            .ticks
+            .saturating_sub(u64::from(elapsed.saturating_sub(1)));
+        apply_clip(&mut animator, clip, origin, step_start);
     }
 }
 
@@ -1552,6 +1593,7 @@ fn diagnostics(
 mod tests {
     use super::*;
     use kn_game::{LayerKey, PieceGroup};
+    use kn_render::Frame;
 
     fn state(
         pixel: (i32, i32),
@@ -1577,79 +1619,120 @@ mod tests {
     }
 
     #[test]
-    fn a_step_begins_at_the_cell_it_left() {
-        // A walk step commits with elapsed = 1 but shows no progress yet, so the
-        // creature leaves its cell at 0, not already a frame-slice across.
+    fn a_new_step_asks_for_reanchoring_once() {
+        let mut anim = CreatureAnim::default();
+        let walking = [state((58, 16), Some((116, 32)), 1, 12)];
         assert_eq!(
-            smooth_pixel(&state((58, 16), Some((116, 32)), 1, 4), 0.0),
-            (58.0, 16.0)
+            anim.observe_steps(&walking),
+            [0].into_iter().collect::<HashSet<_>>()
         );
+        // The same step seen on its later ticks must not re-anchor again: the
+        // cycle keeps running from where the step opened it.
+        let later = [state((58, 16), Some((116, 32)), 7, 12)];
+        assert!(anim.observe_steps(&later).is_empty());
     }
 
     #[test]
-    fn one_tick_into_a_four_tick_step_sits_a_quarter_across() {
-        // The first tick shows nothing, the second shows one tick of four done.
+    fn a_turn_or_a_new_step_reanchors() {
+        let mut anim = CreatureAnim::default();
+        anim.observe_steps(&[state((0, 0), Some((58, 0)), 1, 12)]);
+        // A different target — the next step of a straight walk or a turn.
         assert_eq!(
-            smooth_pixel(&state((0, 0), Some((100, 40)), 2, 4), 0.0),
-            (25.0, 10.0)
+            anim.observe_steps(&[state((58, 0), Some((58, -32)), 1, 12)]),
+            [0].into_iter().collect::<HashSet<_>>()
+        );
+        // Coming to rest is a step change too: the rest clip opens on its base.
+        assert_eq!(
+            anim.observe_steps(&[state((58, 0), None, 0, 0)]),
+            [0].into_iter().collect::<HashSet<_>>()
+        );
+        assert!(anim.observe_steps(&[state((58, 0), None, 0, 0)]).is_empty());
+    }
+
+    /// The walk cycle is opened at the tick the step started, not the tick it was
+    /// first observed: `elapsed - 1` ticks after the base frame, so the shown
+    /// frame runs with the step like the original's per-tick `Frame` counter.
+    #[test]
+    fn apply_clip_opens_the_frame_the_step_has_reached() {
+        let frames = (0..12)
+            .map(|_| Frame::new(Handle::default(), Vec2::new(8.0, 8.0), Vec2::ZERO))
+            .collect();
+        let clip = Clip {
+            sequence: Arc::new(Sequence::new(frames)),
+            base: 0,
+            corner: (0, 0),
+        };
+        let mut animator = Animator::new(Arc::clone(&clip.sequence), 0, 0);
+        let clock_ticks = 100u64;
+        let elapsed = 3u32;
+        apply_clip(
+            &mut animator,
+            &clip,
+            (0, 0),
+            clock_ticks.saturating_sub(u64::from(elapsed - 1)),
+        );
+        assert_eq!(
+            clip.sequence.frame_at(clock_ticks, animator.phase),
+            (elapsed - 1) as usize,
+            "three ticks into a step shows its third frame"
         );
     }
 
+    /// The measurement behind the display model (docs/k1/movement.md, "Step
+    /// duration"): a walk sequence carries the cell travel in its own frame
+    /// offsets — from the first frame to the last it slides to within ~10 px of
+    /// the step vector in every direction. The node must not interpolate along
+    /// that vector on top, or the travel is counted twice (data test, skips
+    /// without `original/`).
     #[test]
-    fn the_sub_tick_fraction_pushes_the_interpolation_forward() {
-        // One whole tick done plus half the next: t = 1.5/4
-        assert_eq!(
-            smooth_pixel(&state((0, 0), Some((100, 40)), 2, 4), 0.5),
-            (37.5, 15.0)
-        );
-    }
-
-    #[test]
-    fn a_completed_step_clamps_at_the_target() {
-        let landed = smooth_pixel(&state((0, 0), Some((100, 40)), 4, 4), 1.0);
-        assert_eq!(landed, (100.0, 40.0), "t never passes 1");
-    }
-
-    #[test]
-    fn a_creature_without_a_step_stays_put() {
-        assert_eq!(
-            smooth_pixel(&state((174, 80), None, 0, 0), 0.7),
-            (174.0, 80.0)
-        );
-        // step_ticks 0 with a target still must not divide by zero
-        assert_eq!(
-            smooth_pixel(&state((0, 0), Some((10, 10)), 0, 0), 0.0),
-            (0.0, 0.0)
-        );
-    }
-
-    /// A step of any length must slide smoothly from the cell it left to the
-    /// target: monotonic in x, starting at 0 progress and ending exactly on the
-    /// target, so movement is continuous across every step boundary (1, 2 and 4
-    /// tick durations, the values walk can produce).
-    #[test]
-    fn movement_is_continuous_across_step_boundaries() {
-        for ticks in [1u32, 2, 4] {
-            let xs: Vec<f32> = (1..=ticks)
-                .flat_map(|elapsed| [0.0_f32, 0.5, 1.0].map(|sub| (elapsed, sub)))
-                .map(|(elapsed, sub)| {
-                    smooth_pixel(&state((0, 0), Some((100, 40)), elapsed, ticks), sub).0
-                })
-                .collect();
-            assert_eq!(
-                xs.first(),
-                Some(&0.0),
-                "{ticks}-tick step starts at its cell"
-            );
-            assert_eq!(
-                xs.last(),
-                Some(&100.0),
-                "{ticks}-tick step lands on its target"
-            );
-            assert!(
-                xs.windows(2).all(|w| w[1] >= w[0]),
-                "{ticks}-tick step must never go backwards: {xs:?}"
-            );
+    fn walk_frames_carry_the_step() {
+        // Pixel step per direction index, mirroring kn_game::movement::grid.
+        let step: [(i32, i32); 8] = [
+            (-58, 0),
+            (-29, -16),
+            (0, -32),
+            (29, -16),
+            (58, 0),
+            (29, 16),
+            (0, 32),
+            (-29, 16),
+        ];
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../original/k1");
+        for edition in ["rus", "eng"] {
+            let dir = root.join(edition).join("game");
+            let Ok(game) = Game::open(&dir) else {
+                continue;
+            };
+            let map_ref = *game.maps().unwrap().first().unwrap();
+            let animations = game.creature_animations(map_ref).unwrap();
+            assert!(!animations.is_empty(), "{edition}: no creatures");
+            let mut checked = 0;
+            for (_, anim) in &animations {
+                for (direction, walk) in anim.walk.iter().enumerate() {
+                    let Some(clips) = walk else { continue };
+                    let Some(body) = clips
+                        .layers
+                        .iter()
+                        .find(|layer| layer.key == LayerKey::Body)
+                        .and_then(|layer| layer.animation.as_ref())
+                    else {
+                        continue;
+                    };
+                    let (Some(first), Some(last)) = (body.frames.first(), body.frames.last())
+                    else {
+                        continue;
+                    };
+                    let drift = (last.dx - first.dx, last.dy - first.dy);
+                    let (want_x, want_y) = step[direction];
+                    assert!(
+                        (drift.0 - want_x).abs() <= 12 && (drift.1 - want_y).abs() <= 12,
+                        "{edition} dir={direction} walk frames drift {drift:?}, expected ≈ \
+                         ({want_x},{want_y}) — the travel is not in the frames"
+                    );
+                    checked += 1;
+                }
+            }
+            assert!(checked > 0, "{edition}: no walk sequences to check");
         }
     }
 
@@ -2572,6 +2655,258 @@ mod tests {
         app.world_mut()
             .spawn((CreatureLabel { creature_id: 1 }, Transform::default()));
         app.update();
+    }
+
+    /// What one rendered frame looked like for one creature: where its body and
+    /// shadow's top-left corner ended up in map pixels, and the simulation state
+    /// behind them.
+    ///
+    /// Corners, not sprite centers: Bevy centers a sprite on `corner + size/2`,
+    /// and walk frames have different bounding boxes, so a center-to-center
+    /// distance misreads a legitimate size change as (missing) travel. The
+    /// original positions its sprites by corner (`compose` adds the frame's
+    /// `image_offset` to the cell pixel), so that is the space where the
+    /// step-travel assertion means what it says.
+    #[derive(Debug)]
+    struct VisualSample {
+        body: (f32, f32),
+        shadow: Option<(f32, f32)>,
+        from: (i32, i32),
+        to: Option<(i32, i32)>,
+        elapsed: u32,
+        ticks: u32,
+        walking: bool,
+    }
+
+    /// End-to-end visual continuity on real data: the whole pipeline runs —
+    /// simulation, clip swap, [`apply_animators`], node sync — and the body sprite's
+    /// world position is read through the real transform hierarchy. A walking
+    /// creature must never jump back further than the gait (the double travel of
+    /// node interpolation stacked on walk-frame offsets made the image leap a cell
+    /// back every 12-frame cycle), a full step must land it on the next cell, and
+    /// the shadow must move with the body.
+    #[test]
+    fn a_walking_creature_image_never_jumps_back() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let mut cache = TextureCache::default();
+        let mut images = Assets::<Image>::default();
+        let anim = build_creature_anim(&game, map_ref, &mut cache, &mut images);
+        let scene = game.scene(map_ref, &SceneOptions::ALL).unwrap();
+        let mut sim_resource = SimulationResource::default();
+        sim_resource.sim = game.simulation(map_ref, SIM_SEED).ok();
+        sim_resource.initial_pixels = sim_resource.sim.as_ref().unwrap().initial_pixels();
+        let spawns = build_creature_spawns(&scene, &cache, &anim, &sim_resource.initial_pixels);
+        assert!(
+            !spawns.plans.is_empty(),
+            "карта обязана дать существ со сценой"
+        );
+        let depth = build_scene_depth(&scene, &cache);
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::transform::TransformPlugin,
+            AnimPlugin::new(TICK_MS as f32),
+        ))
+        .insert_resource(GameResource(game))
+        .insert_resource(Viewer {
+            maps: vec![map_ref],
+            selected: 0,
+            overlays: DEFAULT_OVERLAYS,
+            playback: PlayState::Paused,
+        })
+        .insert_resource(images)
+        .insert_resource(sim_resource)
+        .insert_resource(SimTickTracker::default())
+        .insert_resource(SceneDepth { map: depth })
+        .insert_resource(anim)
+        .insert_resource(spawns)
+        .add_systems(
+            Update,
+            (
+                advance_simulation,
+                spawn_creatures,
+                sync_creature_animation.in_set(CreatureSet::Swap),
+                sync_creature_nodes.in_set(CreatureSet::Nodes),
+            )
+                .chain()
+                .after(AnimSet::Clock),
+        )
+        .configure_sets(
+            Update,
+            (
+                AnimSet::Sprites.after(CreatureSet::Swap),
+                CreatureSet::Nodes.after(AnimSet::Sprites),
+            ),
+        );
+        // The clock moves only through this test: real-time advance would tick
+        // the animation independently of the simulation stepping below.
+        app.world_mut()
+            .resource_mut::<Clock>()
+            .goto(PlayState::Paused);
+
+        let mut history: HashMap<usize, Vec<VisualSample>> = HashMap::new();
+        let mut sprite_query = app
+            .world_mut()
+            .query::<(&CreatureSprite, &GlobalTransform, &Sprite)>();
+        for tick in 0..600u64 {
+            app.world_mut().resource_mut::<Clock>().ticks = tick;
+            app.update();
+            let world = app.world();
+            let states: HashMap<usize, CreatureState> = world
+                .resource::<SimulationResource>()
+                .sim
+                .as_ref()
+                .unwrap()
+                .states()
+                .into_iter()
+                .map(|state| (state.id, state))
+                .collect();
+            let sprites: Vec<(usize, usize, bool, f32, f32)> = sprite_query
+                .iter(world)
+                .map(|(tag, global, sprite)| {
+                    // From the Bevy center back to the map-pixel corner the
+                    // original positions sprites by.
+                    let center = global.translation();
+                    let size = sprite.custom_size.unwrap_or_default();
+                    (
+                        tag.creature_id,
+                        tag.layer,
+                        tag.is_shadow,
+                        center.x - size.x / 2.0,
+                        -center.y - size.y / 2.0,
+                    )
+                })
+                .collect();
+            for (creature_id, layer, is_shadow, x, y) in &sprites {
+                if *is_shadow || *layer != 0 {
+                    continue;
+                }
+                let Some(state) = states.get(creature_id) else {
+                    continue;
+                };
+                let shadow = sprites
+                    .iter()
+                    .find(|(other, _, tagged_shadow, _, _)| {
+                        *other == *creature_id && *tagged_shadow
+                    })
+                    .map(|&(_, _, _, sx, sy)| (sx, sy));
+                history.entry(*creature_id).or_default().push(VisualSample {
+                    body: (*x, *y),
+                    shadow,
+                    from: state.pixel,
+                    to: state.step_to_pixel,
+                    elapsed: state.step_elapsed,
+                    ticks: state.step_ticks,
+                    walking: state.walk_state == WalkState::Walk,
+                });
+            }
+        }
+
+        let mut walking_samples = 0usize;
+        for (id, samples) in &history {
+            let mut index = 0;
+            while index < samples.len() {
+                if !samples[index].walking {
+                    index += 1;
+                    continue;
+                }
+                let start = index;
+                while index < samples.len() && samples[index].walking {
+                    index += 1;
+                }
+                let segment = &samples[start..index];
+                if segment.len() < 12 {
+                    continue; // shorter than a step: says nothing about boundaries
+                }
+                walking_samples += segment.len();
+                for window in segment.windows(2) {
+                    let (first, second) = (&window[0], &window[1]);
+                    let jump = ((second.body.0 - first.body.0).powi(2)
+                        + (second.body.1 - first.body.1).powi(2))
+                    .sqrt();
+                    assert!(
+                        jump <= 30.0,
+                        "creature #{id} image jumped {jump:.1} px in one tick: \
+                         {first:?} -> {second:?}"
+                    );
+                    if let (Some(shadow_before), Some(shadow_after)) = (first.shadow, second.shadow)
+                    {
+                        let jump = ((shadow_after.0 - shadow_before.0).powi(2)
+                            + (shadow_after.1 - shadow_before.1).powi(2))
+                        .sqrt();
+                        assert!(
+                            jump <= 30.0,
+                            "creature #{id} shadow jumped {jump:.1} px in one tick: \
+                             {first:?} -> {second:?}"
+                        );
+                    }
+                }
+                // Each complete step must land the image on the next cell: the
+                // frames carry the travel, so last minus first ≈ the step vector
+                // (walk frames stop 1-11 px short of the cell, docs/k1/movement.md).
+                let mut step_start = 0;
+                for position in 1..=segment.len() {
+                    let ends_step = position == segment.len()
+                        || segment[position].from != segment[step_start].from
+                        || segment[position].to != segment[step_start].to;
+                    if !ends_step {
+                        continue;
+                    }
+                    let first = &segment[step_start];
+                    let last = &segment[position - 1];
+                    // Only a step seen from its first tick to its last can be
+                    // judged on total travel; a partial view measures nothing.
+                    if let Some(to) = first
+                        .to
+                        .filter(|_| first.elapsed == 1 && last.elapsed == last.ticks)
+                    {
+                        // Corners are already map space: a complete step must
+                        // land the image corner on the next cell.
+                        let travelled = (last.body.0 - first.body.0, last.body.1 - first.body.1);
+                        let wanted = ((to.0 - first.from.0) as f32, (to.1 - first.from.1) as f32);
+                        assert!(
+                            (travelled.0 - wanted.0).abs() <= 20.0
+                                && (travelled.1 - wanted.1).abs() <= 20.0,
+                            "creature #{id} step {:?}->{:?} travelled {travelled:?}, \
+                             expected ≈ {wanted:?}\nsegment: {segment:#?} \
+                             [{step_start}..{position}]",
+                            first.from,
+                            to,
+                        );
+                        // The shadow rides the same step: judged over the whole
+                        // step, not per tick — body and shadow are different
+                        // sprites whose frame bounding boxes change differently,
+                        // so per-tick corner deltas legitimately diverge while
+                        // the step's total drift must not.
+                        if let (Some(shadow_first), Some(shadow_last)) = (first.shadow, last.shadow)
+                        {
+                            let shadow_travelled = (
+                                shadow_last.0 - shadow_first.0,
+                                shadow_last.1 - shadow_first.1,
+                            );
+                            assert!(
+                                (shadow_travelled.0 - travelled.0).abs() <= 8.0
+                                    && (shadow_travelled.1 - travelled.1).abs() <= 8.0,
+                                "creature #{id} shadow travelled {shadow_travelled:?} \
+                                 while the body travelled {travelled:?} on step \
+                                 {:?}->{:?}",
+                                first.from,
+                                to,
+                            );
+                        }
+                    }
+                    step_start = position;
+                }
+            }
+        }
+        assert!(
+            walking_samples >= 60,
+            "no creature walked a step's length in 600 ticks: {walking_samples} samples"
+        );
     }
 
     fn fire_reset(mut commands: Commands, buttons: Query<Entity, With<ResetPositions>>) {

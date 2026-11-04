@@ -90,16 +90,6 @@ impl Clock {
         self.sub_tick = 0.0;
     }
 
-    /// Fraction (0..1) through the current tick, for frame-level interpolation.
-    pub fn tick_fraction(&self) -> f32 {
-        let tick_secs = self.tick_ms / 1000.0;
-        if tick_secs > 0.0 {
-            (self.sub_tick / tick_secs).min(1.0)
-        } else {
-            0.0
-        }
-    }
-
     /// Переключает воспроизведение; [`PlayState::Off`] обнуляет часы, чтобы
     /// показать базовый кадр и с него же продолжить.
     pub fn goto(&mut self, state: PlayState) {
