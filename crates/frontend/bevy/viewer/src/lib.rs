@@ -163,6 +163,8 @@ pub struct Stats {
 struct SimulationResource {
     sim: Option<Simulation>,
     initial_pixels: Vec<(usize, (i32, i32))>,
+    label_root: Option<Entity>,
+    labels_spawned: bool,
 }
 
 /// Clock tick at which the simulation was last advanced; drives catch-up ticking.
@@ -170,6 +172,16 @@ struct SimulationResource {
 struct SimTickTracker {
     last_clock_ticks: u64,
 }
+
+/// World-space text label above a creature, showing `#ID`.
+#[derive(Component)]
+struct CreatureLabel {
+    creature_id: usize,
+}
+
+/// Root entity for all creature labels; despawned on map rebuild.
+#[derive(Component)]
+struct LabelRoot;
 
 /// Переключатель воспроизведения: какой именно, видит компонент.
 #[derive(Component, Clone, Copy, Default)]
@@ -265,6 +277,7 @@ pub fn run_viewer(config: ViewerConfig) {
                 rebuild_scene,
                 sync_groups,
                 advance_simulation,
+                spawn_creature_labels,
                 sync_creature_sprites,
                 diagnostics,
             )
@@ -571,6 +584,10 @@ fn rebuild_scene(
         .sim
         .as_ref()
         .map_or_else(Vec::new, |s| s.initial_pixels());
+    sim_resource.labels_spawned = false;
+    if let Some(root) = sim_resource.label_root.take() {
+        commands.entity(root).despawn();
+    }
     sim_tracker.last_clock_ticks = 0;
 }
 
@@ -662,9 +679,46 @@ fn advance_simulation(
     }
 }
 
+const LABEL_OFFSET_Y: f32 = 50.0;
+
+fn spawn_creature_labels(mut sim: ResMut<SimulationResource>, mut commands: Commands) {
+    if sim.labels_spawned || sim.sim.is_none() {
+        return;
+    }
+    let states = sim.sim.as_ref().unwrap().states();
+    sim.labels_spawned = true;
+    let root = commands
+        .spawn((LabelRoot, Transform::IDENTITY, Visibility::Visible))
+        .id();
+    sim.label_root = Some(root);
+    let mut children = Vec::new();
+    for state in &states {
+        let (px, py) = state.pixel;
+        let text = format!("#{}", state.id);
+        let label = commands
+            .spawn((
+                CreatureLabel {
+                    creature_id: state.id,
+                },
+                Text2d(text),
+                TextFont {
+                    font_size: FontSize::Px(11.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 1.0, 0.6)),
+                Transform::from_xyz(px as f32, -(py as f32) - LABEL_OFFSET_Y, 9999.0),
+                Visibility::Inherited,
+            ))
+            .id();
+        children.push(label);
+    }
+    commands.entity(root).add_children(&children);
+}
+
 fn sync_creature_sprites(
     sim: Res<SimulationResource>,
     mut sprites: Query<(&CreaturePiece, &mut Transform)>,
+    mut labels: Query<(&CreatureLabel, &mut Transform)>,
 ) {
     let Some(ref simulation) = sim.sim else {
         return;
@@ -683,6 +737,13 @@ fn sync_creature_sprites(
         };
         transform.translation.x = tag.original_translation.x + (cur.0 - ini.0) as f32;
         transform.translation.y = tag.original_translation.y - (cur.1 - ini.1) as f32;
+    }
+    for (label, mut transform) in &mut labels {
+        let Some(&cur) = current.get(&label.creature_id) else {
+            continue;
+        };
+        transform.translation.x = cur.0 as f32;
+        transform.translation.y = -(cur.1 as f32) - LABEL_OFFSET_Y;
     }
 }
 
