@@ -23,12 +23,13 @@ use bevy::{
     ui::Checked,
     ui_widgets::ValueChange,
 };
+use kn_game::simulation::Simulation;
 use kn_game::{Game, MapRef, MapSource, Piece, SceneOptions, TICK_MS, group_is_shown};
 use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
-    AnimPlugin, CameraApply, CameraBounds, CameraInput, CameraState, Clock, GameResource,
-    MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup, ScenePiece,
-    TextureCache, clear_scene, load_scene, ortho_scale,
+    AnimPlugin, CameraApply, CameraBounds, CameraInput, CameraState, Clock, CreaturePiece,
+    GameResource, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup,
+    ScenePiece, TextureCache, clear_scene, load_scene, ortho_scale,
 };
 use kn_ui::{dark_theme, pointer_over_ui, sync_checked};
 
@@ -157,6 +158,19 @@ pub struct Stats {
     pub error: Option<String>,
 }
 
+/// Simulation driving creature positions; recreated on map rebuild.
+#[derive(Resource, Default)]
+struct SimulationResource {
+    sim: Option<Simulation>,
+    initial_pixels: Vec<(usize, (i32, i32))>,
+}
+
+/// Clock tick at which the simulation was last advanced; drives catch-up ticking.
+#[derive(Resource, Default)]
+struct SimTickTracker {
+    last_clock_ticks: u64,
+}
+
 /// Переключатель воспроизведения: какой именно, видит компонент.
 #[derive(Component, Clone, Copy, Default)]
 struct PlaybackToggle(PlaybackKind);
@@ -227,6 +241,8 @@ pub fn run_viewer(config: ViewerConfig) {
         .init_resource::<TextureCache>()
         .init_resource::<ActiveRoot>()
         .init_resource::<Stats>()
+        .init_resource::<SimulationResource>()
+        .init_resource::<SimTickTracker>()
         .insert_resource(Rebuild { map: true })
         .insert_resource(Viewer {
             maps: config.maps.clone(),
@@ -248,6 +264,8 @@ pub fn run_viewer(config: ViewerConfig) {
                 sync_playboxes,
                 rebuild_scene,
                 sync_groups,
+                advance_simulation,
+                sync_creature_sprites,
                 diagnostics,
             )
                 .chain()
@@ -497,6 +515,8 @@ fn rebuild_scene(
     mut active: ResMut<ActiveRoot>,
     mut stats: ResMut<Stats>,
     mut pending: ResMut<PendingFrame>,
+    mut sim_resource: ResMut<SimulationResource>,
+    mut sim_tracker: ResMut<SimTickTracker>,
 ) {
     if !rebuild.map {
         return;
@@ -546,6 +566,12 @@ fn rebuild_scene(
         problems: loaded.problems,
         error: None,
     };
+    sim_resource.sim = game.0.simulation(map_ref, 42).ok();
+    sim_resource.initial_pixels = sim_resource
+        .sim
+        .as_ref()
+        .map_or_else(Vec::new, |s| s.initial_pixels());
+    sim_tracker.last_clock_ticks = 0;
 }
 
 /// Видимость куска по включённым слоям: границы сцены считают только по тому,
@@ -618,6 +644,45 @@ fn failed(map: MapRef, cached: usize, error: String, elapsed: Duration) -> Stats
         animation_frames: 0,
         problems: Vec::new(),
         error: Some(error),
+    }
+}
+
+fn advance_simulation(
+    clock: Res<Clock>,
+    mut tracker: ResMut<SimTickTracker>,
+    mut sim: ResMut<SimulationResource>,
+) {
+    let Some(simulation) = sim.sim.as_mut() else {
+        tracker.last_clock_ticks = clock.ticks;
+        return;
+    };
+    while tracker.last_clock_ticks < clock.ticks {
+        simulation.tick();
+        tracker.last_clock_ticks += 1;
+    }
+}
+
+fn sync_creature_sprites(
+    sim: Res<SimulationResource>,
+    mut sprites: Query<(&CreaturePiece, &mut Transform)>,
+) {
+    let Some(ref simulation) = sim.sim else {
+        return;
+    };
+    let states = simulation.states();
+    let current: std::collections::HashMap<usize, (i32, i32)> =
+        states.iter().map(|s| (s.id, s.pixel)).collect();
+    let initial: std::collections::HashMap<usize, (i32, i32)> =
+        sim.initial_pixels.iter().copied().collect();
+    for (tag, mut transform) in &mut sprites {
+        let Some(&cur) = current.get(&tag.creature_id) else {
+            continue;
+        };
+        let Some(&ini) = initial.get(&tag.creature_id) else {
+            continue;
+        };
+        transform.translation.x = tag.original_translation.x + (cur.0 - ini.0) as f32;
+        transform.translation.y = tag.original_translation.y - (cur.1 - ini.1) as f32;
     }
 }
 

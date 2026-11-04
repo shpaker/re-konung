@@ -118,6 +118,20 @@ impl Simulation {
         self.ids.iter().filter(|id| id.is_some()).count()
     }
 
+    /// Initial pixel position for each creature, keyed by `Creature.id`.
+    pub fn initial_pixels(&self) -> Vec<(usize, (i32, i32))> {
+        self.roster
+            .iter()
+            .map(|c| {
+                let cell = Cell::new(
+                    u32::try_from(c.cell.0.max(0)).unwrap_or(0),
+                    u32::try_from(c.cell.1.max(0)).unwrap_or(0),
+                );
+                (c.id, cell_pixel(cell))
+            })
+            .collect()
+    }
+
     pub fn tick(&mut self) -> Vec<Event> {
         self.tick += 1;
         let live = self.live_picture();

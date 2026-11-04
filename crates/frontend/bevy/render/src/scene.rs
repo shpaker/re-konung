@@ -65,6 +65,7 @@ pub struct ScenePiece;
 #[derive(Component)]
 pub struct CreaturePiece {
     pub creature_id: usize,
+    pub original_translation: Vec3,
 }
 
 /// Центр пиксельного прямоугольника куска в мире Bevy.
@@ -190,7 +191,11 @@ pub fn spawn_scene(commands: &mut Commands, scene: &Scene, cache: &TextureCache)
                 ));
             }
             if let Some(id) = piece.creature_id {
-                entity.insert(CreaturePiece { creature_id: id });
+                let transform = piece_transform(piece.x, piece.y, piece.w, piece.h, size, order);
+                entity.insert(CreaturePiece {
+                    creature_id: id,
+                    original_translation: transform.translation,
+                });
             }
             children.push(entity.id());
             bounds = merge(bounds, piece_bounds(piece, cache));
