@@ -189,7 +189,7 @@ struct SceneDepth {
 impl Default for SceneDepth {
     fn default() -> Self {
         Self {
-            map: DepthMap::build(Vec::new().into_iter(), 0.0),
+            map: DepthMap::build(Vec::new().into_iter()),
         }
     }
 }
@@ -1028,11 +1028,15 @@ fn shown(options: &SceneOptions) -> impl Fn(&Piece) -> bool + '_ {
 
 /// Builds a depth map from the scene's sorted pieces for creature z-interpolation.
 fn build_scene_depth(scene: &kn_game::Scene, cache: &TextureCache) -> DepthMap {
-    let mut stacks: Vec<(i32, f32)> = scene
+    let stacks: Vec<(i32, f32)> = scene
         .pieces
         .iter()
         .enumerate()
-        .filter(|(_, p)| is_depth_relevant(p.group))
+        // Flames ride their object's draw slot; their bottom sits above the
+        // object's and their z is higher, so as contributors they would put a
+        // creature standing on that row in front of the burning object itself
+        // (review #68).
+        .filter(|(_, p)| is_depth_relevant(p.group) && !p.is_flame())
         .map(|(order, piece)| {
             let height = piece.h.unwrap_or_else(|| {
                 piece
@@ -1044,8 +1048,7 @@ fn build_scene_depth(scene: &kn_game::Scene, cache: &TextureCache) -> DepthMap {
             (piece.y + height, order as f32 * Z_STEP)
         })
         .collect();
-    stacks.sort_by_key(|&(bottom, _)| bottom);
-    DepthMap::build(stacks.into_iter(), -Z_STEP)
+    DepthMap::build(stacks.into_iter())
 }
 
 /// Only static stacks participate in depth ordering.
@@ -1481,15 +1484,16 @@ fn sync_creature_nodes(
             );
         }
     }
-    // The shadow rides the node but must hold the fixed shadow band in world z:
-    // its local z cancels the node's stack z, which `update_creature_depth`
-    // rewrites whenever the bottom edge moves (review #68).
-    let shadow_z = scene_depth.map.shadow_z();
+    // The shadow rides the node but holds its slot's shadow z — over the
+    // ground the creature stands on, under its feet — so its local z cancels
+    // the node's body z, which `update_creature_depth` rewrites whenever the
+    // bottom edge moves (review #68).
     for (_, parent, mut transform) in &mut shadows {
         let Ok(node) = nodes.get(parent.0) else {
             continue;
         };
-        let target = shadow_z - node.1.translation.z;
+        let slot = scene_depth.map.creature_slot(node.0.bottom, node.0.id);
+        let target = slot.shadow - node.1.translation.z;
         if transform.translation.z != target {
             transform.translation.z = target;
         }
@@ -3179,7 +3183,7 @@ mod tests {
         let plan_count = spawns.plans.len();
         let plan_ids: HashSet<usize> = spawns.plans.iter().map(|plan| plan.id as usize).collect();
         let depth = build_scene_depth(&scene, &cache);
-        let shadow_z = depth.shadow_z();
+        let depth_map = depth.clone();
 
         let mut app = App::new();
         app.add_plugins((
@@ -3317,17 +3321,28 @@ mod tests {
             }
         }
 
-        // The shadow band survives the depth recompute a reset triggers.
+        // The shadows ride their slots through the depth recompute a reset
+        // triggers: over the statics under their creature, under the body
+        // (review #68).
         let mut shadow_count = 0;
         for (_, parent, shadow) in shadows.iter(world) {
-            let Some(node) = world.get::<Transform>(parent.0) else {
+            let (Some(node), Some(creature)) = (
+                world.get::<Transform>(parent.0),
+                world.get::<CreatureNode>(parent.0),
+            ) else {
                 continue;
             };
+            let slot = depth_map.creature_slot(creature.bottom, creature.id);
+            let world_z = shadow.translation.z + node.translation.z;
             assert!(
-                (shadow.translation.z + node.translation.z - shadow_z).abs() < 1e-3,
-                "shadow of a reset creature left the band: local {} + node {}",
-                shadow.translation.z,
-                node.translation.z
+                (world_z - slot.shadow).abs() < 1e-3
+                    && slot.base < slot.shadow
+                    && slot.shadow < node.translation.z,
+                "shadow of a reset creature left its slot: world {world_z}, \
+                 node {}, slot base {} shadow {}",
+                node.translation.z,
+                slot.base,
+                slot.shadow
             );
             shadow_count += 1;
         }
@@ -3412,6 +3427,68 @@ mod tests {
             "a 30 000-tick replay took {elapsed:?} — the backward Step \
              would stutter even in a debug build"
         );
+    }
+
+    #[test]
+    fn depth_boundaries_stay_monotonic_on_every_map() {
+        // The flame on rus map 1 used to invert a boundary: the fire's bottom
+        // sits above its object's while its draw z is higher, and the search
+        // plus interpolation assume z grows with bottom (review #68). The fix
+        // is twofold — flames are not depth contributors, and `build` refuses
+        // drops — so every edition map must produce monotonic boundaries.
+        let Some((dir, _)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let mut cache = TextureCache::default();
+        let mut images = Assets::<Image>::default();
+        let mut judged = 0;
+        for map_ref in game.maps().unwrap() {
+            let scene = game.scene(map_ref, &SceneOptions::ALL).unwrap();
+            let ids: Vec<kn_game::TextureId> = {
+                let mut seen = std::collections::HashSet::new();
+                for piece in &scene.pieces {
+                    if let Some(id) = &piece.texture {
+                        seen.insert(*id);
+                    }
+                    if let Some(anim) = &piece.animation {
+                        for frame in &anim.frames {
+                            if let Some(id) = &frame.texture {
+                                seen.insert(*id);
+                            }
+                        }
+                    }
+                }
+                seen.into_iter().collect()
+            };
+            let problems = cache.load(&game, &ids, &mut images).unwrap();
+            assert!(
+                problems.is_empty(),
+                "map {} textures: {problems:?}",
+                map_ref.number
+            );
+            let map = build_scene_depth(&scene, &cache);
+            // Sample every whole bottom the stacks can reach: a drop only
+            // needs one pixel to hide in.
+            let previous = map.z_for_bottom(0);
+            let mut bottom_z = (previous, 0);
+            for bottom in 1..4000 {
+                let z = map.z_for_bottom(bottom);
+                assert!(
+                    z >= bottom_z.0,
+                    "map {} boundaries drop at bottom {bottom}: {z} after {} \
+                     from bottom {}",
+                    map_ref.number,
+                    bottom_z.0,
+                    bottom_z.1
+                );
+                if z > bottom_z.0 {
+                    bottom_z = (z, bottom);
+                }
+            }
+            judged += 1;
+        }
+        assert!(judged > 0, "the edition must give maps to judge");
     }
 
     fn fire_reset(mut commands: Commands, buttons: Query<Entity, With<ResetPositions>>) {

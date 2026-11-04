@@ -19,9 +19,9 @@ pub use camera::{
     PendingFrame, ZOOM_LEVELS, fitting_zoom, frame_scene, ortho_scale,
 };
 pub use creatures::{
-    CreatureData, CreatureLayer, CreatureNode, CreatureRoot, CreatureShadow, DepthMap,
-    LayerAnimation, LayerData, SpawnedCreature, clear_creatures, despawn_creature, spawn_creature,
-    update_creature_depth,
+    CreatureData, CreatureLayer, CreatureNode, CreatureRoot, CreatureShadow, CreatureSlot,
+    DepthMap, LayerAnimation, LayerData, SpawnedCreature, clear_creatures, creature_layer_step,
+    despawn_creature, spawn_creature, update_creature_depth,
 };
 pub use scene::{
     MapRoot, SceneGroup, SceneLoad, ScenePiece, Z_STEP, clear_scene, load_scene, piece_center,

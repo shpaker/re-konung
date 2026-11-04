@@ -81,7 +81,7 @@ fn creature_data() -> CreatureData {
 fn scene() -> (App, Holder) {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, TransformPlugin, AnimPlugin::new(60.0)));
-    app.insert_resource(DepthMap::build(std::iter::empty(), -0.01));
+    app.insert_resource(DepthMap::build(std::iter::empty()));
     app.world_mut()
         .resource_mut::<Clock>()
         .goto(PlayState::Paused);

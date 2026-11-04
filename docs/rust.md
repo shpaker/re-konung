@@ -583,14 +583,35 @@ sets a creature's world position. `CreaturePiece` and `update_shadow_depth` are 
   `a_clip_swap_reanchors_the_image_and_never_moves_the_node`,
   `apply_clip_reanchors_on_the_clips_own_corner`). The node is never touched by a swap —
   the jump was always the image, never the world position.
-- **Depth comes from the static stacks only, and the shadow is its own layer (P1 #4, P2 #6).**
+- **A one-frame resting layer would block the walk swap — a structural gap with no data hit (review #68).**
+  `layer_track` builds an `animation` only for multi-frame tracks and `clip_seq` requires
+  one, so a layer resting on a single frame spawns without an `Animator`, and
+  `sync_creature_animation` — which queries `&mut Animator` — could never swap a walk
+  clip onto it. Scanned both editions over every map: no creature has a static rest layer
+  whose same-`LayerKey` walk layer is animated (body or shadow), so nothing is patched
+  blindly; the chain is recorded here so a future format surprise finds the gap named.
+- **Depth comes from the static stacks only, and a creature's shadow rides its slot (P1 #4, P2 #6, review #68).**
   `DepthMap` is built from `PieceGroup::Objects` bottoms (`is_depth_relevant` matches only
   `Objects`), never from characters, terrain or markers — those must not decide what a
-  creature stands behind. Equal bottoms collapse to the highest sort key, so two statics
-  sharing an edge resolve to the one drawn on top rather than a z between them
-  (`depth_map_uses_only_static_object_stacks`, `equal_bottoms_collapse_to_the_highest_sort_key`).
-  The shadow sits at a constant local z below every body layer, so it stays under the
-  body and rides the node together with it (`the_shadow_sits_below_the_body_layers`).
+  creature stands behind. Flames are excluded too: a fire is drawn together with its
+  object, and as a contributor its higher bottom would put a creature on the fire's row
+  in front of the object it burns on (rus map 1 had exactly one such inversion).
+  Equal bottoms collapse to the highest sort key, so two statics sharing an edge resolve
+  to the one drawn on top; a contributor lower than the previous boundary adds nothing
+  and never drops it — the search and the interpolation both assume z grows with bottom
+  (`depth_map_uses_only_static_object_stacks`, `equal_bottoms_collapse_to_the_highest_sort_key`,
+  `depth_boundaries_stay_monotonic_on_every_map`,
+  `flame_pieces_are_recognised_as_part_of_their_object`).
+  A creature then occupies the slot between two boundaries (`DepthMap::creature_slot`):
+  the shadow sits above the statics under its feet and strictly under the body — the
+  original draws the pair together, while the earlier fixed band below the whole map
+  buried the shadow under the ground. Body and every layer stay under the next boundary
+  at any bottom: an interpolated base reserves the stack's room, so a stack spawned in
+  one slot never draws over the next static after moving into another — the layer
+  offsets are never rewritten (`the_slot_orders_shadow_body_and_layers_inside_the_boundaries`,
+  `a_narrow_slot_keeps_every_layer_under_the_next_static`,
+  `production_spawn_places_the_shadow_in_its_slot`,
+  `a_reset_returns_nodes_animators_shadows_and_labels_home`).
 - **The visual step is offset by one tick; the logical tick is not (P1 #2).** A walk step
   commits at `step_elapsed == 1`, which is faithful to the original (Slavik increments the
   frame counter before the first render, so the first *visible* frame is index 1) and is

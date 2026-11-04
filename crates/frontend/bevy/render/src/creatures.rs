@@ -38,6 +38,14 @@ const CREATURE_LAYER_CAP: f32 = 8.0;
 /// z between neighbouring body layers.
 const CREATURE_LAYER_Z: f32 = Z_STEP * CREATURE_LAYER_SPAN / (CREATURE_LAYER_CAP - 1.0);
 
+/// The z room every creature slot reserves: body clearance, id span and the
+/// layer span, with the span's 0.9 spawn clamp divided out. `slot_bounds`
+/// clamps interpolated bases so the room is there at every bottom, which is
+/// what keeps a stack spawned in one slot under the next static after a move
+/// into another — the layer offsets are never rewritten (review #68).
+const CREATURE_SLOT_WIDE: f32 =
+    Z_STEP * (CREATURE_CLEARANCE + CREATURE_ID_SPAN + CREATURE_LAYER_SPAN / 0.9);
+
 /// Root of all creature nodes, separate from [`MapRoot`] so that a creature
 /// change never touches the map sprites.
 #[derive(Component, Default)]
@@ -55,36 +63,60 @@ pub struct CreatureNode {
 #[derive(Component)]
 pub struct CreatureLayer;
 
-/// The shadow sprite of a creature: fixed z below all stacks.
+/// The shadow sprite of a creature: it rides the creature's slot, strictly
+/// under the body and over the static the creature stands on.
 #[derive(Component)]
 pub struct CreatureShadow;
 
-/// Z boundaries between the shadow band and the stack band, built from the
-/// static scene's sorted stacks.
+/// Z boundaries between the static scene's sorted stacks. A creature occupies
+/// the slot between two boundaries: [`DepthMap::creature_slot`] carves shadow,
+/// body and layer room inside it, all strictly below the next boundary, so a
+/// creature draws between the statics it walks between — and its shadow with
+/// it, over the ground and under its feet, as the original draws the two
+/// together (review #68).
 #[derive(Resource, Debug, Clone)]
 pub struct DepthMap {
-    shadow_z: f32,
     first_stack_z: f32,
     last_stack_z: f32,
     boundaries: Vec<(i32, f32)>,
 }
 
+/// One creature's z slot: world z for the shadow and the body node, and the
+/// exclusive `top` ceiling the layer stack above `body` must stay under.
+/// `base` is the z of the statics the creature stands in front of.
+pub struct CreatureSlot {
+    pub base: f32,
+    pub shadow: f32,
+    pub body: f32,
+    pub top: f32,
+}
+
 impl DepthMap {
     /// `stacks` are `(bottom, sort_key)` pairs of the **static** pieces a creature
     /// must interleave with — the caller excludes the dynamic creature pieces
-    /// themselves. The input arrives in scene-draw order, not bottom order, so it
-    /// is sorted here for [`DepthMap::z_for_bottom`]'s binary search; two statics
-    /// that share a bottom collapse to one boundary at their higher sort key, so
-    /// overlapping stacks resolve to the one drawn on top and never make the
-    /// search land between them (review #68).
-    pub fn build(stacks: impl Iterator<Item = (i32, f32)>, shadow_z: f32) -> DepthMap {
+    /// themselves, and pieces that are not standing objects of their own: an
+    /// object's flames ride the object's draw slot, and their higher bottom
+    /// would otherwise put a creature on that row in front of the object they
+    /// burn on (review #68). The input arrives in scene-draw order, not bottom
+    /// order, so it is sorted here for [`DepthMap::z_for_bottom`]'s binary
+    /// search; two statics that share a bottom collapse to one boundary at
+    /// their higher sort key, so overlapping stacks resolve to the one drawn
+    /// on top and never make the search land between them (review #68).
+    pub fn build(stacks: impl Iterator<Item = (i32, f32)>) -> DepthMap {
         let mut sorted: Vec<(i32, f32)> = stacks.collect();
         sorted.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
         let mut boundaries: Vec<(i32, f32)> = Vec::with_capacity(sorted.len());
         for (bottom, z) in sorted {
             match boundaries.last_mut() {
                 Some(last) if last.0 == bottom => last.1 = last.1.max(z),
-                _ => boundaries.push((bottom, z)),
+                // A row drawn under the previous boundary's stack cannot drop
+                // the boundary below it without breaking the monotonicity every
+                // bracketing below assumes — and it adds nothing: anything in
+                // front of the higher stack is in front of it in z, so the row
+                // simply takes the previous boundary's slot (review #68).
+                Some(last) if z <= last.1 => {}
+                Some(_) => boundaries.push((bottom, z)),
+                None => boundaries.push((bottom, z)),
             }
         }
         let first_stack_z = boundaries.first().map_or(0.0, |&(_, z)| z);
@@ -92,7 +124,6 @@ impl DepthMap {
             .last()
             .map_or(first_stack_z + Z_STEP, |&(_, z)| z + Z_STEP * 10.0);
         DepthMap {
-            shadow_z,
             first_stack_z,
             last_stack_z,
             boundaries,
@@ -119,26 +150,14 @@ impl DepthMap {
         }
     }
 
-    pub fn shadow_z(&self) -> f32 {
-        self.shadow_z
-    }
-
-    /// A creature's own z: strictly in front of the static it stands on, never
-    /// exactly equal (that z-fights), and with a stable per-id sub-slot inside one
-    /// `Z_STEP` so two creatures sharing a bottom get a deterministic draw order.
-    /// The original's per-creature slot order at equal depth is unconfirmed, so any
-    /// stable order satisfies it (review #68).
-    ///
-    /// The base is bracketed by the boundaries around `bottom` — not just taken
-    /// from [`Self::z_for_bottom`] — because the whole stack (id slot plus every
-    /// body layer above the node) must stay under the next boundary's z: an
-    /// interpolated base near the upper boundary would otherwise push the upper
-    /// layers past the static that occludes the creature.
-    pub fn creature_z(&self, bottom: i32, id: u32) -> f32 {
+    /// The slot bounds around `bottom`: the z the creature draws just behind
+    /// (`base`, the interpolated statics' z it stands in front of) and the
+    /// exclusive z of the next stack (`next`).
+    fn slot_bounds(&self, bottom: i32) -> (f32, f32) {
         if self.boundaries.is_empty() {
-            return self.first_stack_z + Z_STEP * CREATURE_CLEARANCE;
+            return (self.first_stack_z, self.first_stack_z + Z_STEP);
         }
-        let (base, next) = match self.boundaries.binary_search_by_key(&bottom, |&(b, _)| b) {
+        match self.boundaries.binary_search_by_key(&bottom, |&(b, _)| b) {
             Ok(i) => (
                 self.boundaries[i].1,
                 self.boundaries
@@ -153,16 +172,50 @@ impl DepthMap {
                 let (lo_bottom, lo_z) = self.boundaries[i - 1];
                 let (hi_bottom, hi_z) = self.boundaries[i];
                 if hi_bottom == lo_bottom {
-                    return hi_z + Z_STEP * CREATURE_CLEARANCE;
+                    return (hi_z, hi_z + Z_STEP);
                 }
                 let t = (bottom - lo_bottom) as f32 / (hi_bottom - lo_bottom) as f32;
-                (lo_z + t * (hi_z - lo_z), hi_z)
+                // An unclamped interpolation sits arbitrarily close to `hi_z`,
+                // leaving no room for the body between the two statics; inside
+                // the last `CREATURE_SLOT_WIDE` the base stops. Both statics
+                // still bracket the creature there — every z in the interval
+                // draws the same picture — so the clamp costs nothing visible.
+                let base = (lo_z + t * (hi_z - lo_z))
+                    .max(lo_z)
+                    .min(hi_z - CREATURE_SLOT_WIDE);
+                (base, hi_z)
             }
-        };
-        let headroom = (next - base - Z_STEP * (CREATURE_CLEARANCE + CREATURE_LAYER_SPAN)).max(0.0);
-        let id_span = (headroom * 0.5).min(Z_STEP * CREATURE_ID_SPAN);
-        let sub = (id % CREATURE_Z_SLOTS) as f32 / CREATURE_Z_SLOTS as f32 * id_span;
-        base + Z_STEP * CREATURE_CLEARANCE + sub
+        }
+    }
+
+    /// A creature's z slot: strictly in front of the static it stands on, never
+    /// exactly equal (that z-fights), with a stable per-id sub-slot inside the
+    /// slot so two creatures sharing a bottom get a deterministic draw order.
+    /// The original's per-creature slot order at equal depth is unconfirmed, so
+    /// any stable order satisfies it (review #68).
+    ///
+    /// The body offset shrinks with the slot: an interpolated base sits
+    /// arbitrarily close to `next`, and a fixed budget would push body, layers
+    /// or shadow past the occluding static there (review #68). The shadow takes
+    /// half the way from the base to the body — always over the ground the
+    /// creature stands on and under its feet, the order the original draws.
+    pub fn creature_slot(&self, bottom: i32, id: u32) -> CreatureSlot {
+        let (base, next) = self.slot_bounds(bottom);
+        let sub = (id % CREATURE_Z_SLOTS) as f32 / CREATURE_Z_SLOTS as f32;
+        let body = base
+            + (Z_STEP * (CREATURE_CLEARANCE + sub * CREATURE_ID_SPAN))
+                .min((next - base) * (0.55 + 0.35 * sub));
+        CreatureSlot {
+            base,
+            shadow: base + (body - base) * 0.5,
+            body,
+            top: next,
+        }
+    }
+
+    /// A creature node's world z: the body of its [`Self::creature_slot`].
+    pub fn creature_z(&self, bottom: i32, id: u32) -> f32 {
+        self.creature_slot(bottom, id).body
     }
 }
 
@@ -210,6 +263,19 @@ pub struct SpawnedCreature {
     pub shadow: Option<Entity>,
 }
 
+/// z step between neighbouring body layers of a `layer_count` tall stack,
+/// shrunk so the whole stack above `body` ends strictly under the slot's
+/// `top`: a narrow slot leaves less room than the nominal budget (review #68).
+pub fn creature_layer_step(top: f32, body: f32, layer_count: usize) -> f32 {
+    if layer_count < 2 {
+        return 0.0;
+    }
+    let last = (layer_count - 1) as f32;
+    CREATURE_LAYER_Z
+        .min(Z_STEP * CREATURE_LAYER_SPAN / last)
+        .min((top - body) * 0.9 / last)
+}
+
 /// Spawn a creature under `parent`, returning its node and children.
 pub fn spawn_creature(
     commands: &mut Commands,
@@ -218,7 +284,8 @@ pub fn spawn_creature(
     depth: &DepthMap,
 ) -> SpawnedCreature {
     let pos = creature_position(data.x, data.y);
-    let z = depth.creature_z(data.bottom, data.id);
+    let slot = depth.creature_slot(data.bottom, data.id);
+    let z = slot.body;
 
     let node = commands
         .spawn((
@@ -234,16 +301,16 @@ pub fn spawn_creature(
     let mut body = Vec::with_capacity(data.layers.len());
     let mut shadow_entity: Option<Entity> = None;
 
-    // Layers ride the node, whose z is already `creature_z`, and the node's z is
+    // Layers ride the node, whose z is the slot's body, and the node's z is
     // recomputed by `update_creature_depth` — so the local offsets must keep the
     // whole stack inside the creature's slot between two boundary pieces. One
     // `Z_STEP` is the distance between static pieces; a per-layer step of a full
     // `Z_STEP` let the second layer draw over the next static (review #68).
-    let layer_step = if data.layers.len() > 1 {
-        CREATURE_LAYER_Z.min(Z_STEP * CREATURE_LAYER_SPAN / (data.layers.len() - 1) as f32)
-    } else {
-        0.0
-    };
+    // A move never rewrites the offsets, so the step is bounded twice: by the
+    // slot it is spawned in, and by the nominal span — and `slot_bounds`
+    // reserves the nominal span's room at every bottom, so a stack spawned in
+    // any slot stays under the next static of every other one.
+    let layer_step = creature_layer_step(slot.top, z, data.layers.len());
 
     for (index, layer) in data.layers.iter().enumerate() {
         let local_z = index as f32 * layer_step;
@@ -293,10 +360,10 @@ pub fn spawn_creature(
             shadow.offset.x + shadow.size.x / 2.0,
             -(shadow.offset.y + shadow.size.y / 2.0),
         );
-        // The shadow must hold the fixed world z below all stacks while riding
-        // the node, so its local z cancels the node's own stack z: world z is
-        // `shadow_z` exactly, at any bottom (review #68). `sync_creature_nodes`
-        // keeps it so after every depth recomputation.
+        // The shadow rides the node but holds its own slot z — over the ground
+        // the creature stands on, under its feet — so its local z cancels the
+        // node's body z and leaves the slot's shadow z (review #68).
+        // `sync_creature_nodes` keeps it so after every depth recomputation.
         let anim = data.shadow_animation.as_ref();
         let mut spawn = commands.spawn((
             CreatureShadow,
@@ -306,7 +373,7 @@ pub fn spawn_creature(
                 ..Default::default()
             },
             Visibility::Inherited,
-            Transform::from_xyz(center.x, center.y, depth.shadow_z() - z),
+            Transform::from_xyz(center.x, center.y, slot.shadow - z),
         ));
         if let Some(anim) = anim {
             spawn.insert(Animator::with_base(
@@ -360,7 +427,7 @@ mod tests {
     use super::*;
 
     fn mock_depth() -> DepthMap {
-        DepthMap::build(vec![(100, 10.0), (200, 20.0), (300, 30.0)].into_iter(), 1.0)
+        DepthMap::build(vec![(100, 10.0), (200, 20.0), (300, 30.0)].into_iter())
     }
 
     #[test]
@@ -465,26 +532,56 @@ mod tests {
     fn equal_bottoms_collapse_to_the_highest_sort_key() {
         // Two statics share a bottom edge: the search must resolve to the one
         // drawn on top (higher sort key), never to a z between the duplicates.
-        let depth = DepthMap::build(vec![(100, 10.0), (150, 5.0), (150, 30.0)].into_iter(), 1.0);
+        let depth = DepthMap::build(vec![(100, 10.0), (150, 5.0), (150, 30.0)].into_iter());
         assert_eq!(
             depth.z_for_bottom(150),
             30.0,
             "equal bottom keeps the top stack"
         );
         // Unsorted input still lands correctly because build sorts before search.
-        let unsorted =
-            DepthMap::build(vec![(300, 30.0), (100, 10.0), (200, 20.0)].into_iter(), 1.0);
+        let unsorted = DepthMap::build(vec![(300, 30.0), (100, 10.0), (200, 20.0)].into_iter());
         assert_eq!(
             unsorted.z_for_bottom(200),
             20.0,
             "build sorts regardless of input order"
         );
+        // An out-of-order contributor (a flame riding its object's draw slot,
+        // say) must not make the boundaries drop: the binary search and the
+        // interpolation both assume z grows with bottom (review #68).
+        let inverted = DepthMap::build(vec![(100, 10.0), (150, 20.0), (200, 15.0)].into_iter());
+        let z = |b: i32| inverted.z_for_bottom(b);
+        assert!(z(100) <= z(150) && z(150) <= z(200), "monotonic");
+        assert!(z(125) <= z(175), "monotonic between boundaries too");
     }
 
     #[test]
-    fn shadow_z_below_stacks() {
+    fn the_slot_orders_shadow_body_and_layers_inside_the_boundaries() {
+        // The shadow rides the creature's slot — over the static the creature
+        // stands on, under its feet — and body plus a full layer stack stays
+        // under the next boundary for any bottom and id, interpolated bases
+        // included (review #68).
         let depth = mock_depth();
-        assert!(depth.shadow_z() < depth.first_stack_z);
+        for bottom in [50, 100, 150, 199, 200, 250, 300, 400] {
+            for id in [0, 5, CREATURE_Z_SLOTS - 1] {
+                let (base, next) = depth.slot_bounds(bottom);
+                let slot = depth.creature_slot(bottom, id);
+                assert!(
+                    slot.shadow > base && slot.shadow < slot.body,
+                    "bottom {bottom} id {id}: shadow {} must sit between the \
+                     base {base} and the body {}",
+                    slot.shadow,
+                    slot.body
+                );
+                let step = creature_layer_step(slot.top, slot.body, CREATURE_LAYER_CAP as usize);
+                let top = slot.body + (CREATURE_LAYER_CAP - 1.0) * step;
+                assert!(
+                    slot.body < top && top < next,
+                    "bottom {bottom} id {id}: stack [{}..{top}] must stay in \
+                     [{base}..{next})",
+                    slot.body
+                );
+            }
+        }
     }
 
     #[test]
@@ -515,10 +612,51 @@ mod tests {
     }
 
     #[test]
-    fn production_spawn_keeps_the_shadow_in_its_band() {
-        // The shadow rides the node, so its local z must cancel the node's
-        // stack z exactly — the same formula the viewer's depth sync uses
-        // (review #68).
+    fn a_narrow_slot_keeps_every_layer_under_the_next_static() {
+        // A bottom interpolating just below the next boundary must still fit
+        // the whole stack: the slot reserves its room at every bottom and the
+        // spawn path additionally clamps against the slot's top (review #68).
+        let depth = DepthMap::build(vec![(50, 1.0), (60, 1.01), (200, 20.0)].into_iter());
+        let mut app = test_app();
+        let data = CreatureData {
+            id: 7,
+            x: 0,
+            y: 0,
+            bottom: 59,
+            layers: (0..5)
+                .map(|_| LayerData {
+                    image: Handle::default(),
+                    size: Vec2::ZERO,
+                    offset: Vec2::ZERO,
+                })
+                .collect(),
+            animations: (0..5).map(|_| None).collect(),
+            shadow: None,
+            shadow_animation: None,
+        };
+        let (node, layers) = {
+            let mut commands = app.world_mut().commands();
+            let root = commands.spawn(CreatureRoot).id();
+            let spawned = spawn_creature(&mut commands, root, &data, &depth);
+            (spawned.node, spawned.layers)
+        };
+        app.world_mut().flush();
+        let node_z = app.world().get::<Transform>(node).unwrap().translation.z;
+        for layer in layers {
+            let local = app.world().get::<Transform>(layer).unwrap().translation.z;
+            assert!(
+                node_z + local < 1.01,
+                "layer world z {} must stay under the next boundary 1.01",
+                node_z + local
+            );
+        }
+    }
+
+    #[test]
+    fn production_spawn_places_the_shadow_in_its_slot() {
+        // The shadow rides the node, so its local z cancels the node's body z
+        // down to the slot's shadow z — the same formula the viewer's depth
+        // sync keeps after every recompute (review #68).
         let mut app = test_app();
         let depth = mock_depth();
         let data = CreatureData {
@@ -550,9 +688,19 @@ mod tests {
         app.world_mut().flush();
         let node_z = app.world().get::<Transform>(node).unwrap().translation.z;
         let shadow_local = app.world().get::<Transform>(shadow).unwrap().translation.z;
+        let slot = depth.creature_slot(150, 7);
         assert!(
-            (node_z + shadow_local - depth.shadow_z()).abs() < 1e-6,
-            "shadow world z must sit in the band"
+            (node_z + shadow_local - slot.shadow).abs() < 1e-6,
+            "shadow world z {} must sit at the slot's {}",
+            node_z + shadow_local,
+            slot.shadow
+        );
+        let (base, next) = depth.slot_bounds(150);
+        assert!(
+            slot.shadow > base && slot.shadow < node_z,
+            "the shadow must ride above the ground ({base}) and below the \
+             body ({node_z}), got {}",
+            slot.shadow
         );
         let locals: Vec<f32> = layers
             .iter()
@@ -563,10 +711,9 @@ mod tests {
             "layers must be strictly ordered: {locals:?}"
         );
         let top = node_z + locals.iter().copied().fold(0.0f32, f32::max);
-        let base = depth.z_for_bottom(150);
         assert!(
-            top > base && top < 20.0,
-            "the stack [{base}..20) must hold the whole creature, top {top}"
+            top > base && top < next,
+            "the stack ({base}..{next}) must hold the whole creature, top {top}"
         );
     }
 
@@ -626,9 +773,10 @@ mod tests {
 
     fn spawn_test_creature(app: &mut App) -> (Entity, Entity) {
         let depth = mock_depth();
-        // The production formulas: the node at `creature_z`, the shadow's local
-        // z cancelling it so the world z sits in the band.
-        let z = depth.creature_z(150, 7);
+        // The production formulas: the node at the slot's body, the shadow's
+        // local z cancelling it down to the slot's shadow z.
+        let slot = depth.creature_slot(150, 7);
+        let z = slot.body;
         let root = app
             .world_mut()
             .spawn((CreatureRoot, Visibility::Visible))
@@ -664,7 +812,7 @@ mod tests {
                     ..Default::default()
                 },
                 Visibility::Inherited,
-                Transform::from_xyz(16.0, -8.0, depth.shadow_z() - z),
+                Transform::from_xyz(16.0, -8.0, slot.shadow - z),
             ))
             .id();
         app.world_mut()
