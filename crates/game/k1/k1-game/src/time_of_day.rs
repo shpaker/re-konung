@@ -3,46 +3,42 @@
 //! Evidence base: `docs/k1/time-of-day.md`. The cycle is the simulation's own tick
 //! modulo 21600; no independent clock exists here.
 //!
-//! Plateau ambient values are modelled; per-tick interpolation within ramp windows
-//! belongs to a later ticket (#96).
+//! The model reports the ambient triple the original's light routine builds for a
+//! cycle tick, ramp branches included, before the division by 100 on the way to the
+//! shader. The arithmetic is the original's, read from the binaries — not the clone's
+//! float reconstruction: the ramp halves the tick distance as an **integer** (the
+//! routine's `sar …,1` / `idiv` idiom) and packs the channels as bytes, so a channel
+//! that the clone would show as a half-integer is a whole integer here, and a ramp
+//! reaches its end value one tick later than the clone's floats would.
+//!
+//! What remains in the lighting ticket (#96) is applying the triple: the blend, the
+//! tile light, the two option switches and the per-map constant light. The windows
+//! whose value is the per-day night palette are reported as the darker palette: the
+//! original draws that choice as a coin flip at the cycle start, both palettes are
+//! dark, and so the missing flip moves no boundary.
 
 /// Ticks in one full day/night cycle (confirmed: rus `0x5460` divisor).
 pub const CYCLE_TICKS: u64 = 21600;
 
-/// The twelve thresholds that delimit thirteen windows within a cycle.
-/// Confirmed: contiguous int16 array at `VA 0x45AE0E` (rus), `0x45AE46` (eng).
+/// The twelve non-zero thresholds that delimit thirteen windows within a cycle.
+/// Confirmed: contiguous int16 array at `VA 0x45AE0E` (rus), `0x45AE46` (eng),
+/// `0x45AE52` (tutorial).
 const THRESHOLDS: [u64; 12] = [
     1800, 1830, 3570, 3600, 5400, 8100, 11700, 11880, 11910, 16155, 16200, 18900,
 ];
 
-/// Plateau ambient `(r, g, b)` per window, before the /100 the shader applies.
-const AMBIENT_PLATEAU: [(i32, i32, i32); 13] = [
-    (0, 0, 0),       // 1: [0, 1800)
-    (12, 6, 0),      // 2: [1800, 1830)
-    (12, 6, 0),      // 3: [1830, 3570)
-    (0, 0, 0),       // 4: [3570, 3600)
-    (0, 0, 0),       // 5: [3600, 5400)
-    (10, -20, -50),  // 6: [5400, 8100)
-    (0, -50, -70),   // 7: [8100, 11700)
-    (-60, -70, -70), // 8: [11700, 11880)
-    (-60, -50, -70), // 9: [11880, 11910)
-    (-60, -50, -70), // 10: [11910, 16155)
-    (-60, -70, -70), // 11: [16155, 16200)
-    (-30, -60, -20), // 12: [16200, 18900)
-    (0, 0, 0),       // 13: [19021, 21600) — plateau; [18900, 19021) is the ramp back
-];
-
-/// Cycle tick where window 13's ramp ends and its neutral plateau begins.
-const WINDOW_13_NEUTRAL_START: u64 = 19021;
-
-/// Ground light (the original's `_bLightGround`) is on exactly on `[8100, 18900)`.
-const GROUND_LIGHT_START: u64 = 8100;
-const GROUND_LIGHT_END: u64 = 18900;
+/// The `dayTime >= threshold` index at which the original switches the ground-light
+/// flag on, and the index of the last window it stays on for (rus `0x4291FF` writes
+/// it at the top of the window-6 branch, `0x4294AD` clears it in the last branch).
+const GROUND_LIGHT_FIRST_WINDOW: usize = 6;
+const GROUND_LIGHT_LAST_WINDOW: usize = 11;
 
 /// Ticks per displayed hour: 21600 / 24 = 900.
 const TICKS_PER_HOUR: u64 = 900;
 /// Ticks per displayed minute: 900 / 60 = 15.
 const TICKS_PER_MINUTE: u64 = 15;
+/// Cycle tick 0 reads 06:00 — our display convention, not a fact about the game.
+const CLOCK_OFFSET_TICKS: u64 = 6 * TICKS_PER_HOUR;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ambient {
@@ -52,7 +48,9 @@ pub enum Ambient {
 }
 
 /// Our display reading of the cycle, not a named property of the original.
-/// The game only stores the threshold array, the ambient triple, and `_bLightGround`.
+/// The game stores only the threshold array, the ambient triple and the ground
+/// light; `DayPhase` is derived from the two classifications below, so every
+/// boundary in it is an interval boundary of the confirmed model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DayPhase {
     Night,
@@ -67,7 +65,10 @@ pub struct GameTime {
     pub day: u64,
     pub cycle_tick: u64,
     pub ambient: Ambient,
-    pub ground_lit: bool,
+    /// The ground tile light of the phase — not the final on-screen state:
+    /// whether a pixel is lit also depends on the two option switches and on
+    /// the per-map constant light, which the lighting tickets (#96, #97) apply.
+    pub ground_window: bool,
     pub phase: DayPhase,
     pub clock_hour: u8,
     pub clock_minute: u8,
@@ -79,44 +80,125 @@ fn window_index(cycle_tick: u64) -> usize {
     THRESHOLDS.iter().filter(|&&t| cycle_tick >= t).count()
 }
 
-/// The ambient classification for a cycle tick, derived from the plateau triple.
+/// The distance of a cycle tick from its window's start, `dayTime - threshold[w]`.
+fn since_start(cycle_tick: u64, window: usize) -> f32 {
+    (cycle_tick - THRESHOLDS[window - 1]) as f32
+}
+
+/// The original's ramp halving: the signed `sar …,1` idiom on the routine's stack
+/// local, applied to a tick distance that is never negative here.
+fn half(t: f32) -> f32 {
+    (t as i32 / 2) as f32
+}
+
+/// The ambient triple before the division by 100, for a cycle tick.
 ///
-/// Blue is the channel that darkens without the tile-light cancellation, so its
+/// Every branch — the ramp condition, the halving and the returned triple — mirrors
+/// a branch of the original's light routine as recorded, per build, in
+/// `docs/k1/time-of-day.md`. The ramp value `u` is the integer half of the distance
+/// from the window's start; the channels that the routine scales by the pool
+/// constants (`{0.4, 0.2, 1/3, 10.0, 0.66, -50.0, 0.5988, -60.0}`) are shown as the
+/// unrounded product — the original packs the channels as bytes before the shader
+/// divides them by 100, and #96 will pin the exact rounding and the two coefficients
+/// the pool leaves unresolved (`0.33` and `1/3`).
+///
+/// The two windows whose value is the per-day night palette are reported as the
+/// darker palette; see the module docs.
+pub fn ambient_value(cycle_tick: u64) -> (f32, f32, f32) {
+    let d = cycle_tick % CYCLE_TICKS;
+    let t = |w: usize| since_start(d, w);
+    match window_index(d) {
+        0 => (0.0, 0.0, 0.0),
+        1 if t(1) < 25.0 => {
+            let u = half(t(1));
+            (u, half(u), 0.0)
+        }
+        1 | 2 => (12.0, 6.0, 0.0),
+        3 if t(3) < 25.0 => {
+            let u = half(24.0 - t(3));
+            (u, half(u), 0.0)
+        }
+        3 | 4 => (0.0, 0.0, 0.0),
+        5 if t(5) < 101.0 => {
+            let u = half(t(5));
+            (0.2 * u, -0.4 * u, -u)
+        }
+        5 => (10.0, -20.0, -50.0),
+        6 if t(6) < 61.0 => {
+            let u = half(t(6));
+            (10.0 - 0.33 * u, -20.0 - u, -50.0 - 0.66 * u)
+        }
+        6 => (0.0, -50.0, -70.0),
+        7 if t(7) < 121.0 => {
+            let u = half(t(7));
+            (-u, -50.0 - u / 3.0, -70.0)
+        }
+        7 => (-60.0, -70.0, -70.0),
+        // Window 9: the night palette, ramped from the previous window's value;
+        // the darker palette is the model's stand-in for the coin flip.
+        8 if t(8) < 41.0 => (-60.0, -70.0 + half(t(8)), -70.0),
+        8 | 9 => (-60.0, -70.0, -70.0),
+        10 if t(10) < 41.0 => (-60.0, -50.0 - half(t(10)), -70.0),
+        10 => (-60.0, -70.0, -70.0),
+        11 if t(11) < 101.0 => {
+            let u = half(t(11));
+            (0.5988 * u - 60.0, u / 5.0 - 70.0, u - 70.0)
+        }
+        11 => (-30.0, -60.0, -20.0),
+        // The byte-packed branch read off the binaries (rus `0x4294D1`): the
+        // channels are `(u/2 - 30, u - 60, u/3 - 20)` with integer divisions.
+        12 if t(12) < 121.0 => {
+            let u = half(t(12));
+            (half(u) - 30.0, u - 60.0, (u as i32 / 3) as f32 - 20.0)
+        }
+        _ => (0.0, 0.0, 0.0),
+    }
+}
+
+/// The ambient classification for a cycle tick, from the triple's channels:
+/// blue is the channel that darkens without the tile-light cancellation, so its
 /// sign decides between Dark and the others.
 pub fn ambient_kind(cycle_tick: u64) -> Ambient {
-    let w = window_index(cycle_tick);
-    let (r, g, b) = ambient_for_window(w, cycle_tick);
-    if b < 0 {
+    let (r, g, b) = ambient_value(cycle_tick);
+    if b < 0.0 {
         Ambient::Dark
-    } else if r == 0 && g == 0 && b == 0 {
+    } else if r == 0.0 && g == 0.0 && b == 0.0 {
         Ambient::Neutral
     } else {
         Ambient::Warm
     }
 }
 
-/// Whether the ground tile-light is active at this cycle tick.
-pub fn ground_lit(cycle_tick: u64) -> bool {
-    (GROUND_LIGHT_START..GROUND_LIGHT_END).contains(&cycle_tick)
+/// Whether the phase's ground tile light is on at this cycle tick: windows 7 to
+/// 12, `[8100, 18900)`. The name is deliberate — this is the phase window, not
+/// the final on-screen light, which the option switches and the per-map constant
+/// light further gate (#96, #97).
+pub fn ground_window(cycle_tick: u64) -> bool {
+    let window = window_index(cycle_tick % CYCLE_TICKS);
+    (GROUND_LIGHT_FIRST_WINDOW..=GROUND_LIGHT_LAST_WINDOW).contains(&window)
 }
 
-/// Our four-name reading of the cycle — the original names no phase.
+/// Our four-name reading of the cycle — the original names no phase. The words
+/// are labels over the two classifications, and nothing outside a display may
+/// use them as a game rule.
 pub fn day_phase(cycle_tick: u64) -> DayPhase {
-    if ground_lit(cycle_tick) {
+    let d = cycle_tick % CYCLE_TICKS;
+    if ground_window(d) {
         DayPhase::Night
-    } else if ambient_kind(cycle_tick) == Ambient::Dark && cycle_tick < GROUND_LIGHT_START {
+    } else if ambient_kind(d) == Ambient::Dark && d < THRESHOLDS[GROUND_LIGHT_FIRST_WINDOW - 1] {
         DayPhase::Dusk
-    } else if ambient_kind(cycle_tick) == Ambient::Dark {
+    } else if ambient_kind(d) == Ambient::Dark {
         DayPhase::Dawn
     } else {
         DayPhase::Day
     }
 }
 
-/// Clock face as `(hour, minute)`: cycle tick 0 reads 06:00.
-/// This is our display convention; no rule reads the hour.
+/// Clock face as `(hour, minute)`: cycle tick 0 reads 06:00. This is our display
+/// convention; no rule reads the hour. The argument is normalized, so a caller
+/// may hand in the absolute simulation tick as well as a cycle tick.
 pub fn clock_face(cycle_tick: u64) -> (u8, u8) {
-    let offset = (cycle_tick + 6 * TICKS_PER_HOUR) % CYCLE_TICKS;
+    let offset = (cycle_tick % CYCLE_TICKS + CLOCK_OFFSET_TICKS) % CYCLE_TICKS;
     let hour = (offset / TICKS_PER_HOUR) as u8;
     let minute = ((offset % TICKS_PER_HOUR) / TICKS_PER_MINUTE) as u8;
     (hour, minute)
@@ -132,7 +214,7 @@ pub fn game_time(tick: u64) -> GameTime {
         day,
         cycle_tick,
         ambient: ambient_kind(cycle_tick),
-        ground_lit: ground_lit(cycle_tick),
+        ground_window: ground_window(cycle_tick),
         phase: day_phase(cycle_tick),
         clock_hour: hour,
         clock_minute: minute,
@@ -140,42 +222,78 @@ pub fn game_time(tick: u64) -> GameTime {
     }
 }
 
-/// Returns the effective ambient triple, accounting for window 13's ramp
-/// (ticks [18900, 19021) still carry the previous window's dark value).
-fn ambient_for_window(window: usize, cycle_tick: u64) -> (i32, i32, i32) {
-    if window == 12 && cycle_tick < WINDOW_13_NEUTRAL_START {
-        return AMBIENT_PLATEAU[11];
-    }
-    AMBIENT_PLATEAU[window]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The observable interval trace of one cycle: every tick at which
+    /// `(ambient_kind, ground_window)` changes, and the state each window starts
+    /// in. This — not any phase name — is the contract of the model
+    /// (`docs/k1/time-of-day.md`). The ramp ticks come from the original's
+    /// integer halving: a ramp leaves the value it comes from on the tick whose
+    /// integer half first turns non-zero.
+    fn observable_transitions() -> Vec<(u64, Ambient, bool)> {
+        let mut changes: Vec<(u64, Ambient, bool)> = Vec::new();
+        let mut previous = (ambient_kind(0), ground_window(0));
+        for tick in 1..CYCLE_TICKS {
+            let now = (ambient_kind(tick), ground_window(tick));
+            if now != previous {
+                changes.push((tick, now.0, now.1));
+                previous = now;
+            }
+        }
+        changes
+    }
+
+    #[test]
+    fn the_cycle_reports_the_confirmed_interval_trace() {
+        assert_eq!(
+            observable_transitions(),
+            vec![
+                (1802, Ambient::Warm, false),
+                (3593, Ambient::Neutral, false),
+                (5402, Ambient::Dark, false),
+                (8100, Ambient::Dark, true),
+                (18900, Ambient::Dark, false),
+                (19020, Ambient::Neutral, false),
+            ]
+        );
+    }
 
     #[test]
     fn window_1_is_neutral() {
         assert_eq!(ambient_kind(0), Ambient::Neutral);
         assert_eq!(ambient_kind(1799), Ambient::Neutral);
-        assert!(!ground_lit(0));
+        assert!(!ground_window(0));
     }
 
+    /// The ramp halves the distance as an integer, so its first two ticks still
+    /// carry the neutral `(0, 0, 0)` the ramp leaves: the picture turns warm at
+    /// 1802, where `u = 1`.
     #[test]
-    fn window_2_is_warm() {
-        assert_eq!(ambient_kind(1800), Ambient::Warm);
+    fn window_2_ramps_from_neutral_to_warm() {
+        assert_eq!(ambient_value(1800), (0.0, 0.0, 0.0));
+        assert_eq!(ambient_value(1801), (0.0, 0.0, 0.0));
+        assert_eq!(ambient_kind(1801), Ambient::Neutral);
+        assert_eq!(ambient_value(1802), (1.0, 0.0, 0.0));
+        assert_eq!(ambient_kind(1802), Ambient::Warm);
+        assert_eq!(ambient_value(1824), (12.0, 6.0, 0.0));
         assert_eq!(ambient_kind(1829), Ambient::Warm);
-        assert!(!ground_lit(1800));
+        assert!(!ground_window(1800));
     }
 
     #[test]
-    fn window_3_is_warm() {
+    fn window_3_is_the_warm_plateau() {
         assert_eq!(ambient_kind(1830), Ambient::Warm);
-        assert_eq!(ambient_kind(3569), Ambient::Warm);
+        assert_eq!(ambient_value(3569), (12.0, 6.0, 0.0));
     }
 
     #[test]
-    fn window_4_is_neutral() {
-        assert_eq!(ambient_kind(3570), Ambient::Neutral);
+    fn window_4_ramps_warm_to_neutral() {
+        assert_eq!(ambient_kind(3570), Ambient::Warm);
+        assert_eq!(ambient_value(3592), (1.0, 0.0, 0.0));
+        assert_eq!(ambient_value(3593), (0.0, 0.0, 0.0));
+        assert_eq!(ambient_kind(3593), Ambient::Neutral);
         assert_eq!(ambient_kind(3599), Ambient::Neutral);
     }
 
@@ -186,75 +304,90 @@ mod tests {
     }
 
     #[test]
-    fn window_6_is_dark() {
-        assert_eq!(ambient_kind(5400), Ambient::Dark);
+    fn window_6_ramps_neutral_to_dark() {
+        assert_eq!(ambient_value(5400), (0.0, 0.0, 0.0));
+        assert_eq!(ambient_kind(5400), Ambient::Neutral);
+        assert_eq!(ambient_value(5401), (0.0, 0.0, 0.0));
+        assert_eq!(ambient_kind(5401), Ambient::Neutral);
+        assert_eq!(ambient_value(5402), (0.2, -0.4, -1.0));
+        assert_eq!(ambient_kind(5402), Ambient::Dark);
+        assert_eq!(ambient_value(5501), (10.0, -20.0, -50.0));
         assert_eq!(ambient_kind(8099), Ambient::Dark);
-        assert!(!ground_lit(5400));
+        assert!(!ground_window(5400));
     }
 
     #[test]
-    fn window_7_is_dark_ground_lit() {
-        assert_eq!(ambient_kind(8100), Ambient::Dark);
+    fn window_7_is_dark_with_the_ground_window_open() {
+        assert_eq!(ambient_value(8100), (10.0, -20.0, -50.0));
+        assert_eq!(ambient_value(8161), (0.0, -50.0, -70.0));
+        assert!(ground_window(8100));
         assert_eq!(ambient_kind(11699), Ambient::Dark);
-        assert!(ground_lit(8100));
     }
 
     #[test]
-    fn window_8_is_dark_ground_lit() {
+    fn window_8_ramps_deeper_and_stays_dark() {
+        assert_eq!(ambient_value(11700), (0.0, -50.0, -70.0));
+        assert_eq!(ambient_value(11821), (-60.0, -70.0, -70.0));
         assert_eq!(ambient_kind(11700), Ambient::Dark);
         assert_eq!(ambient_kind(11879), Ambient::Dark);
-        assert!(ground_lit(11700));
+        assert!(ground_window(11700));
+    }
+
+    /// Windows 9 to 11 hold one of the two night palettes, chosen by the per-day
+    /// coin flip that #96 will draw. Both palettes are dark, so no boundary of
+    /// this model can depend on the choice.
+    #[test]
+    fn the_night_palette_windows_are_dark_whatever_the_palette() {
+        for tick in [11880, 11900, 11909, 11910, 16154, 16155, 16175, 16199] {
+            assert_eq!(ambient_kind(tick), Ambient::Dark, "at {tick}");
+            assert!(ground_window(tick), "at {tick}");
+        }
+        // The window-9 and window-11 ramps connect the two palettes through
+        // dark values only: the green channel travels between -70 and -50.
+        for tick in 11880..11910 {
+            let (r, g, b) = ambient_value(tick);
+            assert_eq!((r, b), (-60.0, -70.0), "at {tick}");
+            assert!((-70.0..=-50.0).contains(&g), "at {tick}: {g}");
+        }
     }
 
     #[test]
-    fn window_9_is_dark_ground_lit() {
-        assert_eq!(ambient_kind(11880), Ambient::Dark);
-        assert_eq!(ambient_kind(11909), Ambient::Dark);
-        assert!(ground_lit(11880));
+    fn window_12_ramps_up_to_the_last_dark_plateau() {
+        assert_eq!(ambient_value(16200), (-60.0, -70.0, -70.0));
+        assert_eq!(ambient_value(16301), (-30.0, -60.0, -20.0));
+        assert!(ground_window(16200));
+        assert!(ground_window(18899));
     }
 
+    /// The ground window closes while the picture is still dark: the byte-packed
+    /// ramp branch (rus `0x4294D1`) is `(u/2 - 30, u - 60, u/3 - 20)` with integer
+    /// divisions, so it reaches `(0, 0, 0)` at t = 120 — tick 19020 — while the
+    /// branch itself runs to t = 120 and only the branch after it returns the
+    /// plateau.
     #[test]
-    fn window_10_is_dark_ground_lit() {
-        assert_eq!(ambient_kind(11910), Ambient::Dark);
-        assert_eq!(ambient_kind(16154), Ambient::Dark);
-        assert!(ground_lit(11910));
-    }
-
-    #[test]
-    fn window_11_is_dark_ground_lit() {
-        assert_eq!(ambient_kind(16155), Ambient::Dark);
-        assert_eq!(ambient_kind(16199), Ambient::Dark);
-        assert!(ground_lit(16155));
-    }
-
-    #[test]
-    fn window_12_is_dark_ground_lit() {
-        assert_eq!(ambient_kind(16200), Ambient::Dark);
-        assert_eq!(ambient_kind(18899), Ambient::Dark);
-        assert!(ground_lit(16200));
-    }
-
-    #[test]
-    fn window_13_ramp_then_neutral() {
+    fn window_13_closes_the_ground_window_then_reaches_neutral() {
+        assert_eq!(ambient_value(18900), (-30.0, -60.0, -20.0));
         assert_eq!(ambient_kind(18900), Ambient::Dark);
-        assert_eq!(ambient_kind(19020), Ambient::Dark);
-        assert_eq!(ambient_kind(19021), Ambient::Neutral);
+        assert!(!ground_window(18900));
+        assert_eq!(ambient_value(19018), (-1.0, -1.0, -1.0));
+        assert_eq!(ambient_value(19019), (-1.0, -1.0, -1.0));
+        assert_eq!(ambient_kind(19019), Ambient::Dark);
+        assert_eq!(ambient_value(19020), (0.0, 0.0, 0.0));
+        assert_eq!(ambient_kind(19020), Ambient::Neutral);
         assert_eq!(ambient_kind(21599), Ambient::Neutral);
-        assert!(!ground_lit(18900));
-        assert!(!ground_lit(19021));
     }
 
     #[test]
-    fn ground_light_opens_at_8100_closes_at_18900() {
-        assert!(!ground_lit(8099));
-        assert!(ground_lit(8100));
-        assert!(ground_lit(18899));
-        assert!(!ground_lit(18900));
+    fn the_ground_window_opens_at_8100_and_closes_at_18900() {
+        assert!(!ground_window(8099));
+        assert!(ground_window(8100));
+        assert!(ground_window(18899));
+        assert!(!ground_window(18900));
     }
 
-    /// Every threshold opens a new row of the table, even where the plateau values
-    /// repeat: the six that change nothing observable are ramp starts, and a ramp
-    /// is what the lighting ticket models, not this one.
+    /// Every threshold opens a new window of the table, even where the reported
+    /// state does not change: the thresholds that move no boundary are ramp
+    /// starts, and their ramps are what the windows are for.
     #[test]
     fn every_threshold_starts_a_new_window() {
         for (index, &threshold) in THRESHOLDS.iter().enumerate() {
@@ -263,47 +396,28 @@ mod tests {
         }
     }
 
-    /// The state this model reports changes at exactly the boundaries where a
-    /// plateau or the ground light changes. 19021 is not a threshold: it is where
-    /// window 13's ramp reaches neutral.
     #[test]
-    fn observable_state_changes_at_the_recorded_boundaries() {
-        let mut changed: Vec<u64> = Vec::new();
-        let mut previous = (ambient_kind(0), ground_lit(0));
-        for tick in 1..CYCLE_TICKS {
-            let now = (ambient_kind(tick), ground_lit(tick));
-            if now != previous {
-                changed.push(tick);
-                previous = now;
-            }
-        }
-        assert_eq!(changed, vec![1800, 3570, 5400, 8100, 18900, 19021]);
-    }
-
-    /// Mid-window the reported state is constant. Window 13 is compared from
-    /// 19021 because its first 121 ticks are the ramp down from window 12.
-    #[test]
-    fn nothing_changes_mid_window() {
-        let mut spans: Vec<(u64, u64)> = Vec::new();
-        let mut start = 0u64;
-        for &threshold in &THRESHOLDS {
-            spans.push((start, threshold));
-            start = threshold;
-        }
-        spans.push((start, CYCLE_TICKS));
-
-        for (index, &(start, end)) in spans.iter().enumerate() {
-            let plateau_start = if index + 1 == spans.len() {
-                WINDOW_13_NEUTRAL_START
-            } else {
-                start
-            };
-            let middle = (plateau_start + end) / 2;
-            assert_eq!(
-                (ambient_kind(plateau_start), ground_lit(plateau_start)),
-                (ambient_kind(middle), ground_lit(middle)),
-                "window {index}: {middle} differs from {plateau_start}"
-            );
+    fn the_plateau_of_every_window_is_the_recorded_triple() {
+        let plateau_start = [
+            0, 1825, 1830, 3595, 3600, 5501, 8161, 11821, 11921, 11910, 16196, 16301, 19021,
+        ];
+        let expected = [
+            (0.0, 0.0, 0.0),
+            (12.0, 6.0, 0.0),
+            (12.0, 6.0, 0.0),
+            (0.0, 0.0, 0.0),
+            (0.0, 0.0, 0.0),
+            (10.0, -20.0, -50.0),
+            (0.0, -50.0, -70.0),
+            (-60.0, -70.0, -70.0),
+            (-60.0, -70.0, -70.0),
+            (-60.0, -70.0, -70.0),
+            (-60.0, -70.0, -70.0),
+            (-30.0, -60.0, -20.0),
+            (0.0, 0.0, 0.0),
+        ];
+        for (window, (&start, &want)) in plateau_start.iter().zip(&expected).enumerate() {
+            assert_eq!(ambient_value(start), want, "plateau of window {window}");
         }
     }
 
@@ -315,20 +429,39 @@ mod tests {
         assert_eq!(clock_face(21600), (6, 0));
     }
 
+    /// The clock face normalizes its argument before shifting it, so the
+    /// addition cannot overflow on any u64 a caller might hand in.
     #[test]
-    fn day_phase_covers_expected_spans() {
+    fn clock_face_normalizes_a_non_cycle_argument() {
+        assert_eq!(clock_face(CYCLE_TICKS - 1), clock_face(2 * CYCLE_TICKS - 1));
+        assert_eq!(
+            clock_face(u64::MAX),
+            clock_face(u64::MAX % CYCLE_TICKS),
+            "an unnormalized tick must not overflow"
+        );
+    }
+
+    #[test]
+    fn day_phase_labels_the_intervals() {
         assert_eq!(day_phase(900), DayPhase::Day);
-        assert_eq!(day_phase(5400), DayPhase::Dusk);
+        // The ramp's first two ticks are still neutral under the integer
+        // halving, so Dusk opens at 5402.
+        assert_eq!(day_phase(5401), DayPhase::Day);
+        assert_eq!(day_phase(5402), DayPhase::Dusk);
         assert_eq!(day_phase(8099), DayPhase::Dusk);
         assert_eq!(day_phase(8100), DayPhase::Night);
         assert_eq!(day_phase(18899), DayPhase::Night);
         assert_eq!(day_phase(18900), DayPhase::Dawn);
-        assert_eq!(day_phase(19020), DayPhase::Dawn);
-        assert_eq!(day_phase(19021), DayPhase::Day);
+        assert_eq!(day_phase(19019), DayPhase::Dawn);
+        assert_eq!(day_phase(19020), DayPhase::Day);
     }
 
+    /// The four-name trace is a consequence of the interval trace, never an
+    /// independent contract: Day → Dusk → Night → Dawn → Day follows from the
+    /// boundaries asserted in `the_cycle_reports_the_confirmed_interval_trace`,
+    /// and the original names no phase.
     #[test]
-    fn phase_trace_day_dusk_night_dawn_day() {
+    fn the_phase_words_follow_the_intervals_exactly() {
         let mut phases: Vec<DayPhase> = Vec::new();
         let mut prev = day_phase(0);
         phases.push(prev);
@@ -339,7 +472,6 @@ mod tests {
                 prev = p;
             }
         }
-        // Our convention: Day → Dusk → Night → Dawn → Day. The original names no phase.
         assert_eq!(
             phases,
             vec![
@@ -350,6 +482,23 @@ mod tests {
                 DayPhase::Day
             ]
         );
+
+        // And phase introduces no boundary of its own: whenever the observable
+        // state of two consecutive ticks agrees, so does the phase word. (The
+        // map from state to word is not injective — `(Dark, false)` is Dusk on
+        // one side of the ground window and Dawn on the other, which is the
+        // cycle position speaking, not the state.)
+        for tick in 1..CYCLE_TICKS {
+            if ambient_kind(tick) == ambient_kind(tick - 1)
+                && ground_window(tick) == ground_window(tick - 1)
+            {
+                assert_eq!(
+                    day_phase(tick),
+                    day_phase(tick - 1),
+                    "tick {tick} changes the word without an interval change"
+                );
+            }
+        }
     }
 
     #[test]
@@ -358,7 +507,7 @@ mod tests {
         assert_eq!(gt.day, 0);
         assert_eq!(gt.cycle_tick, 0);
         assert_eq!(gt.ambient, Ambient::Neutral);
-        assert!(!gt.ground_lit);
+        assert!(!gt.ground_window);
         assert_eq!(gt.phase, DayPhase::Day);
         assert_eq!(gt.clock_hour, 6);
         assert_eq!(gt.clock_minute, 0);

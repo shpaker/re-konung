@@ -15,7 +15,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use k1_game::time_of_day::{
-    CYCLE_TICKS, ambient_kind, clock_face, day_phase, game_time, ground_lit,
+    CYCLE_TICKS, ambient_kind, ambient_value, clock_face, day_phase, game_time, ground_window,
 };
 
 /// Whole cycles per measurement: 21600 ticks each, enough to hide the timer's
@@ -67,16 +67,19 @@ fn measures_the_cost_of_advancing_game_time() {
     let floor = start.elapsed().as_secs_f64() * 1e9 / calls;
     println!("{:<44} {floor:>8.2} ns/tick", "empty loop (harness floor)");
 
-    measure("ground_lit (one range check)", floor, |tick| {
-        black_box(ground_lit(tick));
+    measure("ground_window (window + range check)", floor, |tick| {
+        black_box(ground_window(tick));
     });
     measure("clock_face (three divisions)", floor, |tick| {
         black_box(clock_face(tick));
     });
-    measure("ambient_kind (window + table read)", floor, |tick| {
+    measure("ambient_value (window + branch)", floor, |tick| {
+        black_box(ambient_value(tick));
+    });
+    measure("ambient_kind (the triple and its sign)", floor, |tick| {
         black_box(ambient_kind(tick));
     });
-    measure("day_phase (ambient + ground light)", floor, |tick| {
+    measure("day_phase (ambient + ground window)", floor, |tick| {
         black_box(day_phase(tick));
     });
     measure(

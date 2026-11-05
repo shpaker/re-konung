@@ -553,10 +553,10 @@ mod tests {
     const OTHER_SEED: u64 = 99;
 
     /// Stepping one full cycle of the real simulation reproduces the interval trace
-    /// `docs/k1/time-of-day.md` records: the ground light opens at 8100 and closes at
-    /// 18900, and the reported state changes at 1800, 3570, 5400 and at 19021, where
-    /// window 13's ramp reaches neutral. The other thresholds open ramps, which the
-    /// plateau model of this ticket cannot see — the lighting ticket models them.
+    /// `docs/k1/time-of-day.md` records: the ground window opens at 8100 and closes at
+    /// 18900, and each ramp leaves the value it comes from on the tick whose integer
+    /// half first turns non-zero — warm at 1802, neutral at 3593, dark at 5402 —
+    /// while window 13's ramp reaches `(0, 0, 0)` at 19020.
     #[test]
     fn full_cycle_reproduces_the_interval_trace() {
         let map = open_map(|_, _| false);
@@ -574,13 +574,13 @@ mod tests {
         for _ in 0..time_of_day::CYCLE_TICKS {
             sim.tick();
             let gt = sim.game_time();
-            if gt.ambient != prev.ambient || gt.ground_lit != prev.ground_lit {
+            if gt.ambient != prev.ambient || gt.ground_window != prev.ground_window {
                 boundaries.push(gt.cycle_tick);
             }
             prev = gt;
         }
 
-        assert_eq!(boundaries, vec![1800, 3570, 5400, 8100, 18900, 19021]);
+        assert_eq!(boundaries, vec![1802, 3593, 5402, 8100, 18900, 19020]);
     }
 
     /// The accessor is the model, not a copy of it: what the running simulation
