@@ -121,6 +121,14 @@ remainder arrives as a snap when the step ends — the original never interpolat
 last pixels. **Confirmed** by measurement; we draw the offsets as they are instead of
 smoothing them, because interpolation would be a rule the data does not show.
 
+Because the frames carry the travel, a display layer must keep the creature's node
+on the step's starting cell pixel for the whole step and index the walk clip from
+the step's start (the original's `Frame` counter, Slavik `game_play.cpp:3727-3740`).
+A node interpolated toward the target cell on top of the frame offsets counts the
+travel twice: the image runs at double speed and the frame cycle — whose length is
+the step — snaps it back a cell at every wrap (the review #68 bug, held off by the
+viewer test `a_walking_creature_image_never_jumps_back`).
+
 ## Tick
 
 A game tick is 60 ms: Slavik `game.h:30` (`FrameTime = 60`). **Confirmed**; in

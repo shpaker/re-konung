@@ -78,6 +78,201 @@ pub fn run_check(cli: &Cli, map: Option<u32>, all: bool, format: Format) -> Exit
     }
 }
 
+/// Headless-прогон симуляции: существа ходят, печатается отчёт.
+pub fn run_simulate(
+    cli: &Cli,
+    map: Option<u32>,
+    all: bool,
+    ticks: u64,
+    seed: u64,
+    format: Format,
+) -> ExitCode {
+    match simulate(cli, map, all, ticks, seed, format) {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Прогон симуляции по картам: `map` — одна, `all` — все.
+pub fn simulate(
+    cli: &Cli,
+    map: Option<u32>,
+    all: bool,
+    ticks: u64,
+    seed: u64,
+    format: Format,
+) -> Result<ExitCode, ViewerError> {
+    let game = Game::open(&cli.game_dir)?;
+    let source: MapSource = cli.source.into();
+    let available = game.maps()?;
+    let maps = if all {
+        available
+            .into_iter()
+            .filter(|m| m.source == source)
+            .collect::<Vec<_>>()
+    } else {
+        let number = map.ok_or(ViewerError::MapNotSelected)?;
+        let map_ref = MapRef { source, number };
+        if !available.contains(&map_ref) {
+            return Err(ViewerError::NoSuchMap {
+                dir: cli.game_dir.clone(),
+                map_source: source,
+                number,
+            });
+        }
+        vec![map_ref]
+    };
+    if maps.is_empty() {
+        return Err(ViewerError::NoMaps {
+            dir: cli.game_dir.clone(),
+            map_source: source,
+        });
+    }
+
+    let mut reports = Vec::new();
+    for &map_ref in &maps {
+        match game.simulation(map_ref, seed) {
+            Ok(mut sim) => {
+                let creatures = sim.creature_count();
+                // Creatures the world refused to place are a data problem, not a
+                // silent gap: report each with the reason instead of dropping it.
+                let spawn_errors: Vec<String> = sim
+                    .spawn_failures()
+                    .iter()
+                    .map(|(id, error)| format!("roster {id}: {error:?}"))
+                    .collect();
+                let mut steps = 0usize;
+                let mut route_sets = 0usize;
+                // Distinct creatures that started at least one step over the whole
+                // run — not the ones caught mid-step at the last tick, which is
+                // what `movers` counts (review #68: the two must not be conflated).
+                let mut ever_walked: std::collections::HashSet<u32> =
+                    std::collections::HashSet::new();
+                for _ in 0..ticks {
+                    let events = sim.tick();
+                    for event in &events {
+                        match event {
+                            kn_game::movement::world::Event::StepStarted { creature, .. } => {
+                                steps += 1;
+                                ever_walked.insert(creature.raw());
+                            }
+                            kn_game::movement::world::Event::RouteSet { .. } => route_sets += 1,
+                            _ => {}
+                        }
+                    }
+                }
+                // Orders rejected for a reason other than "no route" are bugs or
+                // bad data, never a verdict to fold into a success count.
+                let errors: Vec<String> = sim
+                    .order_failures()
+                    .iter()
+                    .map(|(id, error)| format!("order of roster {id}: {error:?}"))
+                    .collect();
+                let states = sim.states();
+                let movers = states.iter().filter(|s| s.moving).count();
+                reports.push(SimReport {
+                    source: map_ref.source,
+                    number: map_ref.number,
+                    creatures,
+                    ever_moved: ever_walked.len(),
+                    movers,
+                    steps,
+                    route_sets,
+                    tick: ticks,
+                    spawn_errors,
+                    errors,
+                });
+            }
+            Err(e) => {
+                reports.push(SimReport {
+                    source: map_ref.source,
+                    number: map_ref.number,
+                    creatures: 0,
+                    ever_moved: 0,
+                    movers: 0,
+                    steps: 0,
+                    route_sets: 0,
+                    tick: ticks,
+                    spawn_errors: Vec::new(),
+                    errors: vec![e.to_string()],
+                });
+            }
+        }
+    }
+
+    match format {
+        Format::Text => {
+            for r in &reports {
+                let spawns = if r.spawn_errors.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {} not spawned", r.spawn_errors.len())
+                };
+                println!(
+                    "{} {:>2}: {} creatures, {} ever moved, {} moving, {} steps, {} routes, {} ticks, {} errors{spawns}",
+                    match r.source {
+                        MapSource::Game => "game    ",
+                        MapSource::Tutorial => "tutorial",
+                    },
+                    r.number,
+                    r.creatures,
+                    r.ever_moved,
+                    r.movers,
+                    r.steps,
+                    r.route_sets,
+                    r.tick,
+                    r.errors.len(),
+                );
+                for e in &r.errors {
+                    println!("  - {e}");
+                }
+                for e in &r.spawn_errors {
+                    println!("  ! {e}");
+                }
+            }
+        }
+        Format::Json => println!("{}", serde_json::to_string_pretty(&reports)?),
+    }
+
+    Ok(if reports_ok(&reports) {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
+/// A run is only successful if no map hit an error — build failure or rejected
+/// order — and none left creatures unplaced: both are data problems or bugs to
+/// act on, not warnings to ignore (review #68). Nothing here speaks for the
+/// picture: the check runs no renderer, so render correctness is judged only
+/// by looking at the viewer or the Bevy continuity test.
+fn reports_ok(reports: &[SimReport]) -> bool {
+    reports
+        .iter()
+        .all(|report| report.errors.is_empty() && report.spawn_errors.is_empty())
+}
+
+#[derive(Clone, serde::Serialize)]
+struct SimReport {
+    source: MapSource,
+    number: u32,
+    creatures: usize,
+    /// Creatures that started at least one step during the whole run.
+    ever_moved: usize,
+    /// Creatures mid-step at the last tick — a snapshot, not the run's coverage.
+    movers: usize,
+    steps: usize,
+    route_sets: usize,
+    tick: u64,
+    /// Creatures the world refused to place and why, e.g. `"roster 7: ImpassableCell"`.
+    spawn_errors: Vec<String>,
+    /// Build failures and orders rejected for a reason other than "no route".
+    errors: Vec<String>,
+}
+
 /// Отчёт по картам источника: `map` — одна карта, `all` — все.
 pub fn check(
     cli: &Cli,
@@ -140,5 +335,35 @@ mod tests {
             check(&cli, Some(1), false, Format::Text),
             Err(ViewerError::Game(_))
         ));
+    }
+
+    #[test]
+    fn unplaced_creatures_fail_a_simulate_run() {
+        let clean = SimReport {
+            source: MapSource::Game,
+            number: 1,
+            creatures: 3,
+            ever_moved: 3,
+            movers: 2,
+            steps: 5,
+            route_sets: 1,
+            tick: 10,
+            spawn_errors: Vec::new(),
+            errors: Vec::new(),
+        };
+        assert!(reports_ok(std::slice::from_ref(&clean)));
+        let unplaced = SimReport {
+            spawn_errors: vec!["roster 7: ImpassableCell".to_owned()],
+            ..clean.clone()
+        };
+        assert!(
+            !reports_ok(&[unplaced]),
+            "an unplaced roster is a failure, not a warning"
+        );
+        let errored = SimReport {
+            errors: vec!["boom".to_owned()],
+            ..clean
+        };
+        assert!(!reports_ok(&[errored]));
     }
 }

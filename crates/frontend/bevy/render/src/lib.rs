@@ -7,15 +7,21 @@
 
 pub mod animation;
 pub mod camera;
+pub mod creatures;
 pub mod scene;
 pub mod textures;
 
 pub use animation::{
-    AnimPlugin, Animator, Clock, Frame, PlayState, Sequence, SpriteView, frame_view,
+    AnimPlugin, AnimSet, Animator, Clock, Frame, PlayState, Sequence, SpriteView, frame_view,
 };
 pub use camera::{
     CameraApply, CameraBounds, CameraInput, CameraState, MapCamera, MapCameraPlugin, PAN_SPEED,
     PendingFrame, ZOOM_LEVELS, fitting_zoom, frame_scene, ortho_scale,
+};
+pub use creatures::{
+    CreatureData, CreatureLayer, CreatureNode, CreatureRoot, CreatureShadow, CreatureSlot,
+    DepthMap, LayerAnimation, LayerData, SpawnedCreature, clear_creatures, creature_layer_step,
+    despawn_creature, spawn_creature, update_creature_depth,
 };
 pub use scene::{
     MapRoot, SceneGroup, SceneLoad, ScenePiece, Z_STEP, clear_scene, load_scene, piece_center,

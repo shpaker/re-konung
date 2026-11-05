@@ -156,6 +156,12 @@ pub fn spawn_scene(commands: &mut Commands, scene: &Scene, cache: &TextureCache)
         let mut bounds = None;
         for order in orders {
             let piece = &scene.pieces[order];
+            // Creatures are drawn by their stable [`CreatureNode`] children, not as
+            // scene sprites: spawning both would give every creature two competing
+            // sprites for the same body (review #68).
+            if piece.creature_id.is_some() {
+                continue;
+            }
             let base = piece.texture.as_ref().and_then(|id| cache.get(id));
             let sequence = piece
                 .animation
@@ -447,6 +453,7 @@ mod tests {
                 ],
             }),
             group: PieceGroup::Objects,
+            creature_id: None,
         };
         // Границы считают по базовому кадру и по каждому кадру анимации:
         // крупный огонь больше своего базового кадра, и без этого он ушёл бы за
@@ -466,6 +473,7 @@ mod tests {
             h: None,
             animation: None,
             group,
+            creature_id: None,
         }
     }
 

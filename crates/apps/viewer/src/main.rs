@@ -12,6 +12,13 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Check { map, all, format }) => kn_viewer::run_check(&cli, map, all, format),
+        Some(Command::Simulate {
+            map,
+            all,
+            ticks,
+            seed,
+            format,
+        }) => kn_viewer::run_simulate(&cli, map, all, ticks, seed, format),
         None => match kn_viewer::viewer_config(&cli) {
             Ok(config) => {
                 kn_fe_viewer::run_viewer(config);

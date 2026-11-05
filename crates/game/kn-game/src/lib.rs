@@ -12,6 +12,7 @@
 
 pub mod movement;
 pub mod rules;
+pub mod simulation;
 pub mod step_durations;
 
 use std::path::PathBuf;
@@ -20,14 +21,17 @@ use serde::Serialize;
 use thiserror::Error;
 
 use k1_data::{
+    characters::WALK_ANIMATION,
     game_state::{self, GameState},
+    graph_res::DIRECTIONS,
     map,
     repo::{FileSet, GAME_FILES, GameDir, TUTORIAL_FILES},
 };
 use k1_game::{resources::Resources, scene::SceneInput, textures::TextureKey};
 
+pub use k1_data::characters::LayerKey;
 pub use k1_data::objects_res::TICK_MS;
-pub use k1_game::scene::PieceGroup;
+pub use k1_game::scene::{PieceGroup, PoseKind};
 pub use k1_game::textures::{Rgba, TextureError};
 
 pub type Result<T> = std::result::Result<T, GameError>;
@@ -67,6 +71,24 @@ pub struct Piece {
     pub h: Option<i32>,
     pub animation: Option<Animation>,
     pub group: PieceGroup,
+    pub creature_id: Option<usize>,
+}
+
+impl Piece {
+    /// Whether this piece is an object's fire: flames are drawn together with
+    /// the object they belong to and are no standing objects of their own —
+    /// depth orderers must treat them as part of the object, not as extra
+    /// stacks (review #68).
+    pub fn is_flame(&self) -> bool {
+        let flame = |id: &TextureId| matches!(id.0, TextureKey::FlameFrame { .. });
+        self.texture.as_ref().is_some_and(flame)
+            || self.animation.as_ref().is_some_and(|animation| {
+                animation
+                    .frames
+                    .iter()
+                    .any(|frame| frame.texture.as_ref().is_some_and(flame))
+            })
+    }
 }
 
 /// Показываются ли куски группы при этих опциях.
@@ -327,6 +349,87 @@ impl Game {
         }
     }
 
+    /// Headless simulation of one map: creatures walk, rules decide, engine ticks.
+    pub fn simulation(&self, map_ref: MapRef, seed: u64) -> Result<simulation::Simulation> {
+        let files = map_ref.source.file_set();
+        let map_bytes = self.dir.map_bytes(map_ref.number, files)?;
+        let konung_map = map::parse(&map_bytes)?;
+        let hero = self.heroes(map_ref.source)?.first().map(|&h| h as usize);
+        let state_bytes = match hero {
+            Some(hero) => Some(self.dir.state_bytes(hero as u32, files)?),
+            None => None,
+        };
+        let state = state_bytes
+            .as_ref()
+            .map(|bytes| game_state::parse(bytes))
+            .transpose()?;
+        let state = state
+            .ok_or_else(|| GameError::Io(std::io::Error::other("no game state for simulation")))?;
+        let jobs = k1_game::creatures::job_slots(&state, map_ref.number as usize);
+        let step_table = self.resources.with_graphics(|graph, objects| {
+            let roster = k1_game::creatures::roster(&state, map_ref.number as usize, hero);
+            k1_game::creatures::step_durations(&state, &roster, graph, objects)
+        })?;
+        Ok(simulation::Simulation::new(
+            &konung_map,
+            &state,
+            map_ref.number as usize,
+            hero,
+            step_table,
+            jobs,
+            seed,
+        ))
+    }
+
+    /// Idle and walk clips per creature, keyed by `Piece::creature_id` (the
+    /// character slot). The layer order matches the creature's Characters-group
+    /// pieces in the scene built from the same state, so a consumer can swap an
+    /// [`Animator`] sequence by piece position when [`WalkState`] changes.
+    pub fn creature_animations(&self, map_ref: MapRef) -> Result<Vec<(usize, CreatureAnimation)>> {
+        let files = map_ref.source.file_set();
+        let hero = self.heroes(map_ref.source)?.first().map(|&h| h as usize);
+        let state_bytes = self.dir.state_bytes(hero.unwrap_or(0) as u32, files)?;
+        let state = game_state::parse(&state_bytes)?;
+        let entities = game_state::on_map(&state, map_ref.number as usize, hero);
+        Ok(self.resources.with_graphics(|graph, objects| {
+            let graphics = k1_game::scene::Graphics::new(graph, objects, &self.resources.tables);
+            let mut result = Vec::new();
+            for (character, x, y) in k1_data::characters::placed(&entities, &state) {
+                let (px, py) = game_state::character_position(x, y);
+                let rest = match k1_game::scene::pose_in(
+                    character,
+                    px,
+                    py,
+                    &state,
+                    &graphics,
+                    &PoseKind::of_record(character),
+                ) {
+                    Ok(Some(pose)) => clips_of(pose),
+                    _ => continue,
+                };
+                let walk: Vec<Option<CreatureClips>> = (0..DIRECTIONS as u8)
+                    .map(|direction| {
+                        k1_game::scene::pose_in(
+                            character,
+                            px,
+                            py,
+                            &state,
+                            &graphics,
+                            &PoseKind::start(WALK_STATE, direction),
+                        )
+                        .ok()
+                        .flatten()
+                        .map(clips_of)
+                    })
+                    .collect();
+                if walk.iter().any(|clip| clip.is_some()) {
+                    result.push((character.slot, CreatureAnimation { rest, walk }));
+                }
+            }
+            result
+        })?)
+    }
+
     /// RGBA-картинки ключей, позиционно параллельно `ids`.
     ///
     /// Наружу уходит и причина: потребитель решает, пропускать ли кусок, но
@@ -516,22 +619,93 @@ fn piece(from: k1_game::scene::DrawPiece) -> Piece {
         y: from.y,
         w: from.w,
         h: from.h,
-        animation: from.animation.map(|animation| Animation {
-            base: animation.base,
-            frames: animation
-                .frames
-                .into_iter()
-                .map(|frame| AnimationFrame {
-                    texture: frame.texture.map(TextureId),
-                    dx: frame.dx,
-                    dy: frame.dy,
-                    ticks: frame.ticks,
-                })
-                .collect(),
-        }),
+        animation: from.animation.map(animation),
         group: from.group,
+        creature_id: from.creature_id,
     }
 }
+
+/// Кадры слоя из модели сцены: тот же пересчёт, что и в [`piece`], отделён для
+/// [`Game::creature_animations`], которое строит позы вне общего списка.
+fn animation(from: k1_game::scene::DrawAnimation) -> Animation {
+    Animation {
+        base: from.base,
+        frames: from
+            .frames
+            .into_iter()
+            .map(|frame| AnimationFrame {
+                texture: frame.texture.map(TextureId),
+                dx: frame.dx,
+                dy: frame.dy,
+                ticks: frame.ticks,
+            })
+            .collect(),
+    }
+}
+
+/// One creature layer: its own static base and its animation together. `base`
+/// is the layer's resting image (the piece texture), `animation` its frames —
+/// `None` where the layer never moves. Carrying both from one source lets a
+/// consumer build a stable creature node by the layer's position in this list
+/// instead of joining animation to scene pieces by a global index (review #68).
+///
+/// `corner` is the layer's base-frame corner in absolute map pixels, and
+/// `key` the sprite part it draws. A consumer swapping a layer between poses
+/// must re-anchor on `corner` (every clip's frame offsets are relative to its
+/// own base corner) and match layers across poses by `key`, never by position.
+#[derive(Debug, Clone)]
+pub struct CreatureLayer {
+    pub base: Option<TextureId>,
+    pub animation: Option<Animation>,
+    pub corner: (i32, i32),
+    pub key: LayerKey,
+}
+
+/// Clips of one creature's pieces: `layers` are the creature's body and
+/// equipment in pose order, `shadow` its ground shadow. The list is self-
+/// contained — every layer carries its own base and animation.
+#[derive(Debug, Clone)]
+pub struct CreatureClips {
+    pub layers: Vec<CreatureLayer>,
+    pub shadow: Option<CreatureLayer>,
+}
+
+/// What a creature shows resting and walking: `walk[direction]` is the walk pose
+/// facing that sprite direction, `None` where the creature has no walk frames.
+#[derive(Debug, Clone)]
+pub struct CreatureAnimation {
+    pub rest: CreatureClips,
+    pub walk: Vec<Option<CreatureClips>>,
+}
+
+/// The pose's own clips, in the order the scene lists the creature's pieces:
+/// body then equipment, the shadow kept apart.
+fn clips_of(pose: k1_game::scene::Pose) -> CreatureClips {
+    CreatureClips {
+        layers: pose
+            .pieces
+            .into_iter()
+            .zip(pose.layer_keys)
+            .map(|(piece, key)| creature_layer(piece, key))
+            .collect(),
+        shadow: pose
+            .shadow
+            .map(|piece| creature_layer(piece, LayerKey::Shadow)),
+    }
+}
+
+fn creature_layer(piece: k1_game::scene::DrawPiece, key: LayerKey) -> CreatureLayer {
+    CreatureLayer {
+        base: piece.texture.map(TextureId),
+        animation: piece.animation.map(animation),
+        corner: (piece.x, piece.y),
+        key,
+    }
+}
+
+/// The animation state a walking creature draws: the walk row of its sprite
+/// table (docs/k1/creatures.md), shared with [`k1_data::characters::walk_frame_counts`].
+const WALK_STATE: u8 = WALK_ANIMATION as u8;
 
 /// Итог headless-проверки одной карты.
 #[derive(Debug, Clone, Serialize)]
@@ -637,6 +811,7 @@ mod tests {
             h: None,
             animation: None,
             group: PieceGroup::Terrain,
+            creature_id: None,
         }
     }
 
@@ -647,6 +822,30 @@ mod tests {
             dy: 0,
             ticks: 1,
         }
+    }
+
+    #[test]
+    fn flame_pieces_are_recognised_as_part_of_their_object() {
+        // Flames share their object's draw slot, so a depth orderer must not
+        // see them as extra stacks (review #68); detection covers the base
+        // texture and every animation frame.
+        assert!(piece(TextureKey::FlameFrame { index: 5 }).is_flame());
+        assert!(
+            !piece(TextureKey::Solid {
+                color: [1, 2, 3, 4],
+            })
+            .is_flame()
+        );
+        let animated = Piece {
+            animation: Some(Animation {
+                frames: vec![frame(Some(TextureKey::FlameFrame { index: 1 }))],
+                base: 0,
+            }),
+            ..piece(TextureKey::Solid {
+                color: [1, 2, 3, 4],
+            })
+        };
+        assert!(animated.is_flame());
     }
 
     #[test]
@@ -740,6 +939,7 @@ mod tests {
                     frames: vec![frame(None), frame(Some(gear)), frame(Some(body))],
                 }),
                 group: PieceGroup::Characters,
+                creature_id: None,
             }],
         };
         assert_eq!(scene.texture_ids(), [TextureId(gear), TextureId(body)]);

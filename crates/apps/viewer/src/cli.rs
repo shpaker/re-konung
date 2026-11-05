@@ -41,6 +41,29 @@ pub enum Command {
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
     },
+
+    /// Headless-прогон симуляции: существа ходят, отчёт по тикам
+    Simulate {
+        /// Номер карты
+        #[arg(long, conflicts_with = "all")]
+        map: Option<u32>,
+
+        /// Все карты источника
+        #[arg(long)]
+        all: bool,
+
+        /// Число тиков прогона
+        #[arg(long, default_value = "600")]
+        ticks: u64,
+
+        /// Seed для детерминизма
+        #[arg(long, default_value = "42")]
+        seed: u64,
+
+        /// Формат отчёта
+        #[arg(long, value_enum, default_value = "text")]
+        format: Format,
+    },
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,7 +154,7 @@ mod tests {
                 assert!(!all);
                 assert_eq!(format, Format::Text);
             }
-            None => panic!("ожидался check"),
+            other => panic!("expected check, got {other:?}"),
         }
     }
 
@@ -156,7 +179,27 @@ mod tests {
                 assert_eq!(format, Format::Json);
                 assert!(all);
             }
-            None => panic!("ожидался check"),
+            other => panic!("expected check, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn simulate_subcommand_parses_defaults() {
+        match cli(&["--game-dir", "g", "simulate", "--map", "19"]).command {
+            Some(Command::Simulate {
+                map,
+                all,
+                ticks,
+                seed,
+                format,
+            }) => {
+                assert_eq!(map, Some(19));
+                assert!(!all);
+                assert_eq!(ticks, 600);
+                assert_eq!(seed, 42);
+                assert_eq!(format, Format::Text);
+            }
+            other => panic!("expected simulate, got {other:?}"),
         }
     }
 }
