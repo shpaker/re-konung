@@ -87,7 +87,7 @@ Arrows indicate logical layers, not exact Cargo dependencies.
 │   ║      [X] kn-render       ║  ║       [X] kn-input       ║  ║        [X] kn-ui         ║   │
 │   ╠══════════════════════════╣  ╠══════════════════════════╣  ╠══════════════════════════╣   │
 │   ║ [X] Scene / sprites      ║  ║ [X] Keyboard / mouse     ║  ║ [X] Feathers theme       ║   │
-│   ║ [X] Animation            ║  ║ [X] Drag / wheel zoom    ║  ║ [X] Checkbox sync        ║   │
+│   ║ [X] Animation / creatures║  ║ [X] Drag / wheel zoom    ║  ║ [X] Checkbox sync        ║   │
 │   ║ [X] Camera / cache       ║  ║ [ ] Gamepad / touch      ║  ║ [X] Pointer capture      ║   │
 │   ║ [X] Light overlays       ║  ║ Bevy-specific input      ║  ║ [ ] Gameplay widgets     ║   │
 │   ╚══════════════════════════╝  ╚══════════════════════════╝  ╚══════════════════════════╝   │
@@ -213,9 +213,9 @@ Arrows indicate logical layers, not exact Cargo dependencies.
 |---|---|---|---|---|
 | 01 | `kn-player` | `crates/apps/player` | Binary `re-konung`: CLI, opening the game directory, resolving the hero from the starting state, handing a `PlayerConfig` to the frontend | Bevy, K1 formats |
 | 01 | `kn-viewer` | `crates/apps/viewer` | Binary `re-konung-viewer` plus a library: CLI, startup resolution, headless `check` (JSON report, nonzero exit on failure) — no window, no GPU context | Bevy app construction (linked only transitively) |
-| 02 | `kn-fe-player` | `crates/frontend/bevy/player` | Bevy `App` assembly of the player: window, camera binding, start-map loading | CLI, game rules, formats |
-| 02 | `kn-fe-viewer` | `crates/frontend/bevy/viewer` | Bevy `App` assembly of the viewer: viewer state, Feathers panel, map selector, overlay toggles, playback, frame diagnostics, scene rebuild policy | CLI, formats, game rules |
-| 03 | `kn-render` | `crates/frontend/bevy/render` | Scene pieces → sprites in z-order, texture cache keyed by `TextureId`, per-frame animation, camera state. An overlay is the `Visibility` of a piece-group node, never a map rebuild | K1, formats, game rules, input bindings |
+| 02 | `kn-fe-player` | `crates/frontend/bevy/player` | Bevy `App` assembly of the player: window, camera binding, start-map loading, and the one request that asks `kn-render` to animate the creatures of the map it loaded | CLI, game rules, formats |
+| 02 | `kn-fe-viewer` | `crates/frontend/bevy/viewer` | Bevy `App` assembly of the viewer: viewer state, Feathers panel, map selector, overlay toggles, playback, creature id labels, frame diagnostics, scene rebuild policy | CLI, formats, game rules |
+| 03 | `kn-render` | `crates/frontend/bevy/render` | Scene pieces → sprites in z-order, texture cache keyed by `TextureId`, per-frame animation, camera state. The creature animation subsystem too — one plugin both frontends add, owning the simulation catch-up, the composite clips, the depth slot and the composite nodes; it draws frames, it never decides a creature's state. An overlay is the `Visibility` of a piece-group node, never a map rebuild | K1, formats, game rules, input bindings |
 | 03 | `kn-input` | `crates/frontend/bevy/input` | Input mechanisms only: keyboard pan direction, mouse drag delta, wheel accumulation into zoom steps | Camera types, UI, game rules |
 | 03 | `kn-ui` | `crates/frontend/bevy/ui` | Shared UI mechanics: the Feathers dark theme, mirroring a checkbox state back onto the widget, the pointer-over-UI test | Panels, widget state, rendering, input bindings, game rules |
 | 04 | `kn-game` | `crates/game/kn-game` | The series facade and the shared engine: `Game` (open a directory, list maps, build a `Scene`, decode textures, `check`), the Bevy-free model `Scene`/`Piece`/`TextureId`/`Animation`/`PieceGroup`; the shared movement engine (isometric fine grid, walkability, occupancy, A\* routes, repathing, per-tick walking, events, deterministic RNG); applying creature decisions with a failed-order cooldown | Bevy, window, GPU |
@@ -239,6 +239,15 @@ Arrows indicate logical layers, not exact Cargo dependencies.
   of the original files, with unknown bytes preserved rather than dropped.
 - **`kn-render`, `kn-input`, `kn-ui` are the Bevy-specific mechanisms**, reusable by any frontend;
   `kn-input` and `kn-ui` depend on nothing but `bevy`.
+- **A creature is animated by one mechanism, in `kn-render`.** A frontend gets the whole pipeline
+  by adding `CreatureAnimationPlugin` and asking for a map with `CreatureMotion::request`; the
+  plugin also declares the ordering between its systems and the scene clock, so a frontend cannot
+  mis-order it. What the frontend keeps is its own additions only — the viewer's `#id` labels and
+  diagnostics panel hang after the last system set of the subsystem. What a creature *is doing*
+  (its animation state, the state-4 special and its one-shot run into idle) is decided in the
+  Bevy-free game layer (`k1-game::creature_anim` behind `kn_game::Simulation`): the render layer
+  reads the stage and swaps frames, it never decides a state, and it owns no clock of its own —
+  ticks arrive on the frontend's scene `Clock`.
 - **`kn-fe-*` assemble the Bevy apps** and hold the frontend logic (what a click does, when a
   scene is rebuilt); they own no game rule and no format.
 - **`kn-player` / `kn-viewer` are executables**: CLI parsing and process exit codes only.
