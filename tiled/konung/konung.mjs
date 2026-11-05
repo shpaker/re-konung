@@ -174,8 +174,8 @@ function loadObjects(directory, graph) {
             const first = simple.frames[0];
             const entry = {
                 image: first.image, offset: first.offset, shadow: first.shadow, shadowOffset: first.shadowOffset,
-                bottom: first.offset[1] + first.image.height, animation: k1.objectAnimation(simple),
-                flames: simple.flames,
+                bottom: first.offset[1] + first.image.height, sortHeight: first.image.height,
+                animation: k1.objectAnimation(simple), flames: simple.flames,
             };
             const animation = entry.animation;
             if (animation) {
@@ -707,8 +707,16 @@ function addObjects(map, objects, shadowsTileset, objectsTileset, placed) {
         drawn.push({ object, frame, x, y });
     }
     // Ближе к зрителю то, что ниже на экране: порядок по нижнему краю, как в игре;
-    // при равенстве — по слоту в файле карты
-    const bottom = item => item.y + item.frame.bottom;
+    // при равенстве — по слоту в файле карты. Объекты с флагом 8 получают
+    // поправку height/4 (Slavik game.cpp:1391-1395).
+    const bottom = item => {
+        let b = item.y + item.frame.bottom;
+        if (item.object.flags & 8) {
+            b -= item.frame.sortHeight >> 2;
+            if (b < 0) b = 0;
+        }
+        return b;
+    };
     drawn.sort((a, b) => bottom(a) - bottom(b) || a.object.slot - b.object.slot);
 
     // Тени выводятся из объектов: при сохранении слой shadows не читается

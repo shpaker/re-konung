@@ -1045,7 +1045,10 @@ fn build_scene_depth(scene: &kn_game::Scene, cache: &TextureCache) -> DepthMap {
                     .and_then(|id| cache.get(id))
                     .map_or(0, |entry| entry.size.y as i32)
             });
-            (piece.y + height, order as f32 * Z_STEP)
+            (
+                piece.depth_bottom.unwrap_or(piece.y + height),
+                order as f32 * Z_STEP,
+            )
         })
         .collect();
     DepthMap::build(stacks.into_iter())
@@ -2102,6 +2105,7 @@ mod tests {
             animation: None,
             group,
             creature_id: None,
+            depth_bottom: None,
         };
         let scene = kn_game::Scene {
             pieces: vec![
