@@ -5,6 +5,7 @@
 ## Общее
 
 - [games.md](games.md) — игры серии, издания, какие части на одном движке.
+- [design.md](design.md) — product principles: the original is the source of the game, the modern CRPGs of Larian Studios are the reference for controls, the camera and the interfaces.
 - [sources.md](sources.md) — внешние работы и полезные ресурсы.
 - [disc-images.md](disc-images.md) — образы дисков MDS/MDF: как из них достать данные и музыку.
 - [agents.md](agents.md) — как устроена работа агентов: навыки, проверки, Tiled.
