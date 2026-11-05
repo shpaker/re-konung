@@ -396,29 +396,58 @@ mod tests {
         }
     }
 
+    /// The twelve windows whose length outlives their ramp condition hold a
+    /// plateau — a run of ticks on the recorded triple. The thirteenth, window
+    /// 9, is the exception (see `window_9_is_all_ramp_and_reaches_no_plateau`),
+    /// so together the two tests cover all thirteen windows. Each checked tick
+    /// is re-derived back to its window, so a tick that drifted into a
+    /// neighbouring window cannot pass.
     #[test]
-    fn the_plateau_of_every_window_is_the_recorded_triple() {
-        let plateau_start = [
-            0, 1825, 1830, 3595, 3600, 5501, 8161, 11821, 11921, 11910, 16196, 16301, 19021,
+    fn each_window_with_a_plateau_holds_the_recorded_triple() {
+        let checked: [(usize, u64, (f32, f32, f32)); 12] = [
+            (0, 0, (0.0, 0.0, 0.0)),
+            (1, 1825, (12.0, 6.0, 0.0)),
+            (2, 1830, (12.0, 6.0, 0.0)),
+            (3, 3595, (0.0, 0.0, 0.0)),
+            (4, 3600, (0.0, 0.0, 0.0)),
+            (5, 5501, (10.0, -20.0, -50.0)),
+            (6, 8161, (0.0, -50.0, -70.0)),
+            (7, 11821, (-60.0, -70.0, -70.0)),
+            (9, 11910, (-60.0, -70.0, -70.0)),
+            (10, 16196, (-60.0, -70.0, -70.0)),
+            (11, 16301, (-30.0, -60.0, -20.0)),
+            (12, 19021, (0.0, 0.0, 0.0)),
         ];
-        let expected = [
-            (0.0, 0.0, 0.0),
-            (12.0, 6.0, 0.0),
-            (12.0, 6.0, 0.0),
-            (0.0, 0.0, 0.0),
-            (0.0, 0.0, 0.0),
-            (10.0, -20.0, -50.0),
-            (0.0, -50.0, -70.0),
-            (-60.0, -70.0, -70.0),
-            (-60.0, -70.0, -70.0),
-            (-60.0, -70.0, -70.0),
-            (-60.0, -70.0, -70.0),
-            (-30.0, -60.0, -20.0),
-            (0.0, 0.0, 0.0),
-        ];
-        for (window, (&start, &want)) in plateau_start.iter().zip(&expected).enumerate() {
-            assert_eq!(ambient_value(start), want, "plateau of window {window}");
+        for (window, tick, want) in checked {
+            assert_eq!(
+                window_index(tick),
+                window,
+                "tick {tick} is not in window {window}"
+            );
+            assert_eq!(ambient_value(tick), want, "plateau of window {window}");
         }
+    }
+
+    /// Window 9 is thirty ticks long and its ramp condition is `t <= 40`, so
+    /// the whole window is the ramp: it leaves the previous plateau rising and
+    /// the window ends mid-climb — there is no run of ticks at a settled
+    /// triple. The flat `(-60, -70, -70)` belongs to window 10, not here, even
+    /// though the ramp's first two ticks carry the same value on their way out
+    /// of window 8.
+    #[test]
+    fn window_9_is_all_ramp_and_reaches_no_plateau() {
+        for tick in 11880..11910 {
+            let t = (tick - 11880) as f32;
+            assert_eq!(window_index(tick), 8, "at {tick}");
+            assert_eq!(
+                ambient_value(tick),
+                (-60.0, -70.0 + half(t), -70.0),
+                "at {tick}: still on the ramp"
+            );
+        }
+        // The climb peaks at the window's last tick fourteen units above the
+        // triple it left with, and turns back down there — it settles nowhere.
+        assert_eq!(ambient_value(11909), (-60.0, -56.0, -70.0));
     }
 
     #[test]
@@ -456,38 +485,18 @@ mod tests {
         assert_eq!(day_phase(19020), DayPhase::Day);
     }
 
-    /// The four-name trace is a consequence of the interval trace, never an
-    /// independent contract: Day → Dusk → Night → Dawn → Day follows from the
-    /// boundaries asserted in `the_cycle_reports_the_confirmed_interval_trace`,
-    /// and the original names no phase.
+    /// The phase word is a label over the two confirmed classifications, so it
+    /// may not cut the cycle anywhere the intervals do not: if two consecutive
+    /// ticks observe the same state, they must read the same word. Which words
+    /// the cycle spells is not asserted here — the original names no phase, and
+    /// `docs/k1/time-of-day.md` refuses the four-name trace as a property of the
+    /// game; `day_phase_labels_the_intervals` pins the words at a few cycle
+    /// points as the display rule they are.
     #[test]
-    fn the_phase_words_follow_the_intervals_exactly() {
-        let mut phases: Vec<DayPhase> = Vec::new();
-        let mut prev = day_phase(0);
-        phases.push(prev);
-        for t in 1..CYCLE_TICKS {
-            let p = day_phase(t);
-            if p != prev {
-                phases.push(p);
-                prev = p;
-            }
-        }
-        assert_eq!(
-            phases,
-            vec![
-                DayPhase::Day,
-                DayPhase::Dusk,
-                DayPhase::Night,
-                DayPhase::Dawn,
-                DayPhase::Day
-            ]
-        );
-
-        // And phase introduces no boundary of its own: whenever the observable
-        // state of two consecutive ticks agrees, so does the phase word. (The
-        // map from state to word is not injective — `(Dark, false)` is Dusk on
-        // one side of the ground window and Dawn on the other, which is the
-        // cycle position speaking, not the state.)
+    fn the_phase_word_adds_no_boundary_of_its_own() {
+        // (The map from state to word is not injective — `(Dark, false)` is
+        // Dusk on one side of the ground window and Dawn on the other, which
+        // is the cycle position speaking, not the state.)
         for tick in 1..CYCLE_TICKS {
             if ambient_kind(tick) == ambient_kind(tick - 1)
                 && ground_window(tick) == ground_window(tick - 1)
