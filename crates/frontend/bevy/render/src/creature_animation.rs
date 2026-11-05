@@ -236,7 +236,7 @@ impl CreatureMotion {
 
 /// What went wrong or is missing while decoding a map's creature animations.
 /// Structured, so each frontend words its own diagnostics panel.
-#[derive(Debug, Default)]
+#[derive(Resource, Debug, Default)]
 pub struct CreatureAnimReport {
     /// The map's animation data did not decode at all.
     pub error: Option<String>,
@@ -263,18 +263,38 @@ pub struct CreatureSpawns {
     pub origins: HashMap<usize, (i32, i32)>,
 }
 
-/// The creature-animation subsystem: resources, and the ordering its systems
-/// rely on so a frontend cannot get it wrong by listing them in another order.
+/// The creature-animation subsystem: its resources, its systems and the ordering
+/// they rely on, so a frontend gets the whole pipeline by adding one plugin and
+/// cannot break it by listing the systems in another order. What stays with the
+/// frontend is only its own additions — the viewer's id labels, its diagnostics —
+/// attached after [`CreatureSet::Nodes`].
+///
+/// The frontend must already provide [`GameResource`], [`TextureCache`],
+/// `Assets<Image>` and the scene [`Clock`] (from [`crate::AnimPlugin`]), which is
+/// what any window drawing this game has anyway; the subsystem adds no clock of
+/// its own.
 pub struct CreatureAnimationPlugin;
 
 impl Plugin for CreatureAnimationPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CreatureSim>()
             .init_resource::<CreatureAnim>()
+            .init_resource::<CreatureAnimReport>()
             .init_resource::<CreatureSpawns>()
             .init_resource::<CreatureDepth>()
             .init_resource::<CreatureMotion>()
             .init_resource::<CreatureNodesVisible>()
+            .add_systems(
+                Update,
+                (
+                    prepare_creatures.in_set(CreatureSet::Prepare),
+                    advance_creature_sim.in_set(CreatureSet::Advance),
+                    spawn_creature_nodes.in_set(CreatureSet::Spawn),
+                    sync_creature_animation.in_set(CreatureSet::Swap),
+                    sync_creature_nodes.in_set(CreatureSet::Nodes),
+                )
+                    .chain(),
+            )
             .configure_sets(
                 Update,
                 (
@@ -634,6 +654,7 @@ pub fn prepare_creatures(
     mut sim: ResMut<CreatureSim>,
     mut depth: ResMut<CreatureDepth>,
     mut anim: ResMut<CreatureAnim>,
+    mut report: ResMut<CreatureAnimReport>,
     mut spawns: ResMut<CreatureSpawns>,
     clock: Res<Clock>,
 ) {
@@ -642,6 +663,7 @@ pub fn prepare_creatures(
     }
     request.rebuild = false;
     let (Some(map_ref), Some(scene)) = (request.map, request.scene.take()) else {
+        *report = CreatureAnimReport::default();
         return;
     };
     if let Some(root) = sim.creature_root.take() {
@@ -656,7 +678,9 @@ pub fn prepare_creatures(
             sim.sim = Some(simulation);
         }
         Err(error) => {
-            sim.error = Some(format!("{error}"));
+            // The reason names the map, so a frontend's panel says what failed
+            // without knowing how the subsystem builds it (review #68).
+            sim.error = Some(format!("simulation for {map_ref:?}: {error}"));
             sim.initial_pixels = Vec::new();
             sim.sim = None;
         }
@@ -666,8 +690,9 @@ pub fn prepare_creatures(
     // and a later backward step from rewinding to absolute clock time (#68).
     sim.epoch = clock.ticks;
     sim.sim_ticks = 0;
-    let (built, _) = build_creature_anim(&game.0, map_ref, &mut cache, &mut images);
+    let (built, built_report) = build_creature_anim(&game.0, map_ref, &mut cache, &mut images);
     *anim = built;
+    *report = built_report;
     *spawns = build_creature_spawns(&scene, &cache, &anim, &sim.initial_pixels);
 }
 
@@ -691,7 +716,9 @@ pub fn reset_creature_sim(
             sim.sim = Some(simulation);
         }
         Err(error) => {
-            sim.error = Some(format!("{error}"));
+            // The reason names the map, so a frontend's panel says what failed
+            // without knowing how the subsystem builds it (review #68).
+            sim.error = Some(format!("simulation for {map_ref:?}: {error}"));
             sim.initial_pixels = Vec::new();
             sim.sim = None;
         }
@@ -933,18 +960,6 @@ fn apply_clip(animator: &mut Animator, clip: &Clip, origin: (i32, i32), at_tick:
     );
 }
 
-/// The creature nodes, excluding everything the shadow and sprite systems write.
-///
-/// `Without<CreatureSprite>` on top of `Without<CreatureShadow>`: the node writes
-/// the `Transform` the sprite query reads, and without the filter Bevy cannot
-/// prove an entity never carries both (B0001).
-type CreatureNodeQuery<'w, 's> = Query<
-    'w,
-    's,
-    (&'w mut CreatureNode, &'w mut Transform),
-    (Without<CreatureShadow>, Without<CreatureSprite>),
->;
-
 /// Puts each creature node at its live cell and depth.
 ///
 /// The node owns the creature's world position and z; its sprite children carry
@@ -954,11 +969,18 @@ type CreatureNodeQuery<'w, 's> = Query<
 /// the walk frames' own offsets (docs/k1/movement.md, "Step duration"), so sliding
 /// the node along with them would double the travel and snap the image back by a
 /// cell at every cycle wrap.
+#[allow(clippy::type_complexity)]
 pub fn sync_creature_nodes(
     sim: Res<CreatureSim>,
     depth: Res<CreatureDepth>,
     spawns: Res<CreatureSpawns>,
-    mut nodes: CreatureNodeQuery,
+    // `Without<CreatureSprite>` on top of `Without<CreatureShadow>`: the node
+    // writes the `Transform` the sprites query reads, and without the filter
+    // Bevy cannot prove an entity never carries both (B0001).
+    mut nodes: Query<
+        (&mut CreatureNode, &mut Transform),
+        (Without<CreatureShadow>, Without<CreatureSprite>),
+    >,
     // `CreatureShadow` marks only the shadow children, disjoint from the nodes.
     mut shadows: Query<(&CreatureShadow, &ChildOf, &mut Transform)>,
 ) {
@@ -992,6 +1014,136 @@ pub fn sync_creature_nodes(
         let target = slot.shadow - node.1.translation.z;
         if transform.translation.z != target {
             transform.translation.z = target;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use kn_game::{CreatureClips, CreatureLayer, LayerKey};
+
+    use super::*;
+    use crate::animation::Frame;
+
+    /// The walk cycle is opened at the tick the step started, not the tick it was
+    /// first observed: `elapsed - 1` ticks after the base frame, so the shown
+    /// frame runs with the step like the original's per-tick `Frame` counter.
+    #[test]
+    fn apply_clip_opens_the_frame_the_step_has_reached() {
+        let frames = (0..12)
+            .map(|_| Frame::new(Handle::default(), Vec2::new(8.0, 8.0), Vec2::ZERO))
+            .collect();
+        let clip = Clip {
+            sequence: Arc::new(Sequence::new(frames)),
+            base: 0,
+            corner: (0, 0),
+        };
+        let mut animator = Animator::new(Arc::clone(&clip.sequence), 0, 0);
+        let clock_ticks = 100u64;
+        let elapsed = 3u32;
+        apply_clip(
+            &mut animator,
+            &clip,
+            (0, 0),
+            clock_ticks.saturating_sub(u64::from(elapsed - 1)),
+        );
+        assert_eq!(
+            clip.sequence.frame_at(clock_ticks, animator.phase),
+            (elapsed - 1) as usize,
+            "three ticks into a step shows its third frame"
+        );
+    }
+
+    /// A swap re-anchors the animator on the clip's own corner reduced to the
+    /// creature's origin: leaving the resting anchor there displaced the image
+    /// by the corner difference — the periodic jump review #68 is about.
+    #[test]
+    fn apply_clip_reanchors_on_the_clips_own_corner() {
+        let rest_sequence = Arc::new(Sequence::new(Vec::new()));
+        let walk_sequence = Arc::new(Sequence::new(Vec::new()));
+        let mut animator = Animator::with_base(Arc::clone(&rest_sequence), 4, 40, 0);
+        let walk = Clip {
+            sequence: Arc::clone(&walk_sequence),
+            base: 0,
+            corner: (62, 26),
+        };
+
+        apply_clip(&mut animator, &walk, (4, 10), 9);
+
+        assert_eq!(
+            (animator.x, animator.y),
+            (58, 16),
+            "the anchor is the clip corner in the creature's local coordinates"
+        );
+        assert!(Arc::ptr_eq(&animator.sequence, &walk_sequence));
+        assert_eq!(animator.shown(), None, "the swap forces a sprite rewrite");
+        assert_eq!(
+            walk_sequence.frame_at(9, animator.phase),
+            walk.base,
+            "the clip opens on its base frame at the current tick"
+        );
+    }
+
+    /// A walk pose may list the same layers in another order than the resting
+    /// one (tracks are ordered by first appearance per pose), so a join by
+    /// position would bolt the gear's walk clip onto the body's piece and the
+    /// body's onto the gear's — equipment sliding across the sprite on every
+    /// step. The join must follow [`LayerKey`].
+    #[test]
+    fn walk_layers_join_to_their_part_not_their_position() {
+        let rest = [
+            data_layer(LayerKey::Body, (0, 0)),
+            data_layer(LayerKey::Gear { slot: 1 }, (4, 40)),
+        ];
+        // Direction 0 lists the layers reversed, direction 1 has no gear at all.
+        let reversed = CreatureClips {
+            layers: vec![
+                data_layer(LayerKey::Gear { slot: 1 }, (6, 44)),
+                data_layer(LayerKey::Body, (2, 1)),
+            ],
+            shadow: None,
+        };
+        let gearless = CreatureClips {
+            layers: vec![data_layer(LayerKey::Body, (3, 2))],
+            shadow: None,
+        };
+        let walk = [Some(reversed), Some(gearless), None];
+
+        let matched = pose_matched_layers(&rest, &walk);
+        assert_eq!(matched.len(), 2);
+        assert_eq!(
+            matched[0][0].map(|layer| layer.key),
+            Some(LayerKey::Body),
+            "the body's walk clip must be the body's, not the first listed"
+        );
+        assert_eq!(
+            matched[0][0].map(|layer| layer.corner),
+            Some((2, 1)),
+            "the body's clip keeps the walk pose's own corner"
+        );
+        assert_eq!(
+            matched[1][0].map(|layer| layer.key),
+            Some(LayerKey::Gear { slot: 1 }),
+            "the gear's walk clip must be the gear's, not the second listed"
+        );
+        assert!(
+            matched[1][1].is_none(),
+            "a pose without the part contributes no clip"
+        );
+        assert!(
+            matched[0][2].is_none(),
+            "a missing pose contributes nothing"
+        );
+    }
+
+    fn data_layer(key: LayerKey, corner: (i32, i32)) -> CreatureLayer {
+        CreatureLayer {
+            base: None,
+            animation: None,
+            corner,
+            key,
         }
     }
 }

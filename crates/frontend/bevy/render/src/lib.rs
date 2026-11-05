@@ -20,7 +20,7 @@ pub use camera::{
     PendingFrame, ZOOM_LEVELS, fitting_zoom, frame_scene, ortho_scale,
 };
 pub use creature_animation::{
-    Clip, CreatureAnim, CreatureAnimationPlugin, CreatureDepth, CreatureMotion,
+    Clip, CreatureAnim, CreatureAnimReport, CreatureAnimationPlugin, CreatureDepth, CreatureMotion,
     CreatureNodesVisible, CreatureSequences, CreatureSet, CreatureSim, CreatureSpawns,
     CreatureSprite, LayerSequences, StepKey, advance_creature_sim, build_creature_anim,
     build_creature_spawns, build_depth_map, prepare_creatures, reset_creature_sim, select_clip,
