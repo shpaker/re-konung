@@ -771,16 +771,33 @@ sets a creature's world position. `CreaturePiece` and `update_shadow_depth` are 
   rejection that is not `NoRoute` in `Simulation::order_failures` — the rules
   only aim at cells `Ground::is_free` vetted, so anything else is a bug or bad
   data; the headless report lists them as errors and fails the run
-  (`a_driven_run_walks_a_strayed_monster_home_without_order_failures`,
-  `an_unreachable_spawn_costs_throttled_searches_not_order_failures`).
+  (`a_driven_run_walks_a_villager_into_its_area_without_order_failures`,
+  `an_unreachable_area_costs_throttled_searches_not_order_failures`).
   `initial_pixels` deliberately covers the whole roster, unplaced creatures
   included: the original places a record wherever the file says, so such a
-  creature keeps rendering on its record cell while
-  `spawn_failures`/`order_failures` carry the refusal to the user
-  (`an_unplaced_creature_is_reported_and_keeps_its_record_cell_for_the_renderer`).
-- **Spawn refusals and the Characters overlay (P2 #9).** `Simulation::spawn_failures`
-  carries every creature the world refused to place with its `WorldError` reason, and the
-  headless report prints it instead of dropping it silently. Creature nodes and labels
+  creature keeps rendering on its load cell — the record cell for everyone
+  the load rule keeps in place, the jittered cell for a roaming member the
+  world then refused — while `spawn_failures`/`order_failures` carry the
+  refusal to the user
+  (`an_unplaced_creature_is_reported_and_keeps_its_load_cell_for_the_renderer`).
+- **Load refusals are data, errors decide the exit code (#82).** The façade
+  itself now runs the load rule — `Simulation::new` calls
+  `placement::place_roaming` before the world exists, so the `simulate` CLI
+  places roaming squads exactly as the harness test and the viewer do (the
+  CLI used to stand the file cells verbatim and refuse whole squads as
+  `ImpassableCell`). After that only records no rule can move remain
+  refused: `Simulation::spawn_failures` (reason per roster record, e.g. a
+  villager standing in blocked foot data) and `Simulation::load_trimmed`
+  (the `GroupSize` shrink) are facts about the shipped files, which the
+  headless report prints as data — the exact lists both editions give are
+  pinned by `apps/viewer/tests/original_simulate.rs` and written into
+  [creatures.md](k1/creatures.md), «Load-time refusals»; the run fails only
+  on `order_failures` or a build error. `Simulation::goal_reaches` counts
+  completed confirmed orders per creature (workplace and walk arrivals,
+  «Goal reach» there) from `Arrived` events, and the report carries the
+  counters; the same seed replays them, shipped tests included. The same
+  test file now verifies both editions where the shipped checks were
+  RUS-only before. Creature nodes and labels
   hang on their own `CreatureRoot`/`LabelRoot`, and both roots are born with the
   Characters overlay's visibility — a fixed `Visible` showed the creatures for the frame
   before `sync_creature_visibility` caught up after a map change

@@ -348,6 +348,69 @@ same seed places the same map twice (`original_rules.rs`). The re-placement
 also explains the file cells: they are the squad's park position, not where
 the game stands it (see the measurement under «The monster decision»).
 
+### Load-time refusals (confirmed 2026-11-05, #82)
+
+**Our measurement** — after the load rule above stands every roaming squad,
+`simulate --all` of the viewer still cannot put eleven records of `Game.0`
+into the world, identically in both editions: map 7 record 433 with
+`CellTaken` (a villager shares its cell with another record — the same fact
+the harness test pins as `Denied::SharedCell`), and records 507 (map 10),
+513 (17), 517 and 518 (25), 520 (30), 838 (33), 482 (37), 525 (42), 527
+(44), 529 (47) with `ImpassableCell` — the file stands each of them in
+blocked foot data. These are facts about the shipped files, not engine
+faults, and the diagnosis of #82 says which of the three suspects they are
+**not**: not a passage divergence (the façade's walkability is the confirmed
+foot rule alone, `FootMap(Tile).ID == 0`, as the harness test's `Foot` is),
+not an edition difference (the two lists are equal cell for cell), not a
+placement gap — the eleven carry no roaming group and `PlaceMob` never
+touches them (the load loop calls it under `!(kind & 0x80) && kind < 0x51`
+only, `game.cpp:647-656`; `game_character.cpp:328-361` is the placement the
+roaming members got instead). What the original does with a record whose
+cell cannot hold it is **unknown**: the clone keeps such a creature at its
+record cell in its own arrays and draws it there; the engine's own check we
+have not recovered. We keep them out of the movement world, report each with
+its reason, and give the renderer the record cell to draw them at — the
+viewer's report prints them as data, and only a failed order or a build
+failure moves the exit code (`apps/viewer/src/lib.rs`, the shipped test
+`tests/original_simulate.rs` holds the exact list for both editions). A trim
+(`GroupSize = j`, above) is reported the same way; the shipped data never
+produces one, so the shipped test treats a trim as a regression of the load
+rule, not as data.
+
+### Goal reach (confirmed 2026-11-05, #82)
+
+The report counts, per creature, how often a completed order landed the
+creature exactly on the cell the rules had commanded — counters of movement
+events (`Arrived` with the cell equal to the last accepted `MoveTo`
+target), never a position log. Only targets of the confirmed rules are
+counted, which are the villager's two (`docs/k1/creatures.md`, «The
+villager decision», [cf5a332](https://github.com/Marisa-Chan/Slavik/tree/cf5a3320dc93859e3dc51f37ee823fed30f399b6)
+`src/game/game_play.cpp:2288-2385`):
+
+- **workplace** — arrival exactly on the place cell of a job slot the
+  creature itself holds (the dynamic branch), or on a free neighbour of the
+  place cell of the job its class bits 3–5 name while that slot is occupied
+  (the static branch, `rules.rs::static_work`);
+- **walk** — arrival on a cell strictly inside the creature's spawn area,
+  the band `left + 1..=right - 1` the jobless half roll picks from
+  (`rules.rs::walk_target`).
+
+Anything else an order could aim at — a monster's return to the centre, say,
+or the neighbour a blocked goal fell back to — earns no counter until its
+rule is confirmed. **Our measurement**, `simulate --all` at seed 42 over
+5000 ticks, both editions and identical there: eleven village maps produce
+walk arrivals (11 to 20 per map — the jobless roll is the only order the
+shipped data ever completes on them); workplace arrivals are rare because
+every holder of a job slot stands on its place cell already at load — the
+single exception across all maps is map 1 record 369, a class 0x52 villager
+whose bits 3–5 name the merchant: its slot is occupied by record 357, who
+stands on the place cell (30, 115) himself, and the arrival is the free
+neighbour the order sent 369 to. `tests/original_simulate.rs` pins the map
+19 counters and this arrival. The counters ride the seeded generators only
+(placement draws on `Rng::new(seed)`, decisions on `Rng::new(seed ^
+0xDEAD_BEEF)`), so the same seed replays them identically — the shipped test
+asserts the equality of two full runs.
+
 ### The combat states (researched 2026-11-05, #71)
 
 Recovered over the read-only clone plus our own measurements. Every cite is a

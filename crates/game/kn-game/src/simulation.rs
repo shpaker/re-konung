@@ -4,7 +4,7 @@
 //! world → advance the engine. The viewer owns a [`Simulation`] per loaded
 //! map and calls [`Simulation::tick`] once per game tick (60 ms).
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use k1_data::game_state::GameState;
 use k1_data::map::{self, KonungMap};
@@ -16,7 +16,7 @@ use crate::movement::rng::Rng;
 use crate::movement::world::{Event, World, WorldError, WorldRules};
 use crate::step_durations::StepDurations;
 use k1_game::creatures::{self, Creature, Workplace};
-use k1_game::rules::{Context, Decision, Live};
+use k1_game::rules::{Context, Decision, Ground, Live, is_adjacent};
 
 use crate::rules;
 
@@ -43,6 +43,18 @@ impl MapPassage {
 impl Passage for MapPassage {
     fn is_walkable(&self, cell: Cell) -> bool {
         !self.blocked.contains(&(cell.column, cell.row))
+    }
+}
+
+/// The same foot data as the rules' standing test: walkable and inside the
+/// fine grid. Occupancy belongs to the world and to `place_roaming`'s own
+/// bookkeeping, so the terrain answer here is terrain only.
+impl Ground for MapPassage {
+    fn is_free(&self, cell: (i16, i16)) -> bool {
+        let (Ok(column), Ok(row)) = (u32::try_from(cell.0), u32::try_from(cell.1)) else {
+            return false;
+        };
+        column < FINE_WIDTH && row < FINE_HEIGHT && self.is_walkable(Cell::new(column, row))
     }
 }
 
@@ -86,8 +98,48 @@ pub struct Simulation {
     cooldown: rules::FailedOrderCooldown,
     /// Creatures the world refused to place (impassable or taken cell), with the
     /// roster `Creature.id` and the reason; never dropped silently, the caller
-    /// reports them.
+    /// reports them. After the load-time re-placement every refusal is a fact
+    /// of the record itself — the file stands it in blocked foot data or in a
+    /// cell another record already holds — so the consumer presents it as
+    /// data, not as an error (docs/k1/creatures.md, "Load-time refusals").
     spawn_failures: Vec<(usize, WorldError)>,
+    /// Load-time cell of each roster entry once the roaming squads have been
+    /// re-placed (indexed like the roster): what `world.add` was asked for,
+    /// and what the renderer stands refused creatures on.
+    load_cells: Vec<(i16, i16)>,
+    /// Record numbers the load placement trimmed for want of a free cell in
+    /// the squad's spawn area — the original shrinks `GroupSize` and leaves
+    /// them out of the game (`game.cpp:654-655`, docs/k1/creatures.md,
+    /// «Roaming squad placement on map load»). Confirmed behavior, so they
+    /// are reported as data, not as refusals.
+    load_trimmed: Vec<usize>,
+    /// Creature number → roster index, so an event names the record it
+    /// happened to. The world hands out numbers in `add` order, and only
+    /// successful adds push here.
+    by_creature: Vec<usize>,
+    /// Last accepted `MoveTo` target per creature number, kept until the
+    /// creature arrives there: the goal-reach counters compare an arrival
+    /// against the cell the order commanded.
+    tracked_goal: Vec<Option<Cell>>,
+    /// Completed orders whose final cell equalled the commanded target, by
+    /// roster record number, counted over the confirmed targets only.
+    goal_reaches: BTreeMap<usize, GoalReach>,
+}
+
+/// One creature's completed confirmed orders, counted from the movement
+/// events (docs/k1/creatures.md, "Goal reach"): an order counts when the
+/// creature arrived on the very cell the rules commanded, and only targets
+/// the rules were confirmed for are counted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GoalReach {
+    /// The stable roster record number.
+    pub id: usize,
+    /// Arrivals at the creature's workplace: the place cell of the village
+    /// slot it holds, or the free neighbour a static-work order joins the
+    /// place from.
+    pub workplace: usize,
+    /// Arrivals at a walk target strictly inside the creature's spawn area.
+    pub walk: usize,
 }
 
 impl Simulation {
@@ -103,17 +155,39 @@ impl Simulation {
         let passage = MapPassage::from_map(map);
         let grid = Grid::new(FINE_WIDTH, FINE_HEIGHT);
         let pace = StepDurations::new(step_table);
-        let mut world = World::new(grid, passage, pace, WorldRules::default(), seed);
 
         let roster = creatures::roster(state, map_number, hero);
+        // The confirmed load-time rule (docs/k1/creatures.md, «Roaming squad
+        // placement on map load»): the game never leaves a roaming squad at
+        // the cells its records carry — every member is re-placed near the
+        // spawn area's centre, and the squad is trimmed where the area runs
+        // out of free cells. Standing the file cells verbatim left whole
+        // squads refused as `ImpassableCell` (#82).
+        let placed = k1_game::placement::place_roaming(&roster, &passage, &mut Rng::new(seed));
+        let trimmed: HashSet<usize> = placed.dropped.iter().copied().collect();
+
+        let mut world = World::new(grid, passage, pace, WorldRules::default(), seed);
         let mut ids = Vec::with_capacity(roster.len());
         let mut spawn_failures = Vec::new();
-        for creature in &roster {
-            let column = u32::try_from(creature.cell.0.max(0)).unwrap_or(0);
-            let row = u32::try_from(creature.cell.1.max(0)).unwrap_or(0);
+        let mut load_trimmed = Vec::new();
+        let mut by_creature = Vec::new();
+        for (index, creature) in roster.iter().enumerate() {
+            if trimmed.contains(&index) {
+                // Out of the game, not refused: the original shrinks the
+                // squad and stops placing (`game.cpp:654-655`).
+                ids.push(None);
+                load_trimmed.push(creature.id);
+                continue;
+            }
+            let (x, y) = placed.cells[index];
+            let column = u32::try_from(x.max(0)).unwrap_or(0);
+            let row = u32::try_from(y.max(0)).unwrap_or(0);
             let cell = Cell::new(column, row);
             match world.add(cell) {
-                Ok(id) => ids.push(Some(id)),
+                Ok(id) => {
+                    by_creature.push(index);
+                    ids.push(Some(id));
+                }
                 Err(error) => {
                     ids.push(None);
                     spawn_failures.push((creature.id, error));
@@ -131,12 +205,21 @@ impl Simulation {
             order_failures: Vec::new(),
             cooldown: rules::FailedOrderCooldown::new(WorldRules::default().repath_cooldown_ticks),
             spawn_failures,
+            load_cells: placed.cells,
+            load_trimmed,
+            by_creature,
+            tracked_goal: Vec::new(),
+            goal_reaches: BTreeMap::new(),
         }
     }
 
     /// Creatures the world refused to place at spawn, each with the roster
-    /// `Creature.id` and the reason; a non-empty list is a data problem the
-    /// consumer should surface, not a silent gap in [`Simulation::states`].
+    /// `Creature.id` and the reason; never dropped silently. After the
+    /// load-time re-placement a refusal can only be the record's own fact —
+    /// the file stands it in blocked foot data or in a cell another record
+    /// holds — so the consumer reports it as data (docs/k1/creatures.md,
+    /// "Load-time refusals"), while the shipped tests hold the exact list
+    /// against the regressions a data fact can never excuse.
     pub fn spawn_failures(&self) -> &[(usize, WorldError)] {
         &self.spawn_failures
     }
@@ -147,6 +230,26 @@ impl Simulation {
     /// consumer like [`Self::spawn_failures`], not swallowed.
     pub fn order_failures(&self) -> &[(usize, WorldError)] {
         &self.order_failures
+    }
+
+    /// Record numbers the load-time re-placement trimmed: the squad's spawn
+    /// area held no free cell for them, so the original shrinks the squad and
+    /// leaves them out (`game.cpp:654-655`). Confirmed load behavior — data
+    /// to report, not a refusal to act on.
+    pub fn load_trimmed(&self) -> &[usize] {
+        &self.load_trimmed
+    }
+
+    /// Completed orders whose final cell equalled the commanded target, over
+    /// the confirmed targets only — workplace arrivals and walks inside the
+    /// spawn area. Deterministic under the same seed, and counters, not
+    /// logs: no per-tick position is kept.
+    pub fn goal_reaches(&self) -> Vec<GoalReach> {
+        self.goal_reaches
+            .values()
+            .copied()
+            .filter(|reach| reach.workplace + reach.walk > 0)
+            .collect()
     }
 
     pub fn tick_number(&self) -> u64 {
@@ -161,16 +264,20 @@ impl Simulation {
     ///
     /// The whole roster, including creatures the world refused to place: those
     /// never appear in [`Self::states`], so a renderer that shows them draws
-    /// them from this record cell — the original places a record wherever the
-    /// file says and refuses nobody. The refusal is [`Self::spawn_failures`],
-    /// which the consumer must report next to such a static creature.
+    /// them from this load-time cell — the record cell for everyone the load
+    /// keeps where the file stands it, the jittered cell near the spawn
+    /// centre for a roaming member the world then refused. The refusal is
+    /// [`Self::spawn_failures`], which the consumer must report next to such
+    /// a static creature; trimmed members ([`Self::load_trimmed`]) are out of
+    /// the game and stand nowhere, the original's `GroupSize` shrink.
     pub fn initial_pixels(&self) -> Vec<(usize, (i32, i32))> {
         self.roster
             .iter()
-            .map(|c| {
+            .zip(self.load_cells.iter())
+            .map(|(c, &(x, y))| {
                 let cell = Cell::new(
-                    u32::try_from(c.cell.0.max(0)).unwrap_or(0),
-                    u32::try_from(c.cell.1.max(0)).unwrap_or(0),
+                    u32::try_from(x.max(0)).unwrap_or(0),
+                    u32::try_from(y.max(0)).unwrap_or(0),
                 );
                 (c.id, cell.centre())
             })
@@ -216,7 +323,71 @@ impl Simulation {
                     _ => None,
                 },
             ));
-        self.world.tick_step()
+        // Remember what the world accepted, so an arrival can be judged
+        // against the cell the order commanded (the goal-reach counters).
+        for (command, outcome) in commands.iter().zip(applied.iter()) {
+            let (_, creature_id, decision) = *command;
+            if !matches!(outcome, rules::Applied::Accepted { .. }) {
+                continue;
+            }
+            let Decision::MoveTo(column, row) = decision else {
+                continue;
+            };
+            let index = creature_id.raw() as usize;
+            if self.tracked_goal.len() <= index {
+                self.tracked_goal.resize(index + 1, None);
+            }
+            self.tracked_goal[index] = Some(Cell::new(column, row));
+        }
+        let events = self.world.tick_step();
+        for event in &events {
+            if let Event::Arrived { creature, cell } = event {
+                self.record_goal_reach(*creature, *cell);
+            }
+        }
+        events
+    }
+
+    /// One arrival against the order the creature was sent on: when the
+    /// route spent itself on the very cell the rules commanded and that
+    /// target is a confirmed one, the creature's counter for it grows.
+    fn record_goal_reach(&mut self, creature: CreatureId, cell: Cell) {
+        let index = creature.raw() as usize;
+        if self
+            .tracked_goal
+            .get(index)
+            .is_none_or(|tracked| *tracked != Some(cell))
+        {
+            return;
+        }
+        self.tracked_goal[index] = None;
+        let Some(&roster_index) = self.by_creature.get(index) else {
+            return;
+        };
+        let creature = &self.roster[roster_index];
+        let (Ok(column), Ok(row)) = (i16::try_from(cell.column), i16::try_from(cell.row)) else {
+            return;
+        };
+        let target = (column, row);
+        if stands_on_workplace(creature, &self.jobs, target) {
+            self.goal_reaches
+                .entry(creature.id)
+                .or_insert(GoalReach {
+                    id: creature.id,
+                    workplace: 0,
+                    walk: 0,
+                })
+                .workplace += 1;
+        } else if inside_spawn_interior(creature, target) {
+            self.goal_reaches
+                .entry(creature.id)
+                .or_insert(GoalReach {
+                    id: creature.id,
+                    workplace: 0,
+                    walk: 0,
+                })
+                .walk += 1;
+        }
     }
 
     pub fn states(&self) -> Vec<CreatureState> {
@@ -265,6 +436,47 @@ impl Simulation {
             })
             .collect()
     }
+}
+
+// ─── Goal reach: the confirmed targets a completed order can hit ────────────
+//
+// The rules issue a bare `MoveTo`, so the counter re-derives the target's
+// kind from the same inputs the decisions had: the workplace branches of
+// `k1_game::rules::villager_decision` and the pick band of
+// `k1_game::rules::walk_target`. Anything else an order aimed at — a cell
+// no confirmed rule sends to — earns no counter.
+
+/// Whether `cell` is a workplace target of `creature`: the place cell of the
+/// slot the creature itself holds (the dynamic workplace — its arrival stands
+/// exactly on the place), or a neighbour of the place of the job its class
+/// bits 3–5 name while that slot is occupied (the static-work order joins
+/// the place from a free neighbour, `rules.rs::static_work`).
+fn stands_on_workplace(creature: &Creature, jobs: &[Workplace], cell: (i16, i16)) -> bool {
+    if creature.workplace.is_some_and(|place| place.cell == cell) {
+        return true;
+    }
+    if jobs
+        .iter()
+        .any(|place| usize::try_from(place.character) == Ok(creature.id) && place.cell == cell)
+    {
+        return true;
+    }
+    let job = usize::from((creature.class_id >> 3) & 7);
+    job != 0
+        && jobs
+            .get(job)
+            .is_some_and(|place| place.character != 0 && is_adjacent(cell, place.cell))
+}
+
+/// Whether `cell` lies strictly inside the creature's spawn area — the band
+/// a walk order picks from (`k1_game::rules::walk_target` draws
+/// `left + 1 ..= right - 1` on both axes); a degenerate area holds none.
+fn inside_spawn_interior(creature: &Creature, cell: (i16, i16)) -> bool {
+    let spawn = &creature.spawn;
+    spawn.left.saturating_add(1) <= cell.0
+        && cell.0 <= spawn.right.saturating_sub(1)
+        && spawn.top.saturating_add(1) <= cell.1
+        && cell.1 <= spawn.bottom.saturating_sub(1)
 }
 
 #[cfg(test)]
@@ -348,24 +560,27 @@ mod tests {
         }
     }
 
-    /// One roaming squad of `cells`, on [`MAP_NUMBER`], inside `spawn`: the
-    /// minimum `Game.N` the roster reads (`Group` kind in the roaming range,
-    /// `size` consecutive character records).
-    fn roaming_state(spawn: Rect, cells: &[(i16, i16)]) -> GameState {
+    /// One squad of one `Group` on [`MAP_NUMBER`] with `record_cells` as the
+    /// characters' file cells: the minimum `Game.N` the roster reads (kind in
+    /// the range, `size` consecutive character records). The load rule
+    /// re-places roaming members near the spawn centre; everyone else keeps
+    /// the cell the record carries.
+    fn squad_state(kind: u8, spawn: Rect, record_cells: &[(i16, i16)]) -> GameState {
         let group = Group {
             slot: 1,
             first_character: FIRST_RECORD as i16,
-            size: cells.len() as u8,
-            max_size: cells.len() as u8,
-            growth_limit: cells.len() as u8,
-            kind: k1_game::rules::group::FIRST_ROAMING,
+            size: record_cells.len() as u8,
+            max_size: record_cells.len() as u8,
+            growth_limit: record_cells.len() as u8,
+            kind,
             map_id: MAP_NUMBER as u8,
             spawn,
             ..Group::default()
         };
-        let mut characters: Vec<Option<Character>> =
-            (0..FIRST_RECORD + cells.len()).map(|_| None).collect();
-        for (offset, &(x, y)) in cells.iter().enumerate() {
+        let mut characters: Vec<Option<Character>> = (0..FIRST_RECORD + record_cells.len())
+            .map(|_| None)
+            .collect();
+        for (offset, &(x, y)) in record_cells.iter().enumerate() {
             characters[FIRST_RECORD + offset] = Some(Character {
                 slot: FIRST_RECORD + offset,
                 x,
@@ -385,16 +600,55 @@ mod tests {
         }
     }
 
-    fn simulation(map: &KonungMap, state: &GameState, creatures: usize) -> Simulation {
+    /// One roaming squad whose records stand at (0, 0) — where the shipped
+    /// files put roaming members before the load scatters them.
+    fn roaming_state(spawn: Rect, count: usize) -> GameState {
+        squad_state(
+            k1_game::rules::group::FIRST_ROAMING,
+            spawn,
+            &vec![(0, 0); count],
+        )
+    }
+
+    /// One village squad: kind 0x80, so the villager rules decide for it;
+    /// the records stand at `cells` and the load keeps them there.
+    fn village_state(spawn: Rect, cells: &[(i16, i16)]) -> GameState {
+        squad_state(k1_game::rules::group::VILLAGE_FIRST, spawn, cells)
+    }
+
+    /// One jobless villager at (12, 12) whose village area is (4, 4)-(8, 8):
+    /// the half roll sends it walking into the area, away from its cell.
+    fn villager_outside_their_area() -> GameState {
+        village_state(
+            Rect {
+                left: 4,
+                top: 4,
+                right: 8,
+                bottom: 8,
+            },
+            &[(12, 12)],
+        )
+    }
+
+    fn simulation_with(
+        map: &KonungMap,
+        state: &GameState,
+        creatures: usize,
+        jobs: Vec<Workplace>,
+    ) -> Simulation {
         Simulation::new(
             map,
             state,
             MAP_NUMBER,
             None,
             vec![[2; DIRECTION_COUNT]; creatures],
-            Vec::new(),
+            jobs,
             7,
         )
+    }
+
+    fn simulation(map: &KonungMap, state: &GameState, creatures: usize) -> Simulation {
+        simulation_with(map, state, creatures, Vec::new())
     }
 
     fn inside(spawn: &Rect, cell: (u32, u32)) -> bool {
@@ -402,26 +656,29 @@ mod tests {
         spawn.left <= column && column <= spawn.right && spawn.top <= row && row <= spawn.bottom
     }
 
-    /// The full loop over production data structures: a strayed monster is seen
-    /// outside its area, the return order reaches the world, the creature
-    /// really walks it — and nothing on the way is rejected for a reason
+    /// The full loop over production data structures: the rules decide from
+    /// the world's live picture, the orders reach the world, the creature
+    /// really walks them — and nothing on the way is rejected for a reason
     /// other than "no route". The rules only aim at cells `Ground::is_free`
-    /// has vetted, so any other rejection is a bug; this is the guard.
+    /// has vetted, so any other rejection is a bug; this is the guard. The
+    /// driver is a jobless villager walking into its village area: after the
+    /// load rule puts every roaming member inside its own spawn area, the
+    /// monster return can no longer be triggered from a fresh load.
     #[test]
-    fn a_driven_run_walks_a_strayed_monster_home_without_order_failures() {
+    fn a_driven_run_walks_a_villager_into_its_area_without_order_failures() {
         let map = open_map(|_, _| false);
-        let spawn = Rect {
+        let area = Rect {
             left: 4,
             top: 4,
             right: 8,
             bottom: 8,
         };
-        let state = roaming_state(spawn, &[(12, 12)]);
+        let state = villager_outside_their_area();
         let mut sim = simulation(&map, &state, 1);
 
         let mut walked = false;
-        let mut went_home = false;
-        for _ in 0..300 {
+        let mut went_inside = false;
+        for _ in 0..600 {
             let events = sim.tick();
             walked |= events
                 .iter()
@@ -431,34 +688,35 @@ mod tests {
                 "{:?}",
                 sim.order_failures()
             );
-            if inside(&spawn, sim.states()[0].cell) {
-                went_home = true;
+            if inside(&area, sim.states()[0].cell) {
+                went_inside = true;
                 break;
             }
         }
-        assert!(walked, "the order must produce real steps");
-        assert!(went_home, "the monster must reach its spawn area");
+        assert!(walked, "the walk order must produce real steps");
+        assert!(went_inside, "the villager must reach its village area");
     }
 
-    /// An unreachable spawn area is the rules' normal verdict, not a failure:
+    /// An unreachable village area is the rules' normal verdict, not a failure:
     /// the re-deciding loop may aim at it every tick, so `NoRoute` must not
     /// pollute [`Simulation::order_failures`], and the connected
     /// `FailedOrderCooldown` must keep the searches far below one per tick.
+    /// A villager stands outside a walled area the walk rule keeps picking.
     #[test]
-    fn an_unreachable_spawn_costs_throttled_searches_not_order_failures() {
+    fn an_unreachable_area_costs_throttled_searches_not_order_failures() {
         const TICKS: usize = 130;
         let ring = |column: u32, row: u32| {
             (3..=9).contains(&column) && (row == 3 || row == 9)
                 || (3..=9).contains(&row) && (column == 3 || column == 9)
         };
         let map = open_map(ring);
-        let spawn = Rect {
+        let area = Rect {
             left: 4,
             top: 4,
             right: 8,
             bottom: 8,
         };
-        let state = roaming_state(spawn, &[(13, 13)]);
+        let state = village_state(area, &[(13, 13)]);
         let mut sim = simulation(&map, &state, 1);
 
         let mut no_route = 0;
@@ -476,7 +734,7 @@ mod tests {
         );
         assert!(
             no_route >= 1,
-            "the return order must have been issued and searched"
+            "the walk order must have been issued and searched"
         );
         assert!(
             no_route * 4 <= TICKS,
@@ -493,18 +751,21 @@ mod tests {
     /// A creature the world refuses to place is never dropped silently and
     /// never invented back into the live picture: it is reported once in
     /// `spawn_failures`, absent from `states`, and still offered in
-    /// `initial_pixels` so the renderer can stand it on its record cell —
-    /// the documented fallback, matching the original, which places everyone.
+    /// `initial_pixels` at its load-time cell — the documented fallback, the
+    /// record cell for a creature the load keeps where the file stands it.
     #[test]
-    fn an_unplaced_creature_is_reported_and_keeps_its_record_cell_for_the_renderer() {
+    fn an_unplaced_creature_is_reported_and_keeps_its_load_cell_for_the_renderer() {
         let map = open_map(|column, row| column == 20 && row == 20);
-        let spawn = Rect {
+        let area = Rect {
             left: 24,
             top: 24,
             right: 26,
             bottom: 26,
         };
-        let state = roaming_state(spawn, &[(20, 20), (25, 25)]);
+        // A villager the file stands in a wall: only roaming squads are
+        // re-placed, so the load keeps it in the wall and the world refuses
+        // it visibly.
+        let state = village_state(area, &[(20, 20), (25, 25)]);
         let mut sim = simulation(&map, &state, 2);
 
         assert_eq!(
@@ -534,7 +795,159 @@ mod tests {
                 (2, Cell::new(20, 20).centre()),
                 (3, Cell::new(25, 25).centre()),
             ],
-            "the renderer still gets the refused creature at its record cell"
+            "the renderer still gets the refused creature at its load cell"
         );
+    }
+
+    /// The confirmed load rule over the façade: a roaming squad whose
+    /// records all stand at (0, 0) — blocked foot data there, as in every
+    /// shipped file — is re-placed inside its spawn area, nobody refused,
+    /// nobody trimmed (#82: standing the file cells verbatim refused whole
+    /// squads as `ImpassableCell`).
+    #[test]
+    fn a_roaming_squad_is_re_placed_inside_its_area_on_load() {
+        let map = open_map(|column, row| column == 0 && row == 0);
+        let spawn = Rect {
+            left: 10,
+            top: 10,
+            right: 14,
+            bottom: 14,
+        };
+        let state = roaming_state(spawn, 3);
+        let sim = simulation(&map, &state, 3);
+
+        assert!(
+            sim.spawn_failures().is_empty(),
+            "the (0, 0) file cells are not where the squad stands: {:?}",
+            sim.spawn_failures()
+        );
+        assert!(sim.load_trimmed().is_empty());
+        let cells: Vec<_> = sim.states().iter().map(|state| state.cell).collect();
+        let distinct: HashSet<_> = cells.iter().copied().collect();
+        assert_eq!(distinct.len(), 3, "the squad shares cells: {cells:?}");
+        for cell in &cells {
+            assert!(
+                spawn.left < (cell.0 as i16)
+                    && (cell.0 as i16) < spawn.right
+                    && spawn.top < (cell.1 as i16)
+                    && (cell.1 as i16) < spawn.bottom,
+                "{cell:?} left the interior of the spawn area"
+            );
+        }
+    }
+
+    /// The load rule trims a squad whose area runs out of free cells — the
+    /// original's `GroupSize` shrink — instead of refusing the members the
+    /// world could not take: the trimmed are reported by
+    /// [`Simulation::load_trimmed`], never as `spawn_failures`.
+    #[test]
+    fn a_squad_without_room_in_its_area_is_trimmed_not_refused() {
+        // A one-cell area: the degenerate rectangle places on its centre and
+        // every later member finds no free cell in its hundred tries.
+        let map = open_map(|_, _| false);
+        let spot = Rect {
+            left: 12,
+            top: 12,
+            right: 12,
+            bottom: 12,
+        };
+        let state = roaming_state(spot, 3);
+        let sim = simulation(&map, &state, 3);
+
+        assert!(
+            sim.spawn_failures().is_empty(),
+            "a trimmed squad is data, not a refusal: {:?}",
+            sim.spawn_failures()
+        );
+        assert_eq!(
+            sim.load_trimmed(),
+            &[3, 4],
+            "the last two members are out of the game, the first stands on the spot"
+        );
+        assert_eq!(
+            sim.states().iter().map(|s| s.cell).collect::<Vec<_>>(),
+            vec![(12, 12)]
+        );
+    }
+
+    /// The same seed loads and runs the same way: placement draws and
+    /// decisions ride the seeded generators only.
+    #[test]
+    fn the_same_seed_loads_and_runs_the_same_way() {
+        let map = open_map(|_, _| false);
+        let spawn = Rect {
+            left: 10,
+            top: 10,
+            right: 20,
+            bottom: 20,
+        };
+        let state = roaming_state(spawn, 5);
+        let mut first = simulation(&map, &state, 5);
+        let mut second = simulation(&map, &state, 5);
+        assert_eq!(first.initial_pixels(), second.initial_pixels());
+        for _ in 0..50 {
+            let a = first.tick();
+            let b = second.tick();
+            assert_eq!(a, b);
+        }
+        assert_eq!(first.goal_reaches(), second.goal_reaches());
+    }
+
+    /// The goal-reach counters count completed confirmed orders only: the
+    /// villager sent onto the village slot it holds arrives on the place
+    /// cell (workplace), the jobless one lands on walk cells inside the
+    /// spawn area (walk). The counters are deterministic under the seed.
+    #[test]
+    fn goal_reaches_count_arrivals_at_commanded_confirmed_targets() {
+        let map = open_map(|_, _| false);
+        let area = Rect {
+            left: 4,
+            top: 4,
+            right: 12,
+            bottom: 12,
+        };
+        // Two villagers far from the village: record 2 holds the only slot,
+        // record 3 holds nothing and walks on the half roll.
+        let state = village_state(area, &[(30, 30), (31, 30)]);
+        let jobs = vec![Workplace {
+            cell: (5, 5),
+            direction: 0,
+            role: "elder",
+            character: 2,
+        }];
+        let mut sim = simulation_with(&map, &state, 2, jobs.clone());
+        for _ in 0..600 {
+            sim.tick();
+        }
+        let reaches = sim.goal_reaches();
+        let holder = reaches
+            .iter()
+            .find(|reach| reach.id == 2)
+            .expect("the holder walks onto its place cell");
+        assert!(
+            holder.workplace >= 1,
+            "the holder must arrive on its place cell at least once: {reaches:?}"
+        );
+        let jobless = reaches
+            .iter()
+            .find(|reach| reach.id == 3)
+            .expect("the jobless villager walks into the area");
+        assert!(
+            jobless.walk >= 1,
+            "the jobless rolls must land walks inside the area at least once: \
+             {reaches:?}"
+        );
+        // A confirmed target of one kind is not counted under the other.
+        assert_eq!(
+            jobless.workplace, 0,
+            "the jobless villager holds no slot to arrive at"
+        );
+
+        // Determinism: the same seed replays the same counters.
+        let mut replay = simulation_with(&map, &state, 2, jobs);
+        for _ in 0..600 {
+            replay.tick();
+        }
+        assert_eq!(replay.goal_reaches(), reaches);
     }
 }

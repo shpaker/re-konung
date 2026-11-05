@@ -96,15 +96,15 @@ pub fn run_simulate(
     }
 }
 
-/// Прогон симуляции по картам: `map` — одна, `all` — все.
-pub fn simulate(
+/// Прогон симуляции по картам: `map` — одна карта, `all` — все. Отчёты
+/// возвращаются целиком — печатает и решает про код возврата `simulate`.
+pub fn simulate_reports(
     cli: &Cli,
     map: Option<u32>,
     all: bool,
     ticks: u64,
     seed: u64,
-    format: Format,
-) -> Result<ExitCode, ViewerError> {
+) -> Result<Vec<SimReport>, ViewerError> {
     let game = Game::open(&cli.game_dir)?;
     let source: MapSource = cli.source.into();
     let available = game.maps()?;
@@ -137,13 +137,19 @@ pub fn simulate(
         match game.simulation(map_ref, seed) {
             Ok(mut sim) => {
                 let creatures = sim.creature_count();
-                // Creatures the world refused to place are a data problem, not a
-                // silent gap: report each with the reason instead of dropping it.
-                let spawn_errors: Vec<String> = sim
+                // The world refused to place these at load: the records
+                // carry cells no creature can stand on (docs/k1/creatures.md,
+                // «Load-time refusals»). That is a fact about the file, so
+                // the report presents it — it does not fail the run.
+                let unplaced: Vec<String> = sim
                     .spawn_failures()
                     .iter()
                     .map(|(id, error)| format!("roster {id}: {error:?}"))
                     .collect();
+                // Squad members the load rule trimmed for want of room in
+                // the spawn area — the original's `GroupSize` shrink, also
+                // data, never a refusal.
+                let trimmed = sim.load_trimmed().to_vec();
                 let mut steps = 0usize;
                 let mut route_sets = 0usize;
                 // Distinct creatures that started at least one step over the whole
@@ -164,6 +170,17 @@ pub fn simulate(
                         }
                     }
                 }
+                // The counters of the finished run: arrivals are counted by
+                // the façade from the movement events it saw while ticking.
+                let goal_reaches = sim
+                    .goal_reaches()
+                    .into_iter()
+                    .map(|reach| GoalReachCount {
+                        id: reach.id,
+                        workplace: reach.workplace,
+                        walk: reach.walk,
+                    })
+                    .collect();
                 // Orders rejected for a reason other than "no route" are bugs or
                 // bad data, never a verdict to fold into a success count.
                 let errors: Vec<String> = sim
@@ -182,7 +199,9 @@ pub fn simulate(
                     steps,
                     route_sets,
                     tick: ticks,
-                    spawn_errors,
+                    unplaced,
+                    trimmed,
+                    goal_reaches,
                     errors,
                 });
             }
@@ -196,23 +215,49 @@ pub fn simulate(
                     steps: 0,
                     route_sets: 0,
                     tick: ticks,
-                    spawn_errors: Vec::new(),
+                    unplaced: Vec::new(),
+                    trimmed: Vec::new(),
+                    goal_reaches: Vec::new(),
                     errors: vec![e.to_string()],
                 });
             }
         }
     }
+    Ok(reports)
+}
 
+/// Прогон симуляции по картам: `map` — одна, `all` — все.
+pub fn simulate(
+    cli: &Cli,
+    map: Option<u32>,
+    all: bool,
+    ticks: u64,
+    seed: u64,
+    format: Format,
+) -> Result<ExitCode, ViewerError> {
+    let reports = simulate_reports(cli, map, all, ticks, seed)?;
     match format {
         Format::Text => {
             for r in &reports {
-                let spawns = if r.spawn_errors.is_empty() {
+                let spawns = if r.unplaced.is_empty() {
                     String::new()
                 } else {
-                    format!(" · {} not spawned", r.spawn_errors.len())
+                    format!(" · {} not spawned", r.unplaced.len())
+                };
+                let trimmed = if r.trimmed.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {} trimmed", r.trimmed.len())
+                };
+                let workplace: usize = r.goal_reaches.iter().map(|g| g.workplace).sum();
+                let walk: usize = r.goal_reaches.iter().map(|g| g.walk).sum();
+                let reaches = if workplace + walk == 0 {
+                    String::new()
+                } else {
+                    format!(" · {workplace} workplace, {walk} walk arrivals")
                 };
                 println!(
-                    "{} {:>2}: {} creatures, {} ever moved, {} moving, {} steps, {} routes, {} ticks, {} errors{spawns}",
+                    "{} {:>2}: {} creatures, {} ever moved, {} moving, {} steps, {} routes, {} ticks, {} errors{spawns}{trimmed}{reaches}",
                     match r.source {
                         MapSource::Game => "game    ",
                         MapSource::Tutorial => "tutorial",
@@ -229,8 +274,17 @@ pub fn simulate(
                 for e in &r.errors {
                     println!("  - {e}");
                 }
-                for e in &r.spawn_errors {
+                for e in &r.unplaced {
                     println!("  ! {e}");
+                }
+                for id in &r.trimmed {
+                    println!("  ~ roster {id}: trimmed, no room in its area");
+                }
+                for g in &r.goal_reaches {
+                    println!(
+                        "  → roster {}: {} workplace, {} walk arrivals",
+                        g.id, g.workplace, g.walk
+                    );
                 }
             }
         }
@@ -244,33 +298,47 @@ pub fn simulate(
     })
 }
 
-/// A run is only successful if no map hit an error — build failure or rejected
-/// order — and none left creatures unplaced: both are data problems or bugs to
-/// act on, not warnings to ignore (review #68). Nothing here speaks for the
+/// A run fails only on a real error — a build failure or an order rejected
+/// for a reason other than "no route". What the load made of the records is
+/// not an error: refusals and trims are facts about the shipped files, and
+/// the report presents them as data (issue #82). Nothing here speaks for the
 /// picture: the check runs no renderer, so render correctness is judged only
 /// by looking at the viewer or the Bevy continuity test.
 fn reports_ok(reports: &[SimReport]) -> bool {
-    reports
-        .iter()
-        .all(|report| report.errors.is_empty() && report.spawn_errors.is_empty())
+    reports.iter().all(|report| report.errors.is_empty())
 }
 
-#[derive(Clone, serde::Serialize)]
-struct SimReport {
-    source: MapSource,
-    number: u32,
-    creatures: usize,
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct SimReport {
+    pub source: MapSource,
+    pub number: u32,
+    pub creatures: usize,
     /// Creatures that started at least one step during the whole run.
-    ever_moved: usize,
+    pub ever_moved: usize,
     /// Creatures mid-step at the last tick — a snapshot, not the run's coverage.
-    movers: usize,
-    steps: usize,
-    route_sets: usize,
-    tick: u64,
-    /// Creatures the world refused to place and why, e.g. `"roster 7: ImpassableCell"`.
-    spawn_errors: Vec<String>,
+    pub movers: usize,
+    pub steps: usize,
+    pub route_sets: usize,
+    pub tick: u64,
+    /// Creatures the world refused to place at load and why, e.g.
+    /// `"roster 7: ImpassableCell"` — a fact about the records, not a failure.
+    pub unplaced: Vec<String>,
+    /// Roster numbers of squad members the load rule trimmed for want of
+    /// room in the spawn area — the original's `GroupSize` shrink.
+    pub trimmed: Vec<usize>,
+    /// Completed confirmed orders per creature (docs/k1/creatures.md,
+    /// "Goal reach"): arrivals on the workplace and on walk targets.
+    pub goal_reaches: Vec<GoalReachCount>,
     /// Build failures and orders rejected for a reason other than "no route".
-    errors: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+/// One creature's goal-reach counters, as the report carries them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct GoalReachCount {
+    pub id: usize,
+    pub workplace: usize,
+    pub walk: usize,
 }
 
 /// Отчёт по картам источника: `map` — одна карта, `all` — все.
@@ -338,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn unplaced_creatures_fail_a_simulate_run() {
+    fn load_refusals_are_data_and_only_errors_fail_a_run() {
         let clean = SimReport {
             source: MapSource::Game,
             number: 1,
@@ -348,18 +416,28 @@ mod tests {
             steps: 5,
             route_sets: 1,
             tick: 10,
-            spawn_errors: Vec::new(),
+            unplaced: Vec::new(),
+            trimmed: Vec::new(),
+            goal_reaches: Vec::new(),
             errors: Vec::new(),
         };
         assert!(reports_ok(std::slice::from_ref(&clean)));
-        let unplaced = SimReport {
-            spawn_errors: vec!["roster 7: ImpassableCell".to_owned()],
+        // What the load made of the records is presented, not punished:
+        // the shipped files carry cells no creature can stand on and
+        // squads whose area holds no room for every member (issue #82).
+        let refused = SimReport {
+            unplaced: vec!["roster 7: ImpassableCell".to_owned()],
             ..clean.clone()
         };
         assert!(
-            !reports_ok(&[unplaced]),
-            "an unplaced roster is a failure, not a warning"
+            reports_ok(&[refused]),
+            "a load-time refusal is a fact about the file, not a failure"
         );
+        let trimmed = SimReport {
+            trimmed: vec![5],
+            ..clean.clone()
+        };
+        assert!(reports_ok(&[trimmed]), "a trimmed squad is data too");
         let errored = SimReport {
             errors: vec!["boom".to_owned()],
             ..clean
