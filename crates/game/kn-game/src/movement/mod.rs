@@ -38,6 +38,11 @@ pub mod world;
 /// The number is also the order creatures are visited in on a tick, so a
 /// dispute over a cell is settled by the lower number, deterministically
 /// (docs/rust.md, "Decision: who yields a cell").
+///
+/// A number names one creature for the world's whole life: [`world::World::remove`]
+/// does not hand it to a later one, so an id kept outside the engine cannot end
+/// up ordering a stranger (docs/rust.md, "Decision: taking a creature out keeps
+/// the numbers").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CreatureId(u32);
 

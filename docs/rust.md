@@ -182,6 +182,10 @@ placed as well: `World::add` refuses a cell outside the grid (`OutsideGrid`), a
 taken one (`CellTaken`) and an impassable one (`ImpassableCell`) — a creature
 inside a wall would break the invariant the world checks on every tick.
 
+`World::remove` puts its own event into no channel: the outer world ordered the
+creature out and knows why — the engine only releases cells and stops walking,
+see "Decision: taking a creature out keeps the numbers".
+
 ### Decision: who yields a cell
 
 Starting a step, a creature reserves its destination cell and holds the
@@ -319,6 +323,33 @@ worst case: a taken goal in a dead end will not force a sweep of the whole map,
 and a goal with no free cell even within the radius gives no route rather than a
 panic. A creature already standing in a free cell beside a taken goal gets an
 empty route: it has nowhere to go, and the order counts as done.
+
+### Decision: taking a creature out keeps the numbers
+
+`World::remove` takes a creature out: every cell it stood on or reserved with a
+step is released, its movement state is dropped, and an order to it — or a
+second removal — answers `UnknownCreature`. Two questions the ticket left open
+got an answer each:
+
+- **a number is never reused**. A slot keeps its creature's number for the
+  world's life: a new creature takes the next number, not the freed one. The
+  outer world keeps ids past the engine — #75 lets a corpse remember the
+  creature that lay in it — and a recycled number would make one id name two
+  creatures in one save; a stale handle to a removed creature answers
+  `UnknownCreature` instead of ordering a stranger. The cost is a number that
+  only grows: a `u32` runs out after four billion placements in one world, and
+  a world lives as long as one map does;
+- **`remove` stops the creature itself**: a step that had started is ended
+  where it stands and its reservation is released with the standing cell, so a
+  following creature enters the freed cell on the next order. Requiring a
+  `stop` first would make death forget a reservation, and a forgotten
+  reservation is a cell nobody can enter again.
+
+Removal emits no `Event` — the outer world is the one that knows a creature
+died — and the creatures that stay are visited in the same number order as
+before, so the same seed and the same removal order replay the same trace
+(`removals_replay_identically_under_the_same_seed`). No despawn rule of the
+original is confirmed here: the engine's removal is our API.
 
 ### Decision: the seed breaks ties
 
