@@ -33,7 +33,7 @@ pub use k1_data::characters::LayerKey;
 pub use k1_data::objects_res::TICK_MS;
 pub use k1_game::scene::{PieceGroup, PoseKind};
 pub use k1_game::textures::{Rgba, TextureError};
-pub use k1_game::time_of_day::GameTime;
+pub use k1_game::time_of_day::{DayPhase, GameTime};
 
 pub type Result<T> = std::result::Result<T, GameError>;
 
