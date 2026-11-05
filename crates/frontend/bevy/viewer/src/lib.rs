@@ -29,8 +29,8 @@ use bevy::{
 };
 use kn_game::simulation::{CreatureState, Simulation, WalkState};
 use kn_game::{
-    CreatureAnimation, CreatureClips, CreatureLayer, Game, MapRef, MapSource, Piece, PieceGroup,
-    SceneOptions, TICK_MS, group_is_shown,
+    CreatureAnimation, CreatureClips, CreatureLayer, DayPhase, Game, MapRef, MapSource, Piece,
+    PieceGroup, SceneOptions, TICK_MS, group_is_shown,
 };
 use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
@@ -1650,6 +1650,40 @@ fn playback_label(playback: PlayState) -> &'static str {
     }
 }
 
+/// The game-time readout: clock face, phase, day index and progress through the cycle.
+///
+/// Every part of it is a function of the simulation's own tick, so the panel cannot
+/// disagree with the simulation — there is no clock, counter or timer of its own.
+/// With no simulation nothing is shown: a map whose simulation failed to build must
+/// not display a zero clock. The four phase words are our reading of the cycle, not
+/// a property of the original; the derivation and the 06:00 offset are recorded in
+/// `docs/k1/time-of-day.md`.
+fn game_time_line(sim: Option<&Simulation>) -> String {
+    let Some(simulation) = sim else {
+        return String::new();
+    };
+    let time = simulation.game_time();
+    format!(
+        "\ntime {:02}:{:02} · {} · day {} · {}%",
+        time.clock_hour,
+        time.clock_minute,
+        phase_label(time.phase),
+        time.day,
+        time.cycle_progress_percent,
+    )
+}
+
+/// The phase word shown to the player — a display concern: `k1-game` keeps ticks and
+/// intervals, the words live here.
+fn phase_label(phase: DayPhase) -> &'static str {
+    match phase {
+        DayPhase::Day => "day",
+        DayPhase::Dusk => "dusk",
+        DayPhase::Night => "night",
+        DayPhase::Dawn => "dawn",
+    }
+}
+
 /// Сколько спрайтов видно и сколько собрано.
 ///
 /// `InheritedVisibility` пишет Bevy, и в неё уже входит и скрытая группа, и кадр
@@ -1708,8 +1742,9 @@ fn diagnostics(
                     playback_label(viewer.playback),
                 )
             };
+            let time = game_time_line(sim.sim.as_ref());
             format!(
-                "{} {} · {pieces} · {} textures · {} ms{problems}{sim_error}\nzoom ×{} · {} fps{playback}",
+                "{} {} · {pieces} · {} textures · {} ms{problems}{sim_error}\nzoom ×{} · {} fps{playback}{time}",
                 match map.source {
                     MapSource::Game => "map",
                     MapSource::Tutorial => "tutorial",
@@ -1731,7 +1766,7 @@ fn diagnostics(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kn_game::{LayerKey, PieceGroup};
+    use kn_game::{GameTime, LayerKey, PieceGroup};
     use kn_render::Frame;
 
     fn state(
@@ -2548,6 +2583,166 @@ mod tests {
             got, expected,
             "перемотка к тику 150 совпадает с прямым прогоном"
         );
+    }
+
+    // --- Game time -----------------------------------------------------------
+
+    /// The simulation is driven by the clock only — the system under test is the
+    /// one the playback controls feed, so nothing can move game time by hand.
+    fn time_app(game: Game, map_ref: MapRef, clock_ticks: u64) -> App {
+        let simulation = game.simulation(map_ref, SIM_SEED).ok();
+        let initial_pixels = simulation.as_ref().unwrap().initial_pixels();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(GameResource(game))
+            .insert_resource(Viewer {
+                maps: vec![map_ref],
+                selected: 0,
+                overlays: DEFAULT_OVERLAYS,
+                playback: PlayState::Paused,
+            })
+            .insert_resource(SimulationResource {
+                sim: simulation,
+                initial_pixels,
+                ..Default::default()
+            })
+            .insert_resource(SimTickTracker::default())
+            .insert_resource(Clock::new(TICK_MS as f32))
+            .add_systems(Update, advance_simulation);
+        app.world_mut().resource_mut::<Clock>().ticks = clock_ticks;
+        app
+    }
+
+    fn time_of(app: &App) -> GameTime {
+        app.world()
+            .resource::<SimulationResource>()
+            .sim
+            .as_ref()
+            .unwrap()
+            .game_time()
+    }
+
+    /// The readout is the model's answer for the simulation's own tick: 317 ticks
+    /// are window 1 of `docs/k1/time-of-day.md` — neutral ambient, no ground
+    /// light, 21 minutes past the 06:00 our clock face starts the cycle at.
+    #[test]
+    fn the_time_line_reads_the_simulation_tick() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let mut simulation = game.simulation(map_ref, SIM_SEED).unwrap();
+        for _ in 0..317 {
+            simulation.tick();
+        }
+        assert_eq!(simulation.game_time().cycle_tick, 317);
+        assert_eq!(
+            game_time_line(Some(&simulation)),
+            "\ntime 06:21 · day · day 0 · 1%"
+        );
+    }
+
+    /// A map whose simulation failed to build shows no time at all: a clock of
+    /// its own would read 06:00 over a frozen scene and look like a running day.
+    #[test]
+    fn a_map_without_a_simulation_shows_no_time() {
+        assert_eq!(game_time_line(None), "");
+    }
+
+    /// The four words are ours, not the original's (`docs/k1/time-of-day.md`), so
+    /// the panel is pinned to exactly the phases the model derives.
+    #[test]
+    fn the_panel_names_the_four_phases_we_derived() {
+        let words = [
+            DayPhase::Day,
+            DayPhase::Dusk,
+            DayPhase::Night,
+            DayPhase::Dawn,
+        ]
+        .map(phase_label);
+        assert_eq!(words, ["day", "dusk", "night", "dawn"]);
+    }
+
+    /// `Space` pauses phase and movement together and `.`/`,` step both, because
+    /// there is one thing to move: the simulation. With the clock still, an idle
+    /// frame changes neither positions nor game time; the ticks the clock gains
+    /// move both by the same amount.
+    #[test]
+    fn game_time_moves_only_with_the_clock_that_moves_the_creatures() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let mut app = time_app(Game::open(&dir).unwrap(), map_ref, 200);
+        app.update();
+
+        let before = time_of(&app);
+        let homes = {
+            let sim = app.world().resource::<SimulationResource>();
+            home(sim.sim.as_ref().unwrap())
+        };
+        app.update();
+        app.update();
+        assert_eq!(time_of(&app), before, "an idle frame advances no game time");
+        let sim = app.world().resource::<SimulationResource>();
+        assert_eq!(
+            home(sim.sim.as_ref().unwrap()),
+            homes,
+            "an idle frame advances no movement either"
+        );
+
+        app.world_mut().resource_mut::<Clock>().ticks = 203;
+        app.update();
+        assert_eq!(
+            time_of(&app).cycle_tick,
+            before.cycle_tick + 3,
+            "the same three ticks moved the creatures and the day"
+        );
+    }
+
+    /// Reset recreates game time together with the simulation, and a backward
+    /// `Step` rewinds to the reset and stops there: the epoch is the zero point
+    /// (review #68), so no clock position puts a day behind a fresh simulation.
+    #[test]
+    fn reset_recreates_game_time_and_a_backward_step_stops_at_the_epoch() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let mut app = time_app(game, map_ref, 200);
+        app.update();
+        assert_eq!(time_of(&app).cycle_tick, 200);
+        assert_eq!(app.world().resource::<SimTickTracker>().sim_ticks, 200);
+
+        app.add_observer(reset_positions);
+        let button = app.world_mut().spawn(ResetPositions).id();
+        app.world_mut().resource_mut::<Clock>().ticks = 260;
+        app.world_mut().trigger(Activate { entity: button });
+        let time = time_of(&app);
+        assert_eq!((time.day, time.cycle_tick), (0, 0), "a reset is time zero");
+        assert_eq!(app.world().resource::<SimTickTracker>().epoch, 260);
+
+        // Ahead of the epoch again: the catch-up runs exactly what the clock gained.
+        app.world_mut().resource_mut::<Clock>().ticks = 300;
+        app.update();
+        assert_eq!(time_of(&app).cycle_tick, 40, "40 ticks since the reset");
+
+        // Backward inside the epoch: replay to the epoch-relative target.
+        app.world_mut().resource_mut::<Clock>().ticks = 280;
+        app.update();
+        assert_eq!(time_of(&app).cycle_tick, 20);
+
+        // And backward past the reset: the target saturates at the epoch, so time
+        // stops at the fresh simulation instead of un-running a day that never was.
+        for clock_ticks in [260, 255, 200] {
+            app.world_mut().resource_mut::<Clock>().ticks = clock_ticks;
+            app.update();
+            let time = time_of(&app);
+            assert_eq!(
+                (time.day, time.cycle_tick),
+                (0, 0),
+                "clock {clock_ticks} is behind the reset at 260"
+            );
+        }
     }
 
     /// After a map change the tracker is pinned to the clock, so the fresh
