@@ -1676,7 +1676,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_returns_creatures_home_and_resyncs_the_tracker() {
+    fn reset_returns_creatures_home_and_resyncs_the_epoch() {
         let Some((dir, map_ref)) = game_and_first_map() else {
             return;
         };
@@ -1863,12 +1863,12 @@ mod tests {
         );
     }
 
-    /// After a map change the tracker is pinned to the clock, so the fresh
+    /// After a map change the epoch is pinned to the clock, so the fresh
     /// simulation does not replay the ticks the previous map had already run — the
     /// catch-up burst that used to fast-forward every creature in one frame
-    /// (review #68). A forward run from a behind tracker still advances normally.
+    /// (review #68). A forward run from a behind epoch still advances normally.
     #[test]
-    fn map_change_pins_the_tracker_so_history_is_not_replayed() {
+    fn map_change_pins_the_epoch_so_history_is_not_replayed() {
         let Some((dir, map_ref)) = game_and_first_map() else {
             return;
         };
@@ -2108,6 +2108,77 @@ mod tests {
         );
         assert_eq!(sim.epoch, 123, "the epoch is pinned even on failure");
         assert_eq!(sim.sim_ticks, 0, "the timeline restarts at the reset");
+    }
+
+    /// Rebuilding a map hands its creatures to the shared subsystem and mirrors
+    /// the Characters overlay into the subsystem's visibility resource: the map a
+    /// rebuild asks for is the selected one, and a map opened with characters off
+    /// shows no creature for the first frame (issue #70 AC5, review #68).
+    #[test]
+    fn rebuild_asks_the_subsystem_and_mirrors_the_characters_overlay() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        for (characters_on, expected) in [(true, true), (false, false)] {
+            let state = Viewer {
+                maps: vec![map_ref],
+                selected: 0,
+                overlays: [false, false, false, characters_on],
+                playback: PlayState::Paused,
+            };
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins)
+                .insert_resource(GameResource(Game::open(&dir).unwrap()))
+                .insert_resource(state)
+                .insert_resource(Rebuild { map: true })
+                .init_resource::<TextureCache>()
+                .insert_resource(Assets::<Image>::default())
+                .init_resource::<ActiveRoot>()
+                .init_resource::<Stats>()
+                .init_resource::<PendingFrame>()
+                .init_resource::<CreatureLabels>()
+                .init_resource::<CreatureMotion>()
+                // Opposite of what the overlay says: a rebuild must overwrite it.
+                .insert_resource(CreatureNodesVisible(!characters_on))
+                .add_systems(Update, rebuild_scene);
+            app.update();
+
+            let motion = app.world().resource::<CreatureMotion>();
+            assert_eq!(motion.map, Some(map_ref), "the selected map is requested");
+            assert!(motion.rebuild, "the subsystem is asked to build it");
+            assert_eq!(
+                app.world().resource::<CreatureNodesVisible>().0,
+                expected,
+                "creatures are born visible exactly when the overlay is on"
+            );
+        }
+    }
+
+    /// The panel's own wording of what the subsystem found: every finding shows,
+    /// a clean map adds nothing, and a map whose animation data did not decode
+    /// says so (review #68 — a creature walking on its rest pose is a defect).
+    #[test]
+    fn the_panel_words_the_creature_findings() {
+        assert_eq!(creature_report(&CreatureAnimReport::default()), "");
+        let report = CreatureAnimReport {
+            total: 5,
+            without_walk: 2,
+            partial_walk: 1,
+            ..Default::default()
+        };
+        let shown = creature_report(&report);
+        for want in ["5 creatures", "2 without walk", "1 partial walk"] {
+            assert!(shown.contains(want), "{shown} must mention {want:?}");
+        }
+        let broken = CreatureAnimReport {
+            error: Some("no animation data".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            creature_report(&broken),
+            " · creatures: no animation data",
+            "a map that did not decode says why instead of showing fewer creatures"
+        );
     }
 
     /// A map built with the Characters overlay off must show neither creatures
