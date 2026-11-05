@@ -39,7 +39,7 @@ against what was possible on the hardware of 1999:
 
 | Area | The question the reference answers |
 |---|---|
-| Controls | Which input does what, and how a player discovers it (mouse-first, right-click as the context action, modifier behavior, rebinding) |
+| Controls | Which input does what, and how a player discovers it: which device leads, what each button and modifier means, whether actions can be rebound — patterns weighed against the reference, none of them fixed here |
 | Camera | Placement, edge behavior, zoom that stays readable at a pixel-art scale, follow and return to the party |
 | World interaction | Hovering a cell or object, click-to-move, reachable-vs-unreachable feedback, cursor state under load |
 | Selection | Single and group selection, selection feedback that survives a busy scene, what a right-click means when several things are under the pointer |
@@ -69,13 +69,19 @@ everything Baldur's Gate 3 has:
 
 ## Where the principles apply
 
-- **`kn-player` first.** The player-facing game is what these principles govern:
-  its camera, input, HUD, inventory, dialogues and journals.
-- **`kn-viewer` stays a development tool.** It is read-only and gains no HUD,
-  inventory or dialogue UI ([../ARCHITECTURE.md](../ARCHITECTURE.md)). It does share
-  the camera, input and visual-feedback principles, so that both programs feel like
-  one engine — the stepwise, pixel-exact wheel zoom of the viewer is the existing
-  example of that shared behavior.
+- **The player program first: `kn-player` with its frontend `kn-fe-player`.** The
+  player-facing game is what these principles govern — the camera, input, HUD,
+  inventory, dialogues and journals, built on the shared mechanisms `kn-render`,
+  `kn-input` and `kn-ui` (layers 01–03 of [../ARCHITECTURE.md](../ARCHITECTURE.md)).
+- **The viewer — `kn-viewer` with `kn-fe-viewer` — stays a development tool.** Its
+  read-only status names what it never does: it writes no game file and is not a
+  smaller player, so it gains no HUD, inventory or dialogue UI
+  ([../ARCHITECTURE.md](../ARCHITECTURE.md)). It is not static: it drives the
+  creature simulation, animates creature actions and behavior and toggles overlays
+  exactly so a person can see what the data means. It shares the camera, input and
+  visual-feedback principles, so that both programs feel like one engine — the
+  stepwise, pixel-exact wheel zoom of the viewer is the existing example of that
+  shared behavior.
 
 ## Applying them
 
