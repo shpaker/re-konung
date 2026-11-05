@@ -30,7 +30,7 @@ and got the same numbers.
 | ходьба | 1 | 7 | идёт по маршруту |
 | реакция на удар | 2 | 8 | |
 | смерть | 3 | 9 | |
-| выстрел | 4 | 4 | отдельное, только с оружием в руках |
+| the shot of a human — for a dynamic creature the same number is its own appearance or transformation animation (#70) | 4 | 4 | отдельное, только с оружием в руках |
 | ближняя атака | 5 | 5 | отдельное, только с оружием в руках |
 
 То есть состояния 0–3 — это те же 6–9, но с оружием в руках: `GRAPH.RES` содержит
@@ -53,14 +53,20 @@ and got the same numbers.
   `game_play.cpp:914-930` — обработчик состояния, а не вход в него;
 - имена состояний `CHSTATE_0`–`CHSTATE_9` — `game.h:327-336`.
 
-**Наш замер**: в начальных состояниях обоих изданий встречается только 0, 4 и 6
-(2143, 404 и 632 записи); 4 и 5 в файлах новой игры нет — это уже боевые действия.
+**Our measurement**, both editions: the recorded animation states are only 0, 4
+and 6 (2143, 404 and 632 records). States 2/8, 3/9 and 5 never occur in a file of
+a new game — they are what a fight does. The 404 records of state 4 are all dynamic
+sprites of the three classes 0x46, 0x4c and 0x55, every one of them with `Frame =
+0`, no equipment and an empty quiver, so none of them is a shot: state 4 carries
+two different things, and these records belong to the second one («State 4 — two
+meanings under one number» under «The combat states»).
 
-**Наш замер**: бит 0x04 байта 0x03 выставлен ровно у записей с состоянием 0 или 4
-и снят ровно у записей с состоянием 6 — 2950 и 632 записи. Отдельно: 632 записи с
-состоянием 6 — это люди без 0x40 в классе (виды 1, 2, 3 и 5), а все записи с
-динамическим спрайтом держат оружие в руках. Это и есть подтверждение пары
-«0–3 с оружием, 6–9 без него» на наших данных, а не только по Slavik.
+**Our measurement**: the weapons-in-hands bit 0x04 of byte 0x03 is set in exactly
+the records with state 0 or 4 and cleared in exactly the records with state 6 —
+2547 and 632 records. Separately: the 632 records in state 6 are humans without
+0x40 in the class (kinds 1, 2, 3 and 5), while every record with a dynamic sprite
+holds its weapon in hands. This is the confirmation of the pair «0–3 with a weapon,
+6–9 without it» on our own data, not only by Slavik.
 
 Entry, play mode, duration and exit of 2/8, 3/9, 4 and 5 — «The combat states»
 below, with the frame counts of our own sprite tables.
@@ -73,7 +79,7 @@ below, with the frame counts of our own sprite tables.
 |---|---|---|
 | 0x01 | приказ атаковать | `game_play.cpp:550`, `game_play.cpp:2489`, `game_play.cpp:3289`; снимается в `game_play.cpp:3335` |
 | 0x02 | следовать за ведущим | ставится членам отряда при приказе в `game_input.cpp:395-397`, снимается `game_play.cpp:969`, `game_play.cpp:2994` |
-| 0x04 | персонаж стреляет (лука и стрел достаточно) | `game_play.cpp:2421-2431`, `game_play.cpp:3918-3954`; снимается `game_play.cpp:2953`, `game_play.cpp:3912`. Смысл bit-в-байту-0x02 — **гипотеза**: код Slavik его не называет |
+| 0x04 | the character is shooting (a bow and arrows are enough) | `game_play.cpp:2421-2431`, `game_play.cpp:3918-3954`; cleared in `game_play.cpp:2953`, `game_play.cpp:3912`. **Confirmed behavior**: the clone never gives the bit a name, but only the shooting branch sets and reads it — «State 4 — two meanings under one number» below |
 | 0x08 | приказ переместиться | `game_input.cpp:395` и `game_play.cpp:1943` ставят 0x48, снимается `game_play.cpp:826`, `game_play.cpp:3550` |
 | 0x20 | ведомый член отряда игрока | ставится, если персонаж не главный, в одном отряде с игроком и без приказов (`game_play.cpp:302-303`) |
 | 0x40 | нужно решение поведения | ставится почти в каждой точке, где состояние могло измениться (`game_play.cpp:300`, `game_play.cpp:831`, `game_play.cpp:2458`, `game_play.cpp:3051`, `game_play.cpp:3149`), снимается, когда решение принято (`game_play.cpp:1962`, `game_play.cpp:3949`) |
@@ -384,7 +390,8 @@ caller leaves the state on the next tick.
 |---|---|---|---|---|---|
 | 2/8 reaction to a hit | a blow that lands and does not kill: an arrow result 0, a melee result 0 (confirmed) | one-shot (confirmed) | human 7 frames = 420 ms; monsters 4–17, three sprites have none | idle chooser; a hit monster first puts its whole squad into combat mode | a second hit re-enters and restarts frame 0 (by Slavik) |
 | 3/9 death | the result code 1 of a hit, or poison draining health to zero (confirmed) | hold (confirmed) | human 12 = 720 ms; monsters 7–16, one sprite has none | none — the last frame is held | the corpse is committed at the second-to-last frame, not at the last |
-| 4 shot | the shoot loop of a human with a bow and arrows; a skeleton's revival (confirmed) | one-shot (confirmed) | human 12; the five archer sprites that have it, 12–17 | idle chooser, or the shoot loop re-enters while its flag stands | the arrow is created at frame `FrameCount − 6`, and the state turns to face while `Frame == 0` |
+| 4 — the shot of a human | the shoot loop: a bow in equipment slot 1 and a quiver (confirmed) | one-shot; the loop re-enters it while its flag stands (confirmed) | human models 12 = 720 ms; no record of a new game reaches it — nobody carries arrows | idle chooser, or the shoot loop re-enters | the arrow is created at frame `FrameCount − 6`, and the state turns to face while `Frame == 0` |
+| 4 — a dynamic creature's own animation | the creature's appearance or transformation: a skeleton rising instead of dying (confirmed); the 404 records of classes 0x46, 0x4c, 0x55 (confirmed) | one-shot (confirmed) | the five dynamic objects that carry the sequence: 5 → 13, 11 → 17, 17, 21, 22 → 12 | idle chooser | it is not a shot: those records hold no bow and no quiver, and the clone's monster branch creates no projectile there (unknown) |
 | 5 melee | a walk step into the cell of an enemy, a counter-attack against an adjacent attacker, the ambush classes 0x44/0x57 (confirmed) | loops while the enemy stands (confirmed) | human 12; monsters 10–16, three sprites have none | the enemy died or became unreachable | health is written when the swing has fully played; the victim's squad is marked at frame 2 |
 
 **State 2/8 — the reaction to a hit.** Four call sites, all of them the result
@@ -439,7 +446,14 @@ frame, if it still has a weapon in a slot above 0, health is restored to 1600, t
 weapon slot steps down and the creature enters **state 4** instead of dying
 ([`game_play.cpp:3586-3594`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3586-L3594)).
 
-**State 4 — the shot.** The state is only reachable by a creature that holds a
+**State 4 — two meanings under one number.** One state value carries two things
+that share nothing but the number, and the data never lets one be read as the
+other: the shot of a human who shoots a bow, and the appearance or transformation
+animation a dynamic creature plays for itself. Which of the two a creature uses
+follows from what it is, not from a decision, which is why the table above gives
+them two rows and the text below keeps their two paths apart.
+
+*The shot of a human.* The state is only reachable by a creature that holds a
 weapon in hands: the human shooting branch requires a bow in equipment slot 1 and
 a quiver
 ([`game_play.cpp:2421-2431`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L2421-L2431),
@@ -448,9 +462,9 @@ and it is what byte 0x02 bit 0x04 gates — `FUN_0041ed8c` runs the shoot loop w
 that bit is set, re-targets, and re-enters the state as long as the bow, the
 arrows and the target hold, clearing the bit the moment one of them is gone
 ([`game_play.cpp:3952-4016`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3952-L4016)).
-That is the bit the «Гипотезы» list below called unnamed: its *name* the clone
-never gives, but its use is exactly the shooting flag, so we treat it as
-**confirmed behavior**. While `Frame == 0` the shooter turns toward the target one
+The *name* of this bit the clone never gives, but its use is exactly the shooting
+flag, so we treat it as **confirmed behavior** (row 0x04 of byte 0x02 above).
+While `Frame == 0` the shooter turns toward the target one
 direction per tick and does not advance the animation; at `Frame == FrameCount − 6`
 the arrow is created and the quiver count drops
 ([`game_play.cpp:3622-3648`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3622-L3648),
@@ -466,6 +480,27 @@ one roll of 21%), and damages whoever's cell it passes over **except the shooter
 himself** — the shot has no friendly-fire filter
 ([`game_play.cpp:394-526`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L394-L526)).
 The state ends into the idle chooser; the shoot loop may immediately re-enter it.
+This is the human-shot path, and the whole of what #77 (the launch of a shot) owns.
+
+*The appearance or transformation animation of a dynamic creature.* A dynamic
+sprite enters the same numeric state 4 for something that has nothing to do with
+shooting: a sequence its class plays to come onto the board or to change shape. The
+skeleton (class 0x4c) is the confirmed case — instead of finishing its death it
+restores health, steps its weapon slot down and re-enters state 4 to rise again
+([`game_play.cpp:3586-3594`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3586-L3594))
+— and it is what the shipped files hold: the only 404 state-4 records of a new game
+belong to the three dynamic classes 0x46 (152 records, dynamic object 5), 0x4c
+(249, object 11) and 0x55 (3, object 22); none of them is human, every one carries
+`Frame = 0`, a weapon slot above 0, no equipment and an empty quiver («Our
+measurements»). The two uses are disjoint by data, not by convention: the human
+branch above needs a bow in slot 1 and a quiver, and these records hold neither, so
+not one of them can be a shot. What each sequence shows — rising from the ground,
+jumping out of a burrow, a human↔beast change — is the content of the
+dynamic-object sequences and belongs to the viewer's #70, not to combat: **#77
+launches a shot on the human path only and must never route a dynamic creature's
+state-4 sequence through the shoot loop.** Whether the monster branch that plays
+state 4 for these classes also releases an arrow is **unknown** («What stays
+unknown»), so that branch stays unimplemented rather than folded into #77.
 
 **State 5 — the melee blow.** Three entries, none of them an order. A character
 walking a route that steps onto a cell held by an enemy it may hit takes the state
@@ -516,10 +551,11 @@ per tick is spent, a creature whose decision is pending and whose state is not i
 or walk is skipped *for the whole tick, animation included*
 (`SkipBecauseOfHardCompute`,
 [`game_play.cpp:3787-3792`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3787-L3792)),
-which is one of the 1999 caps under «Вне объёма» rather than a rule to keep. The
-shot is the one state the monster decision touches directly: for the archer classes
-0x46, 0x4c and 0x55 it advances the first frame itself, because the shot branch of
-the monster pass does nothing while `Frame == 0`
+which is one of the 1999 caps under «Вне объёма» rather than a rule to keep. State 4
+is the one state the monster decision touches directly: for the classes 0x46, 0x4c
+and 0x55 it advances the first frame itself, because the state-4 branch of the
+monster pass — the clone names it a shot, one of the two meanings above — does
+nothing while `Frame == 0`
 ([`game_play.cpp:3229-3236`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3229-L3236),
 [`game_play.cpp:3607-3619`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3607-L3619)).
 
@@ -550,22 +586,26 @@ Over `original/k1/{rus,eng}/game` — `GRAPH.RES`, `OBJECTS.RES` and the
 (3179 filled character records, 404 of them in state 4).
 
 - **The shipped files contain no combat at all.** Recorded states are 0 (2143),
-  4 (404) and 6 (632); 2/8, 3/9 and 5 never occur. State 4 belongs to exactly the
-  three archer classes — 0x46 (152 records, dynamic sprite 5), 0x4c (249, sprite
-  11) and 0x55 (3, sprite 22) — and all 404 of them carry `Frame = 0`, the
-  skip-mask 0, the weapons-in-hands bit 0x04 of byte 0x03, no equipment and no
-  quiver. So the combat states of 2/8, 3/9 and 5 appear only in a running game, and
-  the animation state exists only in the character records of `Game.N`.
+  4 (404) and 6 (632); 2/8, 3/9 and 5 never occur — those three are what a running
+  fight does. State 4 belongs to exactly three dynamic classes, 0x46 (152 records,
+  dynamic object 5), 0x4c (249, object 11) and 0x55 (3, object 22), and no human
+  record is in it; all 404 carry `Frame = 0`, the skip-mask 0, the weapons-in-hands
+  bit 0x04 of byte 0x03 and a weapon slot above 0, with no equipment and no quiver.
+  So none of them goes through the human shooting branch, and each of them is the
+  appearance or transformation animation of its class («State 4 — two meanings
+  under one number»).
 - **Durations, from our own sprite tables** (frames per sequence, equal over all
   eight directions and both editions — one tick per frame at 60 ms). The three
   human models of `GRAPH.RES`: state 2/8 is **7 frames** (420 ms), states 3/9, 4
   and 5 are **12 frames** (720 ms) — the same count as idle and walk, so only the
   stagger is visibly shorter. Of the 30 dynamic objects of `OBJECTS.RES`: state 2
   runs 4–17 frames, state 3 runs 7–16, state 5 runs 10–16, and state 4 is empty
-  for 25 of them; the five that carry a shot sequence are sprites 5, 11, 17, 21
-  and 22 with 13, 17, 12, 12 and 12 frames. Every non-empty shot sequence is at
-  least 12 frames, so the `FrameCount − 6` release beat is always reachable; no
-  melee sequence is shorter than 10, so the frame-2 marking beat is too.
+  for 25 of them; the five that carry a state-4 sequence are objects 5, 11, 17, 21
+  and 22 with 13, 17, 12, 12 and 12 frames — of these only 5, 11 and 22 belong to a
+  class the files record in state 4, so the sequences of 17 and 21 are unreachable
+  from the shipped data. Every non-empty state-4 sequence is at least 12 frames, so
+  the `FrameCount − 6` release beat of the human shot is always reachable; no melee
+  sequence is shorter than 10, so the frame-2 marking beat is too.
 - **Health in the shipped files takes two values only:** 1600 for 3063 records and
   **1** for 116 — 110 children (class 0x52), 3 lone NPCs (0x53) and 3 of 0x56 —
   all of them in state 0. No record carries the dead bit of the class, and the
@@ -576,7 +616,9 @@ Over `original/k1/{rus,eng}/game` — `GRAPH.RES`, `OBJECTS.RES` and the
   records, while 626 records do carry equipment (classes 0x1–0x5, plus three of
   0x45 and three of 0x54). Since the shooting branch needs both a bow in slot 1 and
   a quiver, no creature of the starting data — the player's party included — can
-  enter state 4 through that branch until arrows are picked up or bought.
+  enter state 4 through that branch until arrows are picked up or bought. The state
+  4 the files do hold is the other meaning of the number: the three dynamic classes
+  of the previous bullet, none of them armed.
 - **Three sprites have no combat frames at all.** Dynamic sprites 14, 15 and 16 —
   the children (0x52, 110 records), the women (0x51, 48) and the lone NPCs (0x53,
   50) — carry zero frames for state 2 and state 5, and sprite 15 also for state 3.
@@ -592,13 +634,17 @@ Over `original/k1/{rus,eng}/game` — `GRAPH.RES`, `OBJECTS.RES` and the
 
 #### What stays unknown
 
-- **Whether an archer monster releases an arrow.** The shot branch of the monster
-  pass plays the animation and a sound and calls nothing that creates a projectile
+- **Whether the monster branch of state 4 releases an arrow.** It is a different
+  path from the human shot and its answer does not change #77. The shot branch of
+  the monster pass plays the animation and a sound and calls nothing that creates a
+  projectile
   ([`game_play.cpp:3607-3619`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3607-L3619)),
   and `FUN_0041bff8` is created nowhere else; the human branch does create the
   arrow. So in the clone a class 0x46/0x4c/0x55 monster plays a shot and does no
   damage — while our files say the same classes hold no bow and no quiver either.
-  Which of the two the original does, and from which line, is unverified.
+  Which of the two the original does, and from which line, is unverified, so this
+  branch is not implemented and its animation is read as the creature's own
+  («State 4 — two meanings under one number»).
 - **The result codes' thresholds as the original's.** The `-1` limit of 48, the
   dodge roll against half the agility and the facing table that lets a blow be
   blocked
@@ -631,10 +677,12 @@ length, restarted by a second hit, ending in the idle chooser of its pass),
 killer writing 0, the corpse state never entered from health alone), **#75** (3/9
 playing once, committing the corpse at `FrameCount − 2` and holding the last
 frame), **#76** (5 with its three entries, the frame-2 squad marking and the health
-write at the end of the swing, restarting while the enemy stands) and **#77** for
-humans only (state 4, the turn at frame 0, the release at `FrameCount − 6`, the
-shoot loop as its own event). What must stay marked unknown there rather than be
-invented: the archer monsters' projectile, the damage thresholds, the empty
+write at the end of the swing, restarting while the enemy stands) and **#77** on
+the human path of state 4 only (the turn at frame 0, the release at `FrameCount − 6`,
+the shoot loop as its own event) — the other meaning of state 4, a dynamic
+creature's appearance or transformation, is #70's and must never be routed through
+the shoot loop. What must stay marked unknown there rather than be invented: the
+projectile of the monster branch of state 4, the damage thresholds, the empty
 sequences of sprites 14–16, target choice and pursuit (#72) and the hostile village.
 
 ### Названия существ
@@ -651,12 +699,6 @@ sequences of sprites 14–16, target choice and pursuit (#72) and the hostile vi
 
 ## Гипотезы
 
-- **Byte 0x02 bit 0x04 is named nowhere, but its use is shooting**: the clone
-  leaves the bit unnamed while the branch that sets it requires a bow in equipment
-  slot 1 plus a quiver, and `FUN_0041ed8c` runs the shoot loop while it is set and
-  clears it as soon as bow, arrows or target are gone (`game_play.cpp:2421-2431`,
-  `game_play.cpp:3952-4016`) — «State 4 — the shot» under «The combat states»
-  above. Only the name is missing; the meaning is treated as confirmed behavior.
 - **Отряд-цель (байт 0x1A) и `ai_state` связаны**: `game_play.cpp:1038` пишет в
   `unk3` номер отряда игрока вместе с `unk4 = 1` — похоже, это «кого преследуем».
   Как это читается дальше, не проверялось.
@@ -679,9 +721,9 @@ sequences of sprites 14–16, target choice and pursuit (#72) and the hostile vi
   recovered now under «The combat states»; the return on 0x20 since «The monster
   decision» above.
 - The combat unknowns that stay open after #71 are listed with their line ranges in
-  that section: whether an archer monster releases a projectile at all, the damage
-  thresholds that decide 2/8 versus 3/9, and what the game shows for the sprites
-  that carry no combat frames (14, 15, 16).
+  that section: whether the monster branch of state 4 releases a projectile at all,
+  the damage thresholds that decide 2/8 versus 3/9, and what the game shows for the
+  sprites that carry no combat frames (14, 15, 16).
 - Whether a villager squad ever enters combat mode: the elder squad's state
   byte is set from the village flags and the player's weapons
   (`FUN_00416700`, `game_play.cpp:1516-1562`), part of the village rules not
