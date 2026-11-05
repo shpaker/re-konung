@@ -29,6 +29,7 @@ The loop is the `konung-reverse-format` skill (`.claude/skills/konung-reverse-fo
 
 The goal is a live and responsive game, not a byte-for-byte copy of a 1999 engine.
 
+- Any task that touches UX, UI, the camera or the controls starts from [docs/design.md](docs/design.md): the product principles are stated there once — the original is the source of the game (rules, content, atmosphere, visual identity), the modern CRPGs of Larian Studios (above all Baldur's Gate 3 and Divinity: Original Sin 2) are the reference for how the game is controlled, presented and interacted with. The reference is not a specification: no copying of interfaces, assets, the 3D presentation, D&D or another game's turn-based combat.
 - The formats, gameplay and atmosphere of the original are preserved: data is read and written byte-exactly, behavior rules come from the original rather than from our heads.
 - Outdated mechanics and technical limits are improved. The original's internal algorithms and artificial caps are not reproduced: they were the price of the hardware of the day. Examples — a route no longer than 32 steps, turning by one direction per tick, no more than three "expensive" behavior decisions per tick.
 - Slavik is a reference for facts (formats, field meanings, rules), not a model for decisions: how exactly it computes something is not our constraint.

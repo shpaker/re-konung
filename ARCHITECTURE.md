@@ -5,7 +5,9 @@ components exist, what each one owns, how they are allowed to depend on each oth
 target shape looks like. Other documents link here instead of repeating the picture —
 [docs/rust.md](docs/rust.md) keeps the Rust-side technical detail (crate-by-crate status, format
 layers, decisions and their measurements), [docs/games.md](docs/games.md) keeps the series and
-edition comparison, [docs/README.md](docs/README.md) indexes the format documentation.
+edition comparison, [docs/README.md](docs/README.md) indexes the format documentation. What the
+player-facing experience should feel like, and what each design reference is authoritative for, is
+[docs/design.md](docs/design.md), which this document does not restate.
 
 ## Overview
 
