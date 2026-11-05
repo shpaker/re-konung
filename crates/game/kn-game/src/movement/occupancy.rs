@@ -86,6 +86,14 @@ impl Occupancy {
         }
     }
 
+    /// Stop holding every cell of a creature: the one under it plus any
+    /// reservation. Cells not held by it are left alone.
+    pub fn release_all(&mut self, creature: CreatureId) {
+        for cell in self.cells_of(creature) {
+            self.holders.remove(&cell);
+        }
+    }
+
     /// Every cell a creature holds: the one under it plus any reservation.
     pub fn cells_of(&self, creature: CreatureId) -> Vec<Cell> {
         let mut cells: Vec<Cell> = self
@@ -164,5 +172,27 @@ mod tests {
         occupancy.reserve(cell, A);
         assert!(occupancy.stand(cell, A));
         assert_eq!(occupancy.occupant(cell), Some(A));
+    }
+
+    #[test]
+    fn release_all_frees_standing_and_reservation_alike() {
+        let mut occupancy = Occupancy::new();
+        let stood = Cell::new(2, 2);
+        let reserved = Cell::new(3, 2);
+        let foreign = Cell::new(4, 2);
+        occupancy.stand(stood, A);
+        occupancy.reserve(reserved, A);
+        occupancy.stand(foreign, B);
+        occupancy.release_all(A);
+        assert_eq!(occupancy.holder(stood), None);
+        assert_eq!(occupancy.holder(reserved), None);
+        assert_eq!(
+            occupancy.holder(foreign),
+            Some(Holder {
+                creature: B,
+                standing: true
+            }),
+            "a foreign cell must survive the release"
+        );
     }
 }

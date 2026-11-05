@@ -81,6 +81,21 @@ pub enum Event {
     NoRoute { creature: CreatureId, goal: Cell },
 }
 
+impl Event {
+    /// Whose state change this event reports.
+    fn creature(&self) -> CreatureId {
+        match self {
+            Event::StepStarted { creature, .. }
+            | Event::StepFinished { creature, .. }
+            | Event::Arrived { creature, .. }
+            | Event::RouteSet { creature, .. }
+            | Event::Waiting { creature, .. }
+            | Event::TerrainBlocked { creature, .. }
+            | Event::NoRoute { creature, .. } => *creature,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorldError {
     UnknownCreature,
@@ -146,7 +161,18 @@ pub struct World<P: Passage, K: Pace> {
     pace: K,
     rules: WorldRules,
     occupancy: Occupancy,
-    actors: Vec<Actor>,
+    /// One slot per number ever issued: a taken one is an actor, an empty one
+    /// is a creature [`World::remove`] took out. The slot index is the
+    /// creature's number, so a removal shifts nobody.
+    actors: Vec<Option<Actor>>,
+    /// Number for the next creature: it only ever grows, so a removed
+    /// creature's number is never handed to another (docs/rust.md, "Decision:
+    /// taking a creature out keeps the numbers").
+    next_creature: u32,
+    /// The taken slots in ascending order: the tick walks the creatures that
+    /// are in the world rather than the whole slot history, in the same
+    /// number order walking the slots would give.
+    live: Vec<usize>,
     rng: Rng,
     tick: u64,
     /// Events from orders given between ticks: they come out first on the next
@@ -166,6 +192,8 @@ impl<P: Passage, K: Pace> World<P, K> {
             rules,
             occupancy: Occupancy::new(),
             actors: Vec::new(),
+            next_creature: 0,
+            live: Vec::new(),
             rng: Rng::new(seed),
             tick: 0,
             pending_events: Vec::new(),
@@ -203,7 +231,9 @@ impl<P: Passage, K: Pace> World<P, K> {
         self.tick
     }
 
-    /// Place a creature in a cell; it gets the next number in line.
+    /// Place a creature in a cell; it gets the next number in line. A number
+    /// a removed creature held is never handed out again, so a number taken by
+    /// [`World::add`] names this creature for as long as the world lives.
     ///
     /// An impassable cell gives `Err(ImpassableCell)`: a creature inside a wall
     /// would break the invariant "nobody stands in an impassable cell" that the
@@ -218,9 +248,13 @@ impl<P: Passage, K: Pace> World<P, K> {
         if self.occupancy.holder(cell).is_some() {
             return Err(WorldError::CellTaken);
         }
-        let creature = CreatureId::new(self.actors.len() as u32);
+        let creature = CreatureId::new(self.next_creature);
+        self.next_creature += 1;
         self.occupancy.stand(cell, creature);
-        self.actors.push(Actor::new(Walker::new(creature, cell)));
+        self.actors
+            .push(Some(Actor::new(Walker::new(creature, cell))));
+        // Numbers only grow, so the appended slot keeps the list ascending.
+        self.live.push(self.actors.len() - 1);
         Ok(creature)
     }
 
@@ -228,8 +262,25 @@ impl<P: Passage, K: Pace> World<P, K> {
         let index = creature.raw() as usize;
         self.actors
             .get(index)
-            .filter(|actor| actor.walker.creature == creature)
+            .filter(|slot| {
+                slot.as_ref()
+                    .is_some_and(|actor| actor.walker.creature == creature)
+            })
             .map(|_| index)
+    }
+
+    /// The actor of an index [`World::index`] vouches for: every caller of a
+    /// method below has just checked it, so the slot is taken.
+    fn actor(&self, index: usize) -> &Actor {
+        self.actors[index]
+            .as_ref()
+            .expect("the index was vouched for by World::index")
+    }
+
+    fn actor_mut(&mut self, index: usize) -> &mut Actor {
+        self.actors[index]
+            .as_mut()
+            .expect("the index was vouched for by World::index")
     }
 
     /// Send a creature to a cell and return the route's step count.
@@ -261,23 +312,23 @@ impl<P: Passage, K: Pace> World<P, K> {
         if !self.grid.contains(goal) {
             return Err(WorldError::OutsideGrid);
         }
-        if self.actors[index].last_commanded == Some(goal) {
-            return Ok(self.actors[index].walker.route_len());
+        if self.actor(index).last_commanded == Some(goal) {
+            return Ok(self.actor(index).walker.route_len());
         }
-        let actor = &self.actors[index];
+        let actor = self.actor(index);
         if actor.failed_goal == Some(goal)
             && self.tick - actor.last_search < u64::from(self.rules.repath_cooldown_ticks)
         {
             return Err(WorldError::NoRoute);
         }
-        self.actors[index].goal = Some(goal);
-        self.actors[index].pending = true;
-        self.actors[index].waiting_ticks = 0;
-        if self.actors[index].walker.is_walking() {
+        self.actor_mut(index).goal = Some(goal);
+        self.actor_mut(index).pending = true;
+        self.actor_mut(index).waiting_ticks = 0;
+        if self.actor(index).walker.is_walking() {
             // Deferred to the cell border: remember the goal so a repeat during
             // the step is a no-op. If the deferred search then fails,
             // `search_route` clears this, so a later retry can re-search.
-            self.actors[index].last_commanded = Some(goal);
+            self.actor_mut(index).last_commanded = Some(goal);
             return Ok(0);
         }
         let mut events = Vec::new();
@@ -293,18 +344,55 @@ impl<P: Passage, K: Pace> World<P, K> {
     /// search that failed before the withdrawal.
     pub fn stop(&mut self, creature: CreatureId) -> Result<(), WorldError> {
         let index = self.index(creature).ok_or(WorldError::UnknownCreature)?;
-        self.actors[index].goal = None;
-        self.actors[index].last_commanded = None;
-        self.actors[index].failed_goal = None;
-        self.actors[index].pending = false;
-        self.actors[index].waiting_ticks = 0;
-        self.actors[index].walker.clear_route();
+        let actor = self.actor_mut(index);
+        actor.goal = None;
+        actor.last_commanded = None;
+        actor.failed_goal = None;
+        actor.pending = false;
+        actor.waiting_ticks = 0;
+        actor.walker.clear_route();
+        Ok(())
+    }
+
+    /// Take a creature out of the world: it frees every cell the creature
+    /// stood on or reserved with a step, and its movement state is dropped
+    /// (docs/rust.md, "Decision: taking a creature out keeps the numbers").
+    ///
+    /// No [`Event`] is emitted: removal is an order from outside, and the
+    /// outer world is the one that knows a creature died or left the map —
+    /// the engine only has to stop holding cells and stop walking.
+    ///
+    /// The caller does not have to `stop` first: removal ends a mid-step
+    /// where it stands, reservation and all, and the cells it held become
+    /// enterable on the same tick. Every other creature keeps its number,
+    /// cell and route; an order to a removed creature — or removing it again
+    /// — answers `Err(UnknownCreature)`. The creature's number is not handed
+    /// to a later one, so an id the outer world still carries — a corpse, a
+    /// roster entry — never comes to name another creature.
+    ///
+    /// A search event of this creature still waiting between ticks is dropped
+    /// with it: from the removal on, the channel names no creature the world
+    /// has let go. `move_to`'s return value was the answer to the order and
+    /// stands; events of the other creatures keep their place in the channel.
+    pub fn remove(&mut self, creature: CreatureId) -> Result<(), WorldError> {
+        let index = self.index(creature).ok_or(WorldError::UnknownCreature)?;
+        self.occupancy.release_all(creature);
+        self.pending_events
+            .retain(|event| event.creature() != creature);
+        if let Ok(position) = self.live.binary_search(&index) {
+            self.live.remove(position);
+        } else {
+            // A slot `index` vouched for is in `live` by the invariant `add`
+            // and `remove` keep; reaching this is a broken world, not data.
+            debug_assert!(false, "slot {index} holds an actor but is not live");
+        }
+        self.actors[index] = None;
         Ok(())
     }
 
     pub fn state(&self, creature: CreatureId) -> Option<WalkState> {
         let index = self.index(creature)?;
-        Some(self.actors[index].walker.state())
+        Some(self.actor(index).walker.state())
     }
 
     /// Turn a creature in place: it faces `direction` while it stands.
@@ -316,22 +404,22 @@ impl<P: Passage, K: Pace> World<P, K> {
     /// from, exactly as it does without a turn.
     pub fn turn(&mut self, creature: CreatureId, direction: Direction) -> Result<(), WorldError> {
         let index = self.index(creature).ok_or(WorldError::UnknownCreature)?;
-        self.actors[index].walker.turn(direction);
+        self.actor_mut(index).walker.turn(direction);
         Ok(())
     }
 
-    /// Every creature's state, in order of their numbers, so traversal is
-    /// deterministic.
+    /// Every living creature's state, in order of their numbers, so traversal
+    /// is deterministic. Removed creatures are not there.
     pub fn states(&self) -> Vec<WalkState> {
-        self.actors
+        self.live
             .iter()
-            .map(|actor| actor.walker.state())
+            .map(|index| self.actor(*index).walker.state())
             .collect()
     }
 
     pub fn cell_of(&self, creature: CreatureId) -> Option<Cell> {
         let index = self.index(creature)?;
-        Some(self.actors[index].walker.cell())
+        Some(self.actor(index).walker.cell())
     }
 
     pub fn creature_at(&self, cell: Cell) -> Option<CreatureId> {
@@ -352,7 +440,9 @@ impl<P: Passage, K: Pace> World<P, K> {
     ///
     /// This is the engine's only event channel: everything that happened —
     /// including the search an order asked for — comes out of here, in tick
-    /// order.
+    /// order. No event names a creature the world has let go: a search event
+    /// still waiting in the channel when [`World::remove`] runs is dropped
+    /// with it.
     ///
     /// Arrivals come first, so a creature that left a cell on this tick does not
     /// block the one entering that same cell on this tick. A step `d` ticks
@@ -368,20 +458,24 @@ impl<P: Passage, K: Pace> World<P, K> {
 
     /// Finish the steps that were in progress.
     fn finish_steps(&mut self, events: &mut Vec<Event>) {
-        for index in 0..self.actors.len() {
-            let creature = self.actors[index].walker.creature;
-            let previous = self.actors[index].walker.cell();
-            if let Some(step) = self.actors[index].walker.step()
+        // `live` only changes between ticks, so walking it by position while
+        // the actors change is safe; it is ascending, so the order is the
+        // slot order.
+        for position in 0..self.live.len() {
+            let index = self.live[position];
+            let creature = self.actor(index).walker.creature;
+            let previous = self.actor(index).walker.cell();
+            if let Some(step) = self.actor(index).walker.step()
                 && step.elapsed >= step.ticks
                 && !self.can_stand(step.to)
             {
                 self.cancel_step(index, step, events);
                 continue;
             }
-            if !self.actors[index].walker.tick() {
+            if !self.actor_mut(index).walker.tick() {
                 continue;
             }
-            let cell = self.actors[index].walker.cell();
+            let cell = self.actor(index).walker.cell();
             self.occupancy.release(previous, creature);
             // This creature held the cell, so taking it always succeeds; the
             // invariant is checked in debug and costs nothing in release.
@@ -401,10 +495,10 @@ impl<P: Passage, K: Pace> World<P, K> {
     /// Cancel a step whose destination became impassable: the creature stays
     /// where it was and waits for a repath.
     fn cancel_step(&mut self, index: usize, step: Step, events: &mut Vec<Event>) {
-        let creature = self.actors[index].walker.creature;
-        self.actors[index].walker.cancel_step();
+        let creature = self.actor(index).walker.creature;
+        self.actor_mut(index).walker.cancel_step();
         self.occupancy.release(step.to, creature);
-        self.actors[index].waiting_ticks = self.rules.wait_before_repath_ticks;
+        self.actor_mut(index).waiting_ticks = self.rules.wait_before_repath_ticks;
         events.push(Event::TerrainBlocked {
             creature,
             cell: step.to,
@@ -418,30 +512,31 @@ impl<P: Passage, K: Pace> World<P, K> {
     /// settles a dispute over a cell because a reservation is exclusive
     /// (docs/rust.md, "Decision: who yields a cell").
     fn start_steps(&mut self, events: &mut Vec<Event>) {
-        for index in 0..self.actors.len() {
-            if self.actors[index].walker.is_walking() {
+        for position in 0..self.live.len() {
+            let index = self.live[position];
+            if self.actor(index).walker.is_walking() {
                 continue;
             }
-            let creature = self.actors[index].walker.creature;
-            if self.actors[index].pending {
+            let creature = self.actor(index).walker.creature;
+            if self.actor(index).pending {
                 // Deliberately no `continue`: a route found on this tick is
                 // immediately spent by its first step, or an empty tick would
                 // be inserted between arrival and the new step (60 ms of idling
                 // on every change of goal).
                 self.search_route(index, events);
             }
-            if self.actors[index].walker.finish() {
-                self.actors[index].goal = None;
-                let cell = self.actors[index].walker.cell();
+            if self.actor_mut(index).walker.finish() {
+                self.actor_mut(index).goal = None;
+                let cell = self.actor(index).walker.cell();
                 events.push(Event::Arrived { creature, cell });
                 continue;
             }
-            if !self.actors[index].walker.is_waiting() {
-                self.actors[index].waiting_ticks = 0;
+            if !self.actor(index).walker.is_waiting() {
+                self.actor_mut(index).waiting_ticks = 0;
                 continue;
             }
-            let from = self.actors[index].walker.cell();
-            let Some(next) = self.actors[index].walker.next_cell() else {
+            let from = self.actor(index).walker.cell();
+            let Some(next) = self.actor(index).walker.next_cell() else {
                 continue;
             };
             match self.block_reason(creature, from, next) {
@@ -452,7 +547,7 @@ impl<P: Passage, K: Pace> World<P, K> {
                         cell: next,
                         blocked_by: other,
                     });
-                    self.actors[index].waiting_ticks += 1;
+                    self.actor_mut(index).waiting_ticks += 1;
                     self.repath_if_due(index, events);
                 }
                 Block::Terrain => {
@@ -460,7 +555,7 @@ impl<P: Passage, K: Pace> World<P, K> {
                         creature,
                         cell: next,
                     });
-                    self.actors[index].waiting_ticks = self.rules.wait_before_repath_ticks;
+                    self.actor_mut(index).waiting_ticks = self.rules.wait_before_repath_ticks;
                     self.repath_if_due(index, events);
                 }
             }
@@ -472,7 +567,7 @@ impl<P: Passage, K: Pace> World<P, K> {
     /// [`WorldRules::repath_cooldown_ticks`] have passed since the last search.
     fn repath_if_due(&mut self, index: usize, events: &mut Vec<Event>) {
         let rules = self.rules;
-        let actor = &self.actors[index];
+        let actor = self.actor(index);
         let due = actor.waiting_ticks >= rules.wait_before_repath_ticks
             && self.tick - actor.last_search >= u64::from(rules.repath_cooldown_ticks);
         if !due || actor.goal.is_none() {
@@ -484,13 +579,13 @@ impl<P: Passage, K: Pace> World<P, K> {
     /// Route search from the creature's current cell to its goal; returns the
     /// number of steps.
     fn search_route(&mut self, index: usize, events: &mut Vec<Event>) -> Option<usize> {
-        let actor = &self.actors[index];
+        let actor = self.actor(index);
         let (Some(goal), creature, from) = (actor.goal, actor.walker.creature, actor.walker.cell())
         else {
             return None;
         };
-        self.actors[index].last_search = self.tick;
-        self.actors[index].waiting_ticks = 0;
+        self.actor_mut(index).last_search = self.tick;
+        self.actor_mut(index).waiting_ticks = 0;
         let request = route::RouteRequest {
             grid: &self.grid,
             passage: &self.passage,
@@ -504,24 +599,26 @@ impl<P: Passage, K: Pace> World<P, K> {
         match found {
             Some(route) => {
                 let steps = route.len();
-                self.actors[index].pending = false;
-                self.actors[index].last_commanded = Some(goal);
-                self.actors[index].failed_goal = None;
-                self.actors[index].walker.set_route(&route);
+                let actor = self.actor_mut(index);
+                actor.pending = false;
+                actor.last_commanded = Some(goal);
+                actor.failed_goal = None;
+                actor.walker.set_route(&route);
                 events.push(Event::RouteSet { creature, steps });
                 Some(steps)
             }
             None => {
-                self.actors[index].pending = false;
-                self.actors[index].goal = None;
+                let actor = self.actor_mut(index);
+                actor.pending = false;
+                actor.goal = None;
                 // Forget the goal so a later order to it re-searches: re-sending
                 // an unreachable goal is the only retry once a crowd clears, and
                 // a stale memory would make that retry a silent no-op. The
                 // repeat is throttled by `failed_goal` instead, so the retry
                 // costs one search per cooldown and not one per tick.
-                self.actors[index].last_commanded = None;
-                self.actors[index].failed_goal = Some(goal);
-                self.actors[index].walker.clear_route();
+                actor.last_commanded = None;
+                actor.failed_goal = Some(goal);
+                actor.walker.clear_route();
                 events.push(Event::NoRoute { creature, goal });
                 None
             }
@@ -530,10 +627,10 @@ impl<P: Passage, K: Pace> World<P, K> {
 
     /// Start the next step: reserve the cell and set the tick counter running.
     fn begin_step(&mut self, index: usize, next: Cell, events: &mut Vec<Event>) {
-        let creature = self.actors[index].walker.creature;
-        let from = self.actors[index].walker.cell();
+        let creature = self.actor(index).walker.creature;
+        let from = self.actor(index).walker.cell();
         let Some(direction) = Direction::between(from, next) else {
-            self.actors[index].waiting_ticks = self.rules.wait_before_repath_ticks;
+            self.actor_mut(index).waiting_ticks = self.rules.wait_before_repath_ticks;
             self.repath_if_due(index, events);
             return;
         };
@@ -541,11 +638,11 @@ impl<P: Passage, K: Pace> World<P, K> {
             return;
         }
         let ticks = self.pace.step_ticks(creature, direction);
-        if self.actors[index].walker.start_step(ticks).is_none() {
+        if self.actor_mut(index).walker.start_step(ticks).is_none() {
             self.occupancy.release(next, creature);
             return;
         }
-        self.actors[index].waiting_ticks = 0;
+        self.actor_mut(index).waiting_ticks = 0;
         events.push(Event::StepStarted {
             creature,
             from,
@@ -1251,5 +1348,208 @@ mod tests {
             world.turn(CreatureId::new(99), Direction::East),
             Err(WorldError::UnknownCreature)
         );
+    }
+
+    /// The reproduction the review asked for: `add → move_to → remove →
+    /// tick_step` must not deliver the removed creature's still-pending
+    /// search event, while the other creature keeps its own events in order.
+    #[test]
+    fn removal_drops_a_pending_search_event_of_the_removed_creature() {
+        let mut world = world(8, 8);
+        let removed = world.add(Cell::new(1, 2)).unwrap();
+        let other = world.add(Cell::new(6, 6)).unwrap();
+        world.move_to(removed, Cell::new(4, 2)).unwrap();
+        world.move_to(other, Cell::new(7, 6)).unwrap();
+        assert_eq!(world.remove(removed), Ok(()));
+        let events = world.tick_step();
+        assert!(
+            !events.iter().any(|event| event.creature() == removed),
+            "an event named the removed creature: {events:?}"
+        );
+        assert!(
+            events.contains(&Event::RouteSet {
+                creature: other,
+                steps: 1
+            }),
+            "the other creature lost its event: {events:?}"
+        );
+        assert_eq!(events[0].creature(), other);
+    }
+
+    /// A refused search whose `NoRoute` still waits in the channel is dropped
+    /// with the creature too: `move_to`'s return value was the answer to the
+    /// order, the channel carries the search for living creatures only.
+    #[test]
+    fn removal_drops_a_pending_refusal_of_the_removed_creature() {
+        let mut world = world(12, 12);
+        let removed = world.add(Cell::new(1, 6)).unwrap();
+        let other = world.add(Cell::new(11, 6)).unwrap();
+        for row in 0..12 {
+            world.passage_mut().blocked.insert(Cell::new(6, row));
+        }
+        world.rules_mut().route.goal_fallback_radius = 0;
+        assert_eq!(
+            world.move_to(removed, Cell::new(10, 6)),
+            Err(WorldError::NoRoute)
+        );
+        world.remove(removed).unwrap();
+        assert_eq!(
+            world.tick_step(),
+            Vec::new(),
+            "the refused search of the removed creature reached the channel"
+        );
+        world.move_to(other, Cell::new(11, 7)).unwrap();
+        assert!(
+            world
+                .tick_step()
+                .iter()
+                .any(|event| event.creature() == other),
+            "the channel must still carry the living"
+        );
+    }
+
+    #[test]
+    fn removal_frees_cells_and_leaves_the_others_untouched() {
+        let mut world = world(8, 8);
+        let removed = world.add(Cell::new(1, 2)).unwrap();
+        let walker = world.add(Cell::new(5, 2)).unwrap();
+        world.move_to(removed, Cell::new(3, 6)).unwrap();
+        world.move_to(walker, Cell::new(7, 2)).unwrap();
+        let kept = world.state(walker).unwrap();
+        assert_eq!(world.remove(removed), Ok(()));
+        assert_eq!(world.holder(Cell::new(1, 2)), None);
+        assert_eq!(world.creature_at(Cell::new(1, 2)), None);
+        assert_eq!(world.state(removed), None);
+        assert_eq!(world.cell_of(removed), None);
+        assert_eq!(
+            world.state(walker),
+            Some(kept),
+            "the other creature lost its number, cell or route"
+        );
+        assert_eq!(world.creature_at(Cell::new(5, 2)), Some(walker));
+        assert_eq!(world.states(), vec![kept]);
+    }
+
+    #[test]
+    fn orders_to_a_removed_creature_are_refused() {
+        let mut world = world(8, 8);
+        let creature = world.add(Cell::new(1, 2)).unwrap();
+        assert_eq!(world.remove(creature), Ok(()));
+        assert_eq!(
+            world.move_to(creature, Cell::new(3, 3)),
+            Err(WorldError::UnknownCreature)
+        );
+        assert_eq!(world.stop(creature), Err(WorldError::UnknownCreature));
+        assert_eq!(world.remove(creature), Err(WorldError::UnknownCreature));
+    }
+
+    #[test]
+    fn removal_mid_step_releases_the_reservation() {
+        let mut world = world(8, 8);
+        let walker = world.add(Cell::new(2, 2)).unwrap();
+        let follower = world.add(Cell::new(1, 2)).unwrap();
+        world.move_to(walker, Cell::new(5, 2)).unwrap();
+        world.tick_step();
+        assert!(
+            world.state(walker).unwrap().moving,
+            "the walker must be mid-step"
+        );
+        let ahead = Cell::new(3, 2);
+        assert_eq!(
+            world.holder(ahead).map(|holder| holder.creature),
+            Some(walker)
+        );
+        assert_eq!(world.remove(walker), Ok(()));
+        assert_eq!(
+            world.holder(ahead),
+            None,
+            "the step's reservation survived the removal"
+        );
+        assert_eq!(world.holder(Cell::new(2, 2)), None);
+        assert_eq!(world.move_to(follower, ahead), Ok(2));
+        for _ in 0..8 {
+            world.tick_step();
+        }
+        assert_eq!(
+            world.creature_at(ahead),
+            Some(follower),
+            "the following creature must enter the freed cell"
+        );
+    }
+
+    #[test]
+    fn the_tick_walks_only_the_living_creatures() {
+        // The #49 churn: slots pile up from placements that were removed
+        // again, and the tick must neither visit them nor miss the keeper.
+        let mut world = world(8, 8);
+        for row in 0..8 {
+            let ghost = world.add(Cell::new(1, row)).unwrap();
+            world.remove(ghost).unwrap();
+        }
+        let keeper = world.add(Cell::new(4, 4)).unwrap();
+        world.move_to(keeper, Cell::new(6, 4)).unwrap();
+        for _ in 0..8 {
+            world.tick_step();
+        }
+        assert_eq!(world.cell_of(keeper), Some(Cell::new(6, 4)));
+        assert_eq!(world.states().len(), 1);
+    }
+
+    #[test]
+    fn a_removed_number_is_never_handed_out_again() {
+        let mut world = world(8, 8);
+        let first = world.add(Cell::new(1, 1)).unwrap();
+        assert_eq!(world.remove(first), Ok(()));
+        let second = world.add(Cell::new(2, 2)).unwrap();
+        assert_ne!(second, first);
+        assert_eq!(world.state(second).unwrap().creature, second);
+        // the removal of the first is not undone by the second: the old number
+        // still names nobody
+        assert_eq!(world.state(first), None);
+    }
+
+    /// Two runs with one seed and one removal order must give one trace:
+    /// a removal must not disturb the generator or the visit order of the
+    /// creatures that stay (issue #43 criterion 4).
+    #[test]
+    fn removals_replay_identically_under_the_same_seed() {
+        fn trace(seed: u64) -> Vec<Vec<Event>> {
+            let mut world = World::new(
+                Grid::new(12, 12),
+                Map::default(),
+                Uniform(2),
+                WorldRules::default(),
+                seed,
+            );
+            let mut creatures = Vec::new();
+            for column in [1, 4, 7, 10] {
+                creatures.push(world.add(Cell::new(column, 4)).unwrap());
+                creatures.push(world.add(Cell::new(column, 8)).unwrap());
+            }
+            for (number, creature) in creatures.iter().enumerate() {
+                let goal = if number % 2 == 0 {
+                    Cell::new(10, 8)
+                } else {
+                    Cell::new(1, 4)
+                };
+                let _ = world.move_to(*creature, goal);
+            }
+            let mut trace = Vec::new();
+            for tick in 0..40 {
+                if tick == 12 {
+                    let _ = world.remove(creatures[3]);
+                    let _ = world.remove(creatures[0]);
+                }
+                if tick == 24 {
+                    let _ = world.remove(creatures[5]);
+                    let _ = world.move_to(creatures[7], Cell::new(6, 1));
+                }
+                trace.push(world.tick_step());
+            }
+            trace
+        }
+        let first = trace(7);
+        let second = trace(7);
+        assert_eq!(first, second, "the same seed replayed a different trace");
     }
 }
