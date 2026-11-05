@@ -38,6 +38,9 @@ There is one counter, and the hour is a remainder of it:
 | The remainder is cached in one global | `VA 0x81D608`, written at exactly one site in each binary, in the same routine as the modulo |
 | The counter is advanced at two sites, never guarded by a lighting option | `inc dword [0x81D640]` at rus `0x26AE5`/`0x26B19`, eng `0x26D29`/`0x26D5D`. The second sits in a loop bounded by a separate global (`0x81D634`, the game speed); neither is inside a branch on either option global listed below |
 | A per-day coin flip decides one of two night palettes | immediately after the modulo: `call rand`, `mov ebx, 100`, signed `idiv`, `cmp edx, 0x5A` (90) — that is a 90-in-100 chance, taken when the remainder is 0 |
+| The counter is the game's general running tick, not only the hour | 18 references to `VA 0x81D640` in each of rus and eng (20 in the tutorial). Besides the modulo site, readers gate periodic logic on its low bits: `test byte [0x81D640], 0xF` at rus `0xD456` (`VA 0x41D056`) takes a 200-iteration pass every 16th tick, and `(counter & mask) == mask` sits at rus `0x2B2D` (`VA 0x41272D`). The clone reads the same variable outside the light code — a loot condition and a two-frame alternation (**by Slavik** [`game.cpp:861`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L861), [`game.cpp:1554`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L1554)) |
+| A state-init routine sets it to zero | `mov [0x81D710], 0` then `mov esi, [0x81D710]` then `mov [0x81D640], esi` in the routine that also clears and copies the other session globals, rus `0x281DB` (`VA 0x437DEB` for the store). Whether this routine runs on a load is not established |
+| It travels with the session state | three sites copy it into three consecutive slots (`+0x3FC`, `+0x400`, `+0x404`) of the record reached through `[0x81D580]` — rus `0x2488B`, `0x248BB`, `0x248EB`; and its address is passed with size 4 to the routine every other state field goes through (rus `0x14BB8`, `0x15062`, routine at `VA 0x43EE9E`, which indexes a field table and calls a stream helper). The reads are ours; that this routine is the save writer is a hypothesis below |
 
 So a cycle is 21600 ticks. At the 60 ms tick that is 21.6 minutes **at game speed 0**;
 each speed level adds one more counter step per frame, so the cycle shortens to
@@ -208,29 +211,88 @@ There are two independent switches, and a third state that is not a switch at al
 So "no tile light" has two different causes — the phase and the option — and #97 needs
 both switches; one control for both would misrepresent the original.
 
-## Phase names and preset ticks
+## What the source gives: intervals, not day phases
 
-The game has thirteen thresholds, not four named phases. The names below are **ours**, a
-reading aid over the table, and the preset ticks are **our choice** inside the windows —
-#96 may move them, the windows themselves are the fact.
+The table above is the whole structure either source offers: thirteen windows of one cycle, one
+ambient triple each, and a flag for whether the ground is lit. Three intervals follow from it, and
+they are what the confirmed facts are about:
 
-| Our name | cycle span | preset | why there |
+| Interval | cycle span | what is true in it |
+|---|---|---|
+| light span | 19021 → 5400 (through 0) | the ambient is neutral `(0,0,0)` except in the warm band, and the ground is never lit |
+| warm band | 1800 → 3600 | inside the light span: positive red and green blend the picture toward a warm tint |
+| dark span | 5400 → 19021 | the ambient is non-neutral throughout, with a ramp at each end |
+| ground-light interval | 8100 → 18900 | strictly **inside** the dark span: the tile light is computed and the ground is faded |
+
+Two consequences a four-phase sketch hides. The ground-light interval is narrower than the dark
+span — the picture starts dimming at 5400, three hours of our clock before the tile lights come on,
+and they go off at 18900 while the ambient is still ramping back. And the dark span is longer than
+the light one: 13 621 ticks against 7 979, so the cycle is not half and half.
+
+### Phases of the day are our vocabulary — unknown
+
+Neither source names a phase. In the original the routine is a chain of numeric comparisons against
+the threshold array; the clone names nothing but the table and the two flags — `_lightPhazes`,
+`_bLightGround`, `_bLightEff`
+([`game.cpp:1762-1893`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L1762-L1893)).
+There is no morning, noon, evening, dusk, night or dawn in the light code, and the clone's other
+reads of the counter name nothing either.
+
+So:
+
+- the confirmed object is an **interval of the cycle** — a `tick % 21600` range with its ambient
+  triple and its ground-light flag;
+- **day / dusk / night / dawn are our words**. Any assignment of windows to them is a convention of
+  ours and must be shown as one;
+- in particular, a four-part trace **day → dusk → night → dawn is not a confirmed property of the
+  cycle**. The windows do not fall into four consecutive named spans: the neutral `(0,0,0)` returns
+  three times (window 1, the tail of 4 plus 5, and the tail of 13), and the warm band sits inside a
+  light span rather than at its edge. A test or a UI that needs a trace asserts the **interval**
+  trace — the twelve thresholds, the two ramp lengths at each end of the dark span and the
+  ground-light interval — and not four names changing in a fixed order.
+
+The four presets below stay useful as places to stand a camera; they are not boundaries and no test
+should rest on their names.
+
+### The hour we display — our convention, not a fact about K1
+
+AC2 of #87 asks for a clock reading, and the original shows no confirmed one, so the mapping is
+ours and is recorded here as such:
+
+- **21600 ticks of one cycle stand for 24:00**, so 15 ticks to a minute and 900 to an hour;
+- **cycle tick 0 reads 06:00**, which makes window 1 a morning rather than a midnight;
+- the hour is a **pure function of the simulation tick** — the viewer keeps no time of its own and
+  accumulates nothing;
+- **nothing in the phase or lighting logic reads the displayed hour.** Phases and light are
+  computed from ticks and the interval table above; the hour is a label on the same tick.
+
+Under that offset the intervals land at: light 03:08 → 12:00, warm band 08:00 → 10:00, dimming from
+12:00, ground lights 15:00 → 03:00, neutral again at 03:08. The night is longer than the day
+because the dark span is longer, which is the data, not the mapping; another offset would move the
+same asymmetry, not remove it. This hour is unrelated to the 1440 divisor in the code
+([below](#a-unit-of-1440-ticks)).
+
+### Display presets (ours)
+
+| Our name | preset tick | window | what is on screen there |
 |---|---|---|---|
-| day | 0 – 1800 | 900 | neutral, before the warm window |
-| dusk | 1800 – 3600 | 2700 | the middle of the warm plateau of window 3 |
-| night | 8100 – 18900 | 11000 | past the window-8 ramp, deep in the dark span |
-| dawn | 18900 – ~19021 | 18960 | inside the 121-tick ramp back to neutral |
+| day | 900 | 1 | neutral ambient, ground unlit — 07:00 on our clock |
+| dusk | 2700 | 3 | the warm plateau, ground unlit — the middle of the warm band |
+| night | 11000 | 10 | the dark plateau with the ground lit, past the window-8 ramp |
+| dawn | 18960 | 13 | inside the 121-tick ramp back to neutral, ground unlit |
+
 
 ## Hypotheses
 
-- **A new game starts the cycle at 0.** The counter is initialised to 0 and no reset at
-  map load was found (**by Slavik**
-  [`game.cpp:2426`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L2426)).
-  Our own check stops short of it: we confirmed the counter has exactly two increment
-  sites, not that nothing ever writes it.
-- **The hour is not saved.** The clone's save and load code does not mention a counter;
-  we did not test it against a written save. A loaded game would then begin its cycle at
-  0 regardless of when it was saved.
+- **A new game starts the cycle at 0.** A state-init routine really does store 0 into the counter
+  (rus `0x281DB`, `VA 0x437DEB` — ours), and the clone shows the same at
+  [`game.cpp:2426`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L2426).
+  What is not established is which moments run that routine: we did not check that a map load or a
+  save load reaches it.
+- **The hour travels with a saved game.** Three sites copy the counter into consecutive slots of a
+  record and its address is handed to the routine other state fields are serialized through (the
+  table above — ours). The clone's save code never names the counter, so we keep this a hypothesis:
+  deciding it needs a written save, which we have not parsed.
 - **A `(-1,-1,-1)` slot means "this map has no constant light".** It is the only reading
   consistent with the three non-sentinel entries being the three maps the clone lists.
 - **1440 ticks is one unit of village business**, not an hour.
@@ -241,6 +303,10 @@ reading aid over the table, and the preset ticks are **our choice** inside the w
   `(−60,−50,−70)` in windows 9 to 11. The clone calls the variable a light effect; whether
   the original meant lightning, moonlight or nothing visible is not established. Night
   lighting may be built on the two palettes as data, but no cause may be claimed for it.
+- **What the windows mean as hours of a day.** Neither source names a phase, so which of them the
+  authors thought of as evening or midnight is not recovered — see
+  [Phases of the day are our vocabulary](#phases-of-the-day-are-our-vocabulary--unknown). Nothing
+  here depends on it: every claim is about an interval of ticks.
 - **Where in the cycle a load begins**, beyond the hypothesis above.
 - **Which maps the game treats as constant-light maps**, as distinct from which slots
   carry a colour: the deciding flag's table is not located.
@@ -257,9 +323,12 @@ Deliberate, recorded next to the facts they bend:
 
 - **One tick per game tick, no speed multiplier.** The original adds `1 + speed` counter
   steps per frame, which makes the length of a day depend on a control that has nothing
-  to do with the world. Our day is 21600 ticks of the single scene clock, 21.6 minutes at
-  the 60 ms tick; a modern game speed, when it comes, will change how fast the clock
-  advances and never the cycle.
+  to do with the world. Our day is 21600 ticks of the simulation's own tick — the counter
+  `Simulation::tick` advances, not a second clock; 21.6 minutes at the 60 ms tick. A modern
+  game speed, when it comes, will change how fast that tick advances and never the cycle.
+- **A clock face the original may not have.** The original's interface shows no confirmed hour,
+  so the HH:MM the viewer shows is our display convention over the tick, and it stays a label:
+  no rule reads it.
 - **No per-draw random.** The light colour `16..23, 8..11, 0` is re-rolled every draw, so
   it is a function of frame rate. A flicker we keep must become a function of the tick.
 - **Deterministic night variants.** If the coin flip is implemented, it is drawn from the
@@ -269,9 +338,13 @@ Deliberate, recorded next to the facts they bend:
 ## What the next tickets take from this page
 
 - #95 takes the cycle length, the two increment sites and the wording "the lighting
-  computation is gated, the day counter keeps running" — and the game-time value must
-  come from the one simulation tick position the viewer already keeps, not from a second
-  clock.
-- #96 takes the window table, the per-channel blend rules, the three surfaces treated
-  differently, the constant-light array and the preset ticks.
+  computation is gated, the day counter keeps running". Game time is the simulation's own tick
+  (`Simulation::tick_number()`): the viewer derives everything from it and accumulates nothing,
+  and the contract a test asserts is the **interval** trace — the twelve thresholds and the
+  ground-light interval — because the four day names are ours, not the game's. The displayed hour
+  is the linear 24-hour reading defined
+  [above](#the-hour-we-display--our-convention-not-a-fact-about-k1).
+- #96 takes the interval table, the window table, the per-channel blend rules, the three surfaces
+  treated differently, the constant-light array and the preset ticks — as places to stand the
+  camera, never as boundaries.
 - #97 takes the two-option table.
