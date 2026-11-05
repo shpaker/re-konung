@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bevy::{
@@ -29,11 +30,11 @@ use bevy::{
 use kn_game::{Game, MapRef, MapSource, Piece, SceneOptions, TICK_MS, group_is_shown};
 use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
-    AnimPlugin, AnimSet, CameraApply, CameraBounds, CameraInput, CameraState, Clock,
-    CreatureAnimReport, CreatureAnimationPlugin, CreatureMotion, CreatureNode,
+    AnimPlugin, AnimSet, Animator, CameraApply, CameraBounds, CameraInput, CameraState, Clock,
+    CreatureAnim, CreatureAnimReport, CreatureAnimationPlugin, CreatureMotion, CreatureNode,
     CreatureNodesVisible, CreatureRoot, CreatureSet, CreatureShadow, CreatureSim, CreatureSprite,
     GameResource, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup,
-    ScenePiece, TextureCache, clear_scene, load_scene, ortho_scale, reset_creature_sim,
+    ScenePiece, Sequence, TextureCache, clear_scene, load_scene, ortho_scale, reset_creature_sim,
 };
 use kn_ui::{dark_theme, pointer_over_ui, sync_checked};
 
@@ -765,13 +766,16 @@ const LABEL_OFFSET_Y: f32 = 50.0;
 /// `KN_CREATURE_DEBUG` in the environment to log, per creature id, the simulation
 /// tick, cell, step from/to, `step_elapsed`, the cell pixel the node sits on, the
 /// node position and z as this frame writes them, and the simulation's own
-/// facing direction; [`sync_creature_animation`] adds each sprite's clip, anchor,
-/// phase and shown frame with its local offset and the world position as it will
-/// be drawn (the frame's `GlobalTransform`s are only propagated at the end of the
-/// update, so reading them would log the previous frame). Comparing
-/// `sim_dir`/`from`/`to` (which change only at a logical tick) with the sprite's
-/// world position separates a node jump from an image jump: the node only ever
-/// sits on cell pixels, the glide to the next cell lives in the frame offsets.
+/// facing direction; the same pass ([`sync_creature_labels`]) adds each sprite's
+/// chosen clip — named by [`clip_identity`] against the clips the subsystem built
+/// — with its anchor, phase and shown frame, its local offset and the world
+/// position as it will be drawn (the frame's `GlobalTransform`s are only
+/// propagated at the end of the update, so reading them would log the previous
+/// frame). Comparing `sim_dir`/`from`/`to` (which change only at a logical tick)
+/// with the sprite's world position separates a node jump from an image jump: the
+/// node only ever sits on cell pixels, the glide to the next cell lives in the
+/// frame offsets. The logging stays here, in the viewer: the shared subsystem in
+/// `kn-render` writes no diagnostics of its own.
 static CREATURE_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 fn creature_debug() -> bool {
@@ -839,8 +843,11 @@ fn spawn_creature_labels(
 fn sync_creature_labels(
     sim: Res<CreatureSim>,
     clock: Res<Clock>,
+    anim: Res<CreatureAnim>,
     sprites: Query<(&CreatureSprite, &Transform), Without<CreatureShadow>>,
     nodes: Query<(&CreatureNode, &Transform)>,
+    // Read-only over the sprites, so it overlaps the queries above freely.
+    clips: Query<(&CreatureSprite, &Animator, &Transform)>,
     // `Without<CreatureNode>` on top of `Without<CreatureSprite>`: this pass
     // writes the `Transform` the two queries above read, and Bevy cannot prove
     // an entity never carries both (B0001).
@@ -919,6 +926,70 @@ fn sync_creature_labels(
             state.walk_state,
         );
     }
+    for (tag, animator, transform) in &clips {
+        let local = transform.translation;
+        // The world position as it will be drawn: this frame's cell pixel plus
+        // this sprite's local offset. The sprite's own `GlobalTransform` still
+        // holds the previous frame — propagation runs at the end of the update.
+        let (world_x, world_y) = drawn
+            .get(&tag.creature_id)
+            .map_or((local.x, local.y), |&(x, y)| {
+                (x as f32 + local.x, -(y as f32) + local.y)
+            });
+        let chosen = clip_identity(&anim, tag, &animator.sequence);
+        info!(
+            "creature #{} {} clip={} base={} corner={:?} shown={:?} anchor=({},{}) phase={} \
+             local=({:.1},{:.1}) world=({:.1},{:.1})",
+            tag.creature_id,
+            if tag.is_shadow { "shadow" } else { "body" },
+            chosen
+                .as_ref()
+                .map_or("foreign", |(kind, _, _)| kind.as_str()),
+            chosen.as_ref().map_or(0, |(_, base, _)| *base),
+            chosen.as_ref().map(|(_, _, corner)| *corner),
+            animator.shown(),
+            animator.x,
+            animator.y,
+            animator.phase,
+            local.x,
+            local.y,
+            world_x,
+            world_y,
+        );
+    }
+}
+
+/// Names the clip an animator holds — `rest`, `walk[dir]` or `special` — by
+/// matching its `Arc` against the clips the subsystem built for that layer, so
+/// the debug line says what is on screen without the viewer choosing a clip
+/// itself. `None` when the animator carries a sequence of its own.
+fn clip_identity(
+    anim: &CreatureAnim,
+    tag: &CreatureSprite,
+    sequence: &Arc<Sequence>,
+) -> Option<(String, usize, (i32, i32))> {
+    let sequences = anim.creatures.get(&tag.creature_id)?;
+    let layer = if tag.is_shadow {
+        &sequences.shadow
+    } else {
+        sequences.body.get(&tag.layer)?
+    };
+    std::iter::once(("rest".to_string(), layer.rest.as_ref()))
+        .chain(
+            layer
+                .walk
+                .iter()
+                .enumerate()
+                .map(|(dir, clip)| (format!("walk[{dir}]"), clip.as_ref())),
+        )
+        .chain(std::iter::once((
+            "special".to_string(),
+            layer.special.as_ref(),
+        )))
+        .find_map(|(kind, clip)| {
+            clip.filter(|clip| Arc::ptr_eq(&clip.sequence, sequence))
+                .map(|clip| (kind, clip.base, clip.corner))
+        })
 }
 
 /// Как состояние воспроизведения подписать в диагностике.
