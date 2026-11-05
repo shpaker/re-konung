@@ -67,6 +67,9 @@ pub struct Seed {
 /// One creature's slot inside a [`Machine`].
 #[derive(Debug, Clone, Copy)]
 struct Entry {
+    /// The stable identifier this slot was seeded with, so first-seen order
+    /// (push order) can be replayed without a `HashMap` iteration.
+    id: usize,
     /// The state the file recorded (0, 4 or 6 in the shipped data).
     recorded_state: u8,
     /// Frames of the state-4 sequence, or 0 when there is none.
@@ -90,8 +93,9 @@ pub struct Machine {
     entries: Vec<Entry>,
     /// Maps `Creature::id` (a character record slot, sparse) into `entries`.
     index: HashMap<usize, usize>,
-    /// Number of stage changes since the machine was created. Ordinary frame
-    /// advances do not count. Reset on every [`Machine::enter_world`].
+    /// Number of stage changes since the last [`Machine::enter_world`].
+    /// Ordinary frame advances do not count. Reset on every
+    /// [`Machine::enter_world`].
     pose_rebuilds: u64,
 }
 
@@ -100,45 +104,36 @@ impl Machine {
         Self::default()
     }
 
-    /// Explicit "the creature entered the world" event. Idempotent per id:
-    /// calling it again with the same set re-seeds those creatures to the
-    /// state the file describes and counts one pose rebuild per creature whose
-    /// stage actually changed. A state-4 seed starts at `Special { frame: 0 }`;
-    /// every other seed starts at Idle.
+    /// Define the world: after this call the machine holds exactly the given
+    /// seeds and nothing else. The previous contents are dropped — creatures
+    /// absent from `seeds` are removed, so a new world (map change, re-entry,
+    /// reset) is one `enter_world` with that world's seeds. The rebuild counter
+    /// restarts from this call and counts one rebuild per freshly-seeded
+    /// state-4 creature that starts in Special.
     ///
-    /// The seeds are the file's records, so this is also the reset the viewer's
-    /// `Play → Off → Play` path needs: recreate the machine and reseed from the
-    /// file. The clock is the caller's; the machine only tracks stages.
+    /// Each seed is initialized as [`initial_stage`] decides: a state-4 record
+    /// with a sequence starts at `Special { frame: 0 }`, every other seed at
+    /// Idle. The seeds are the file's records, so this is the reset the viewer's
+    /// `Play → Off → Play` path needs. The clock is the caller's; the machine
+    /// only tracks stages.
     pub fn enter_world(&mut self, seeds: impl IntoIterator<Item = Seed>) {
+        self.entries.clear();
+        self.index.clear();
+        self.pose_rebuilds = 0;
         for seed in seeds {
             let stage = initial_stage(&seed);
-            let changed = match self.index.get(&seed.id).copied() {
-                Some(position) => {
-                    let entry = &mut self.entries[position];
-                    // Only a stage-kind change (Special ↔ Idle) means the
-                    // render has to swap clips; re-seeding inside the same
-                    // kind is a plain re-anchor, not a rebuild.
-                    let changed = entry.stage.is_special() != stage.is_special();
-                    entry.recorded_state = seed.recorded_state;
-                    entry.special_frames = seed.special_frames;
-                    entry.stage = stage;
-                    changed
-                }
-                None => {
-                    self.index.insert(seed.id, self.entries.len());
-                    self.entries.push(Entry {
-                        recorded_state: seed.recorded_state,
-                        special_frames: seed.special_frames,
-                        stage,
-                        reported: Stage::Idle,
-                    });
-                    // A freshly seeded state-4 creature had no stage before, so
-                    // "changed" here means "will be drawn by the special clip
-                    // rather than the resting clip" — the same rebuild event.
-                    stage.is_special()
-                }
-            };
-            if changed {
+            self.index.insert(seed.id, self.entries.len());
+            self.entries.push(Entry {
+                id: seed.id,
+                recorded_state: seed.recorded_state,
+                special_frames: seed.special_frames,
+                stage,
+                reported: Stage::Idle,
+            });
+            // A freshly seeded state-4 creature starts in Special where it had
+            // no stage before: the render will draw the special clip rather
+            // than the resting clip, which is one pose rebuild (issue #70 AC6).
+            if stage.is_special() {
                 self.pose_rebuilds += 1;
             }
         }
@@ -235,9 +230,9 @@ impl Machine {
             .map(|&position| self.entries[position].special_frames)
     }
 
-    /// Counted pose rebuilds since the machine was created: one per creature
-    /// whose stage actually changed. Proves the AC6 bound of issue #70 — an
-    /// ordinary tick must not touch a pose.
+    /// Counted pose rebuilds since the last [`Machine::enter_world`]: one per
+    /// creature whose stage actually changed. Proves the AC6 bound of issue
+    /// #70 — an ordinary tick must not touch a pose.
     pub fn pose_rebuilds(&self) -> u64 {
         self.pose_rebuilds
     }
@@ -252,9 +247,9 @@ impl Machine {
             })
     }
 
-    /// Every seeded id, in the order they were first seen.
+    /// Every seeded id, in the order they were first seen (seed order).
     pub fn ids(&self) -> impl Iterator<Item = usize> + '_ {
-        self.index.keys().copied()
+        self.entries.iter().map(|entry| entry.id)
     }
 
     /// Creatures whose stage kind (Special vs Idle) differs from what was last
@@ -431,25 +426,64 @@ mod tests {
 
     #[test]
     fn a_reseed_with_the_same_stage_does_not_count_a_rebuild() {
+        // An all-idle world costs no rebuild, even after a re-entry: the
+        // reset clears and reseeds to Idle, which never enters Special.
         let mut machine = Machine::new();
         machine.enter_world([seed(1, 6, 0)]);
-        let before = machine.pose_rebuilds();
+        assert_eq!(machine.pose_rebuilds(), 0);
         machine.enter_world([seed(1, 6, 0)]);
-        assert_eq!(machine.pose_rebuilds(), before);
+        assert_eq!(machine.pose_rebuilds(), 0);
+        assert_eq!(machine.stage(1), Some(Stage::Idle));
     }
 
     #[test]
     fn a_reseed_after_the_special_ended_counts_one_rebuild() {
-        // Off → Play on a state-4 creature: the fresh seed brings the stage
-        // from Idle back to Special, which the render pays as one rebuild.
+        // Off → Play on a state-4 creature: the reset brings the stage from
+        // Idle back to Special, which the render pays as exactly one rebuild.
+        // Because enter_world re-initializes, the counter restarts from this
+        // call rather than accumulating across the reused machine.
         let mut machine = Machine::new();
         machine.enter_world([seed(1, 4, 2)]);
         machine.tick();
         machine.tick();
         assert_eq!(machine.stage(1), Some(Stage::Idle));
-        let before = machine.pose_rebuilds();
         machine.enter_world([seed(1, 4, 2)]);
-        assert_eq!(machine.pose_rebuilds(), before + 1);
+        assert_eq!(machine.stage(1), Some(Stage::Special { frame: 0 }));
+        assert_eq!(machine.pose_rebuilds(), 1);
+    }
+
+    #[test]
+    fn ids_are_returned_in_seed_order() {
+        let mut machine = Machine::new();
+        machine.enter_world([seed(30, 4, 1), seed(10, 4, 1), seed(20, 4, 1)]);
+        assert_eq!(machine.ids().collect::<Vec<_>>(), vec![30, 10, 20]);
+    }
+
+    #[test]
+    fn re_initialization_drops_creatures_absent_from_the_new_world() {
+        let mut machine = Machine::new();
+        machine.enter_world([seed(1, 4, 4), seed(2, 0, 0)]);
+        // A disjoint world: the first set must be gone, not left as phantoms.
+        machine.enter_world([seed(3, 4, 4)]);
+        assert_eq!(machine.stage(1), None);
+        assert_eq!(machine.stage(2), None);
+        assert_eq!(machine.stage(3), Some(Stage::Special { frame: 0 }));
+        assert_eq!(machine.ids().collect::<Vec<_>>(), vec![3]);
+    }
+
+    #[test]
+    fn re_initialization_resets_the_rebuild_counter() {
+        // A run that raised the counter above zero, then a fresh world of a
+        // different kind, must count only from that new call.
+        let mut machine = Machine::new();
+        machine.enter_world([seed(1, 4, 2), seed(2, 4, 2)]);
+        machine.tick();
+        machine.tick(); // both specials land in Idle: counter is now > 0
+        assert!(machine.pose_rebuilds() > 0);
+        machine.enter_world([seed(3, 0, 0)]);
+        assert_eq!(machine.pose_rebuilds(), 0, "an all-idle world costs none");
+        machine.enter_world([seed(4, 4, 4)]);
+        assert_eq!(machine.pose_rebuilds(), 1, "one special is one rebuild");
     }
 
     #[test]
