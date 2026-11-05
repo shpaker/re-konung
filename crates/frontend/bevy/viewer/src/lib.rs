@@ -1664,7 +1664,7 @@ fn game_time_line(sim: Option<&Simulation>) -> String {
     };
     let time = simulation.game_time();
     format!(
-        "\ntime {:02}:{:02} · {} · day {} · {}%",
+        "\nclock {:02}:{:02} · {} · day {} of the cycle · {}%",
         time.clock_hour,
         time.clock_minute,
         phase_label(time.phase),
@@ -2638,7 +2638,7 @@ mod tests {
         assert_eq!(simulation.game_time().cycle_tick, 317);
         assert_eq!(
             game_time_line(Some(&simulation)),
-            "\ntime 06:21 · day · day 0 · 1%"
+            "\nclock 06:21 · day · day 0 of the cycle · 1%"
         );
     }
 
@@ -2797,6 +2797,47 @@ mod tests {
                 "смена карты не должна проматывать накопленную историю"
             );
         }
+    }
+
+    /// The day recreates with the map: game time is derived from the fresh
+    /// simulation's own tick, so a map change cannot carry a running day across —
+    /// there is no second accumulator on the tracker or in the viewer to leak it.
+    #[test]
+    fn a_map_change_recreates_the_day_with_the_simulation() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let mut app = time_app(game, map_ref, 400);
+        app.update();
+        assert_eq!(time_of(&app).cycle_tick, 400, "the first map runs a day");
+
+        // The map-change path: a fresh simulation, the epoch pinned to the clock.
+        let fresh = app
+            .world()
+            .resource::<GameResource>()
+            .0
+            .simulation(map_ref, SIM_SEED)
+            .unwrap();
+        app.world_mut().resource_mut::<SimulationResource>().sim = Some(fresh);
+        let clock_ticks = app.world().resource::<Clock>().ticks;
+        app.world_mut().resource_mut::<SimTickTracker>().epoch = clock_ticks;
+        app.world_mut().resource_mut::<SimTickTracker>().sim_ticks = 0;
+        app.update();
+
+        let time = time_of(&app);
+        assert_eq!(
+            (time.day, time.cycle_tick),
+            (0, 0),
+            "the new map starts its own day at the epoch"
+        );
+        app.world_mut().resource_mut::<Clock>().ticks = clock_ticks + 5;
+        app.update();
+        assert_eq!(
+            time_of(&app).cycle_tick,
+            5,
+            "and continues from there alone"
+        );
     }
 
     /// A backward `Step` rewinds the clock below the simulation's own timeline;
