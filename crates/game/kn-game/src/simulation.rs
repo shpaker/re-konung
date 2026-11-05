@@ -153,6 +153,11 @@ impl Simulation {
         self.tick
     }
 
+    /// Time of day derived from the simulation tick — no independent clock.
+    pub fn game_time(&self) -> k1_game::time_of_day::GameTime {
+        k1_game::time_of_day::game_time(self.tick)
+    }
+
     pub fn creature_count(&self) -> usize {
         self.ids.iter().filter(|id| id.is_some()).count()
     }
@@ -536,5 +541,149 @@ mod tests {
             ],
             "the renderer still gets the refused creature at its record cell"
         );
+    }
+
+    // ── game time derived from the simulation tick ──
+
+    use k1_game::time_of_day::{self, Ambient, DayPhase, GameTime};
+
+    /// The seed the `simulation` helper uses, and another one, to show the time of
+    /// day does not depend on which run produced the tick.
+    const RUN_SEED: u64 = 7;
+    const OTHER_SEED: u64 = 99;
+
+    /// Stepping one full cycle of the real simulation reproduces the interval trace
+    /// `docs/k1/time-of-day.md` records: the ground light opens at 8100 and closes at
+    /// 18900, and the reported state changes at 1800, 3570, 5400 and at 19021, where
+    /// window 13's ramp reaches neutral. The other thresholds open ramps, which the
+    /// plateau model of this ticket cannot see — the lighting ticket models them.
+    #[test]
+    fn full_cycle_reproduces_the_interval_trace() {
+        let map = open_map(|_, _| false);
+        let spawn = Rect {
+            left: 4,
+            top: 4,
+            right: 8,
+            bottom: 8,
+        };
+        let state = roaming_state(spawn, &[(5, 5)]);
+        let mut sim = simulation(&map, &state, 1);
+
+        let mut boundaries: Vec<u64> = Vec::new();
+        let mut prev = sim.game_time();
+        for _ in 0..time_of_day::CYCLE_TICKS {
+            sim.tick();
+            let gt = sim.game_time();
+            if gt.ambient != prev.ambient || gt.ground_lit != prev.ground_lit {
+                boundaries.push(gt.cycle_tick);
+            }
+            prev = gt;
+        }
+
+        assert_eq!(boundaries, vec![1800, 3570, 5400, 8100, 18900, 19021]);
+    }
+
+    /// The accessor is the model, not a copy of it: what the running simulation
+    /// reports equals what the pure function reports for the same tick, including
+    /// the four-name reading of DayPhase, which is our convention and not a named
+    /// property of the original.
+    #[test]
+    fn the_simulation_reports_exactly_the_model() {
+        let map = open_map(|_, _| false);
+        let spawn = Rect {
+            left: 4,
+            top: 4,
+            right: 8,
+            bottom: 8,
+        };
+        let state = roaming_state(spawn, &[(5, 5)]);
+        let mut sim = simulation(&map, &state, 1);
+
+        for tick in 1..=600u64 {
+            sim.tick();
+            assert_eq!(sim.game_time(), time_of_day::game_time(tick), "at {tick}");
+        }
+        assert_eq!(sim.game_time().phase, DayPhase::Day);
+    }
+
+    /// Game time is a function of the simulation tick, so it cannot drift with the
+    /// run: a different seed at the same tick reads the same time, and a simulation
+    /// rebuilt and replayed to a tick reports the time the forward run reached there
+    /// — the property the viewer's backward step rests on (#68).
+    #[test]
+    fn game_time_follows_the_tick_and_not_the_run() {
+        let map = open_map(|_, _| false);
+        let spawn = Rect {
+            left: 4,
+            top: 4,
+            right: 8,
+            bottom: 8,
+        };
+        let state = roaming_state(spawn, &[(5, 5)]);
+        const TICKS: u64 = 400;
+
+        let run = |seed: u64| -> Vec<GameTime> {
+            let mut sim = Simulation::new(
+                &map,
+                &state,
+                MAP_NUMBER,
+                None,
+                vec![[2; DIRECTION_COUNT]; 1],
+                Vec::new(),
+                seed,
+            );
+            (0..TICKS)
+                .map(|_| {
+                    sim.tick();
+                    sim.game_time()
+                })
+                .collect()
+        };
+
+        assert_eq!(run(RUN_SEED), run(OTHER_SEED));
+
+        let mut replayed = Simulation::new(
+            &map,
+            &state,
+            MAP_NUMBER,
+            None,
+            vec![[2; DIRECTION_COUNT]; 1],
+            Vec::new(),
+            RUN_SEED,
+        );
+        for _ in 0..TICKS {
+            replayed.tick();
+        }
+        assert_eq!(replayed.game_time(), run(RUN_SEED)[(TICKS - 1) as usize]);
+        assert_eq!(replayed.game_time(), time_of_day::game_time(TICKS));
+    }
+
+    /// Game time is recreated with the simulation, not remembered: a fresh
+    /// Simulation reports tick 0, day 0, cycle_tick 0.
+    #[test]
+    fn game_time_never_drifts_and_resets_with_a_fresh_simulation() {
+        let map = open_map(|_, _| false);
+        let spawn = Rect {
+            left: 4,
+            top: 4,
+            right: 8,
+            bottom: 8,
+        };
+        let state = roaming_state(spawn, &[(5, 5)]);
+
+        let mut sim1 = simulation(&map, &state, 1);
+        let mut sim2 = simulation(&map, &state, 1);
+        for _ in 0..1000 {
+            sim1.tick();
+            sim2.tick();
+        }
+        assert_eq!(sim1.game_time(), sim2.game_time());
+
+        let fresh = simulation(&map, &state, 1);
+        let gt = fresh.game_time();
+        assert_eq!(gt.day, 0);
+        assert_eq!(gt.cycle_tick, 0);
+        assert_eq!(gt.phase, DayPhase::Day);
+        assert_eq!(gt.ambient, Ambient::Neutral);
     }
 }
