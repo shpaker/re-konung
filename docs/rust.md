@@ -764,6 +764,23 @@ sets a creature's world position. `CreaturePiece` and `update_shadow_depth` are 
   from `cargo test --profile release`). A rewind is a one-off after the press,
   not a per-frame cost, and a reset pins the epoch so rewinding just past it
   replays almost nothing.
+- **A pose rebuild is paid per state change, never per frame (issue #70 AC6).**
+  The state-4 special is a per-creature state machine in the game layer
+  (`k1_game::creature_anim::Machine`) that owns no clock; the viewer reads its
+  stage each frame and rebuilds a creature's pose — the clip swap in
+  `sync_creature_animation` — only when the stage *kind* flips (Special ↔ Idle),
+  never when a plain tick advances the frame counter inside a running special
+  (`the_stage_snapshot_rebuilds_only_on_a_state_kind_flip`,
+  `counted_run_shows_one_rebuild_per_state_change_and_none_per_frame`). The
+  bound is measured over the real shipped population rather than eyeballed:
+  across every `Game.0`–`Game.2` of both editions — all 404 state-4 records
+  (249 Skeleton, 152 Eechetik, 3 Ion) — a full map load plus the ticks that
+  finish every sequence count exactly two rebuilds per creature (entering the
+  special, and its Special → idle edge), and a thousand further idle ticks
+  count zero (`pose_rebuilds_count_one_per_state_four_creature_and_no_more`).
+  The comparison that matters is against the per-frame path: a creature sitting
+  in its idle pose pays no rebuild no matter how long it stands, so the cost is
+  O(state changes) per creature, not O(ticks).
 - **Order outcomes are consumed, not dropped (P2 #4).** `Simulation::tick`
   applies decisions through `rules::FailedOrderCooldown` (one route search per
   `WorldRules::repath_cooldown_ticks` for a creature whose goals keep failing,

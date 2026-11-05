@@ -5,6 +5,7 @@
 //! `konung/k1/render.py`, живёт здесь. Bevy не используется — логика
 //! проверяется headless.
 
+pub mod creature_anim;
 pub mod creatures;
 pub mod placement;
 pub mod resources;

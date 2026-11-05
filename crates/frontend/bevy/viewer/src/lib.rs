@@ -215,6 +215,12 @@ struct CreatureAnim {
     /// step-relative like the original's `Frame` counter (Slavik
     /// `game_play.cpp:3727-3740`) instead of free-running against the global clock.
     locked: HashMap<usize, (StepKey, u32)>,
+    /// Last animation stage kind (Special vs Idle) per creature (issue #70).
+    /// The state machine's `drain_changed` reports a Special → Idle edge once,
+    /// but the reset path (`Play → Off → Play`, [`reset_animation`]) recreates
+    /// the whole machine so the first observation after the reset must also
+    /// count as a change; the viewer keeps its own snapshot for that.
+    stages: HashMap<usize, bool>,
 }
 
 /// What identifies the step a creature is on, for [`CreatureAnim::locked`].
@@ -250,6 +256,21 @@ impl CreatureAnim {
         }
         restep
     }
+
+    /// Creatures whose animation stage kind (Special ↔ Idle) changed since the
+    /// last observation (issue #70 AC6). The list drives exactly one pose
+    /// rebuild per creature per state change: a plain frame advance inside a
+    /// running Special is not a change and must not appear here.
+    fn observe_stages(&mut self, states: &[(usize, bool)]) -> HashSet<usize> {
+        let mut changed = HashSet::new();
+        for &(id, in_special) in states {
+            let previous = self.stages.insert(id, in_special);
+            if previous != Some(in_special) {
+                changed.insert(id);
+            }
+        }
+        changed
+    }
 }
 
 /// Sequences for one creature's pieces: `body` by Characters-group layer index,
@@ -259,10 +280,13 @@ struct CreatureSequences {
     shadow: LayerSequences,
 }
 
-/// Resting sequence and one per walk direction for a single layer.
+/// Resting sequence, one per walk direction, and — for a dynamic creature
+/// whose record carries state 4 — the one-shot appearance or transformation
+/// clip the state machine plays once on world load (issue #70).
 struct LayerSequences {
     rest: Option<Clip>,
     walk: Vec<Option<Clip>>,
+    special: Option<Clip>,
 }
 
 /// A built sequence and the frame it should show when play restarts. `corner`
@@ -329,7 +353,10 @@ fn build_creature_anim(
     };
     let mut seen = HashSet::new();
     for (_, anim) in &animations {
-        for clips in std::iter::once(&anim.rest).chain(anim.walk.iter().flatten()) {
+        for clips in std::iter::once(&anim.rest)
+            .chain(anim.walk.iter().flatten())
+            .chain(anim.special.iter())
+        {
             // Both the layer's static base and every animation frame are drawn.
             seen.extend(clips.layers.iter().filter_map(|layer| layer.base));
             seen.extend(clips.shadow.as_ref().and_then(|layer| layer.base));
@@ -384,6 +411,7 @@ fn build_creature_anim(
             .map(|(id, anim)| (id, build_sequences(&anim, cache)))
             .collect(),
         locked: HashMap::new(),
+        stages: HashMap::new(),
     }
 }
 
@@ -391,6 +419,22 @@ fn build_creature_anim(
 /// [`kn_game::LayerKey`], never by position: see [`pose_matched_layers`].
 fn build_sequences(anim: &CreatureAnimation, cache: &TextureCache) -> CreatureSequences {
     let matched = pose_matched_layers(&anim.rest.layers, &anim.walk);
+    // The state-4 clip is matched to each resting layer by the same key: the
+    // appearance sequence carries the same parts (body, equipment, shadow) as
+    // the idle, and an unmatched swap slides one part's clip onto another.
+    let special_matched: Vec<Option<&kn_game::CreatureLayer>> = anim
+        .rest
+        .layers
+        .iter()
+        .map(|rest_layer| {
+            anim.special.as_ref().and_then(|special| {
+                special
+                    .layers
+                    .iter()
+                    .find(|layer| layer.key == rest_layer.key)
+            })
+        })
+        .collect();
     let body = anim
         .rest
         .layers
@@ -402,7 +446,15 @@ fn build_sequences(anim: &CreatureAnimation, cache: &TextureCache) -> CreatureSe
                 .iter()
                 .map(|layer| clip_seq(*layer, cache))
                 .collect();
-            (index, LayerSequences { rest, walk })
+            let special = clip_seq(special_matched[index], cache);
+            (
+                index,
+                LayerSequences {
+                    rest,
+                    walk,
+                    special,
+                },
+            )
         })
         .collect();
     let rest = clip_seq(anim.rest.shadow.as_ref(), cache);
@@ -415,9 +467,18 @@ fn build_sequences(anim: &CreatureAnimation, cache: &TextureCache) -> CreatureSe
                 .and_then(|layer| clip_seq(Some(layer), cache))
         })
         .collect();
+    let special = anim
+        .special
+        .as_ref()
+        .and_then(|clips| clips.shadow.as_ref())
+        .and_then(|layer| clip_seq(Some(layer), cache));
     CreatureSequences {
         body,
-        shadow: LayerSequences { rest, walk },
+        shadow: LayerSequences {
+            rest,
+            walk,
+            special,
+        },
     }
 }
 
@@ -580,6 +641,13 @@ struct PlaybackToggle;
 /// от активаций других кнопок (у выпадющего списка карт они тоже бывают).
 #[derive(Component, Clone, Copy, Default)]
 struct ResetPositions;
+
+/// Кнопка "Reset animation" (issue #70 AC4): brings the clock and the
+/// creature state machine back to what the file records, so the next Play
+/// replays the state-4 special from frame 0. Distinct from "Reset positions",
+/// which returns creatures to their cell pixels but leaves the clock alone.
+#[derive(Component, Clone, Copy, Default)]
+struct ResetAnimation;
 
 /// Подпись элемента интерфейса, включающего оверлей.
 #[derive(Component, Clone, Copy, Default)]
@@ -808,6 +876,12 @@ fn panel(labels: Vec<String>, selected: usize) -> impl Scene {
             }
             ResetPositions
             on(reset_positions)
+            --
+            @FeathersButton {
+                @caption: bsn! { @caption("Reset animation") }
+            }
+            ResetAnimation
+            on(reset_animation)
             --
             @caption("") Diagnostics
         ]
@@ -1261,6 +1335,37 @@ fn reset_simulation(
     tracker.sim_ticks = 0;
 }
 
+/// Кнопка "Reset animation" (issue #70 AC4): the viewer's `Play → Off → Play`
+/// path. Zeroes the clock, puts `Viewer::playback` into `Off` and rebuilds the
+/// simulation so the fresh state machine reseeds every state-4 creature to
+/// `Special { frame: 0 }`. Nothing writes map data — the fresh simulation is
+/// what `Game::simulation` produces from the file. A later `Play` on the
+/// checkbox flips the state back to `Playing` and the special plays again.
+#[allow(clippy::too_many_arguments)]
+fn reset_animation(
+    activate: On<Activate>,
+    markers: Query<&ResetAnimation>,
+    game: Res<GameResource>,
+    viewer: Res<Viewer>,
+    mut viewer_state: ResMut<Viewer>,
+    mut clock: ResMut<Clock>,
+    mut sim: ResMut<SimulationResource>,
+    mut tracker: ResMut<SimTickTracker>,
+) {
+    if markers.get(activate.entity).is_err() {
+        return;
+    }
+    let Some(&map_ref) = viewer.maps.get(viewer.selected) else {
+        return;
+    };
+    // `goto(Off)` zeroes the clock and its sub-tick remainder, so the fresh
+    // simulation starts on tick 0 (the machine's frame 0), matching what the
+    // file records. The tracker's epoch follows the clock.
+    clock.goto(PlayState::Off);
+    viewer_state.playback = PlayState::Off;
+    reset_simulation(&game.0, map_ref, clock.ticks, &mut sim, &mut tracker);
+}
+
 const LABEL_OFFSET_Y: f32 = 50.0;
 
 /// Temporary per-creature diagnostics for the movement/animation review: set
@@ -1531,6 +1636,22 @@ fn sync_creature_animation(
     };
     let states = simulation.states();
     let restep = anim.observe_steps(&states);
+    // Issue #70 AC6: the pose is rebuilt at most once per creature, and only
+    // when the state machine's stage kind actually changed. A plain frame
+    // advance inside a running Special does not appear in `stage_changes` and
+    // must not trigger a swap on its own.
+    let stage_pairs: Vec<(usize, bool)> = states
+        .iter()
+        .map(|state| {
+            (
+                state.id,
+                simulation
+                    .creature_stage(state.id)
+                    .is_some_and(|stage| stage.is_special()),
+            )
+        })
+        .collect();
+    let stage_changes = anim.observe_stages(&stage_pairs);
     let facing: HashMap<usize, (bool, u8, u32)> = states
         .iter()
         .map(|state| {
@@ -1551,6 +1672,16 @@ fn sync_creature_animation(
         let Some(creature) = anim.creatures.get(&tag.creature_id) else {
             continue;
         };
+        // The state machine's answer drives clip choice: while a creature
+        // plays its state-4 special (issue #70), the special clip wins over
+        // walk and rest regardless of the simulation's walking state.
+        let in_special = simulation
+            .creature_stage(tag.creature_id)
+            .is_some_and(|stage| stage.is_special());
+        let special_frame = match simulation.creature_stage(tag.creature_id) {
+            Some(kn_game::simulation::CreatureStage::Special { frame }) => Some(frame),
+            _ => None,
+        };
         let layer = if tag.is_shadow {
             &creature.shadow
         } else {
@@ -1559,7 +1690,7 @@ fn sync_creature_animation(
                 None => continue,
             }
         };
-        let clip = select_clip(layer, walking, direction);
+        let clip = select_clip(layer, walking, direction, in_special);
         let Some(clip) = clip else { continue };
         if creature_debug() {
             let local = transform.translation;
@@ -1594,18 +1725,29 @@ fn sync_creature_animation(
                 world_y,
             );
         }
-        if Arc::ptr_eq(&animator.sequence, &clip.sequence) && !restep.contains(&tag.creature_id) {
+        if Arc::ptr_eq(&animator.sequence, &clip.sequence)
+            && !(restep.contains(&tag.creature_id) && !in_special)
+            && !stage_changes.contains(&tag.creature_id)
+        {
+            // A step re-anchor is a walk-cycle concern; a state-4 creature
+            // re-anchors only when its Arc changes (Special ↔ rest/walk) or
+            // when the state machine reports a stage-kind change (issue #70
+            // AC6: at most one rebuild per creature per state change).
             continue;
         }
         let Some(&origin) = spawns.origins.get(&tag.creature_id) else {
             continue;
         };
-        // The step began `elapsed - 1` ticks ago: opening the clip on its base
-        // frame there puts the shown frame at base + elapsed - 1 now — the
-        // step-relative index, correct even when catch-up first saw the step late.
-        let step_start = clock
-            .ticks
-            .saturating_sub(u64::from(elapsed.saturating_sub(1)));
+        // Anchor the swap so the current tick shows the correct frame: the
+        // special opens on the tick its frame counter started, the walk opens
+        // on the tick the step began (elapsed - 1 ago).
+        let step_start = if let Some(frame) = special_frame {
+            clock.ticks.saturating_sub(u64::from(frame))
+        } else {
+            clock
+                .ticks
+                .saturating_sub(u64::from(elapsed.saturating_sub(1)))
+        };
         apply_clip(&mut animator, clip, origin, step_start);
     }
 }
@@ -1628,10 +1770,22 @@ fn apply_clip(animator: &mut Animator, clip: &Clip, origin: (i32, i32), at_tick:
     );
 }
 
-/// Which clip a piece shows: the walk sequence for its facing direction while
-/// walking, otherwise the resting one. A missing walk direction falls back to
-/// resting, so an unmapped direction never blanks the creature.
-fn select_clip(layer: &LayerSequences, walking: bool, direction: u8) -> Option<&Clip> {
+/// Which clip a piece shows. The state machine's stage decides first: while a
+/// state-4 creature plays its appearance or transformation, its special clip
+/// wins regardless of the simulation's walking state, so the sequence reads as
+/// a one-shot appearance (issue #70). Otherwise: the walk sequence for the
+/// facing direction while walking, else the resting one. A missing walk
+/// direction falls back to resting, so an unmapped direction never blanks the
+/// creature.
+fn select_clip(
+    layer: &LayerSequences,
+    walking: bool,
+    direction: u8,
+    in_special: bool,
+) -> Option<&Clip> {
+    if in_special {
+        return layer.special.as_ref().or(layer.rest.as_ref());
+    }
     if walking && let Some(walk) = layer.walk.get(direction as usize).and_then(Option::as_ref) {
         return Some(walk);
     }
@@ -2044,8 +2198,9 @@ mod tests {
                     }
                 })
                 .collect(),
+            special: None,
         };
-        select_clip(&layer, walking, direction)
+        select_clip(&layer, walking, direction, false)
             .map(|clip| clip.base)
             .unwrap()
     }
@@ -2072,8 +2227,9 @@ mod tests {
             walk: (0..8)
                 .map(|d| if d == 5 { Some(clip_of(1)) } else { None })
                 .collect(),
+            special: None,
         };
-        let chosen = select_clip(&layer, true, 7).unwrap();
+        let chosen = select_clip(&layer, true, 7, false).unwrap();
         assert_eq!(chosen.base, 0);
     }
 
@@ -2082,9 +2238,94 @@ mod tests {
         let layer = LayerSequences {
             rest: Some(clip_of(0)),
             walk: Vec::new(),
+            special: None,
         };
-        let chosen = select_clip(&layer, true, 200).unwrap();
+        let chosen = select_clip(&layer, true, 200, false).unwrap();
         assert_eq!(chosen.base, 0, "направление вне таблицы не роняет выбор");
+    }
+
+    /// The state machine's Special stage picks the state-4 clip even while the
+    /// simulation reports the creature as walking (issue #70 AC2/AC5).
+    #[test]
+    fn in_special_picks_the_state_four_clip_winning_over_walk() {
+        let layer = LayerSequences {
+            rest: Some(clip_of(0)),
+            walk: (0..8).map(|_| Some(clip_of(1))).collect(),
+            special: Some(clip_of(2)),
+        };
+        let chosen = select_clip(&layer, true, 3, true).unwrap();
+        assert_eq!(chosen.base, 2, "the special wins over walk");
+    }
+
+    /// A creature the state machine has put in Idle returns to the resting or
+    /// walk clip on the next frame (issue #70 AC2: the transition into idle is
+    /// continuous — the machine hands back the pair without a hold).
+    #[test]
+    fn after_special_idle_picks_the_rest_clip() {
+        let layer = LayerSequences {
+            rest: Some(clip_of(0)),
+            walk: (0..8).map(|_| Some(clip_of(1))).collect(),
+            special: Some(clip_of(2)),
+        };
+        let chosen = select_clip(&layer, false, 3, false).unwrap();
+        assert_eq!(
+            chosen.base, 0,
+            "the idle pose after the special is the rest clip"
+        );
+    }
+
+    /// A missing special clip falls back to rest so a state-4 creature whose
+    /// sequence did not decode still draws something (never a blank).
+    #[test]
+    fn missing_special_falls_back_to_rest() {
+        let layer = LayerSequences {
+            rest: Some(clip_of(0)),
+            walk: Vec::new(),
+            special: None,
+        };
+        let chosen = select_clip(&layer, false, 3, true).unwrap();
+        assert_eq!(chosen.base, 0);
+    }
+
+    /// AC4 at the viewer's rebuild-gate: the stage snapshot reports a pose
+    /// rebuild only when a creature's animation-state kind flips. `Play →
+    /// Paused → Play` hands the same stage back (the clock stopped, so no tick
+    /// moved the machine) and must not rebuild; `Play → Off → Play` recreates
+    /// the machine, which reseeds a finished special back to Special, and that
+    /// re-entry must be reported so the clip is swapped back (issue #70).
+    #[test]
+    fn the_stage_snapshot_rebuilds_only_on_a_state_kind_flip() {
+        let mut anim = CreatureAnim::default();
+        // World load: the state-4 creature enters Special — reported once.
+        assert_eq!(
+            anim.observe_stages(&[(7, true)]),
+            [7].into_iter().collect::<HashSet<_>>(),
+            "entering the special is a rebuild"
+        );
+        // Play → Paused → Play: the clock did not advance, the caller feeds the
+        // same stage again; a resume must not pay a second rebuild.
+        assert!(
+            anim.observe_stages(&[(7, true)]).is_empty(),
+            "resuming an unchanged special is not a change"
+        );
+        // The sequence finishes into idle — reported once, then quiet.
+        assert_eq!(
+            anim.observe_stages(&[(7, false)]),
+            [7].into_iter().collect::<HashSet<_>>(),
+            "the Special → Idle edge is one rebuild"
+        );
+        assert!(
+            anim.observe_stages(&[(7, false)]).is_empty(),
+            "idle does not advance, so it is not a change"
+        );
+        // Play → Off → Play: `reset_animation` recreates the simulation, which
+        // reseeds the creature to `Special { frame: 0 }`; the first observation
+        // after the reset is a change so the special clip is chosen again.
+        assert_eq!(
+            anim.observe_stages(&[(7, true)]),
+            [7].into_iter().collect::<HashSet<_>>(),
+            "the replay after Off re-enters the special and rebuilds once"
+        );
     }
 
     #[test]

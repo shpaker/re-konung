@@ -366,9 +366,12 @@ impl Game {
         let state = state
             .ok_or_else(|| GameError::Io(std::io::Error::other("no game state for simulation")))?;
         let jobs = k1_game::creatures::job_slots(&state, map_ref.number as usize);
-        let step_table = self.resources.with_graphics(|graph, objects| {
+        let (step_table, special_frames) = self.resources.with_graphics(|graph, objects| {
             let roster = k1_game::creatures::roster(&state, map_ref.number as usize, hero);
-            k1_game::creatures::step_durations(&state, &roster, graph, objects)
+            let steps = k1_game::creatures::step_durations(&state, &roster, graph, objects);
+            let specials =
+                k1_game::creatures::special_frame_counts(&state, &roster, graph, objects);
+            (steps, specials)
         })?;
         Ok(simulation::Simulation::new(
             &konung_map,
@@ -376,6 +379,7 @@ impl Game {
             map_ref.number as usize,
             hero,
             step_table,
+            special_frames,
             jobs,
             seed,
         ))
@@ -396,13 +400,24 @@ impl Game {
             let mut result = Vec::new();
             for (character, x, y) in k1_data::characters::placed(&entities, &state) {
                 let (px, py) = game_state::character_position(x, y);
+                // A state-4 record's resting clip is its idle pair (state 6 for
+                // a dynamic creature, docs/k1/creatures.md); the record's own
+                // state 4 becomes the `special` clip the viewer swaps to while
+                // the machine plays it. Every other record shows the state its
+                // file carries.
+                let is_special = character.state == k1_game::creature_anim::SPECIAL_STATE;
+                let rest_state = if is_special { 6 } else { character.state };
                 let rest = match k1_game::scene::pose_in(
                     character,
                     px,
                     py,
                     &state,
                     &graphics,
-                    &PoseKind::of_record(character),
+                    &PoseKind {
+                        state: rest_state,
+                        direction: character.direction,
+                        frame: Some(0),
+                    },
                 ) {
                     Ok(Some(pose)) => clips_of(pose),
                     _ => continue,
@@ -422,8 +437,37 @@ impl Game {
                         .map(clips_of)
                     })
                     .collect();
-                if walk.iter().any(|clip| clip.is_some()) {
-                    result.push((character.slot, CreatureAnimation { rest, walk }));
+                // Only a state-4 record can have a special; a human's state 4 is
+                // the shot, which is out of #70's scope and must not be routed
+                // through the appearance clip (docs/k1/creatures.md).
+                let special = is_special
+                    .then(|| {
+                        k1_game::scene::pose_in(
+                            character,
+                            px,
+                            py,
+                            &state,
+                            &graphics,
+                            &PoseKind {
+                                state: k1_game::creature_anim::SPECIAL_STATE,
+                                direction: character.direction,
+                                frame: Some(0),
+                            },
+                        )
+                        .ok()
+                        .flatten()
+                        .map(clips_of)
+                    })
+                    .flatten();
+                if walk.iter().any(|clip| clip.is_some()) || special.is_some() {
+                    result.push((
+                        character.slot,
+                        CreatureAnimation {
+                            rest,
+                            walk,
+                            special,
+                        },
+                    ));
                 }
             }
             result
@@ -670,12 +714,20 @@ pub struct CreatureClips {
     pub shadow: Option<CreatureLayer>,
 }
 
-/// What a creature shows resting and walking: `walk[direction]` is the walk pose
-/// facing that sprite direction, `None` where the creature has no walk frames.
+/// What a creature shows resting, walking and — for the three dynamic classes
+/// that record state 4 in `Game.N` — playing their one-shot appearance or
+/// transformation animation (docs/k1/creatures.md, "State 4 — two meanings
+/// under one number", issue #70).
+///
+/// `walk[direction]` is the walk pose facing that sprite direction, `None`
+/// where the creature has no walk frames. `special` is `None` for every
+/// human (a human's state 4 is a shot, out of #70's scope) and for a dynamic
+/// creature whose sprite carries no state-4 row.
 #[derive(Debug, Clone)]
 pub struct CreatureAnimation {
     pub rest: CreatureClips,
     pub walk: Vec<Option<CreatureClips>>,
+    pub special: Option<CreatureClips>,
 }
 
 /// The pose's own clips, in the order the scene lists the creature's pieces:

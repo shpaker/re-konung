@@ -15,8 +15,11 @@ use crate::movement::passage::Passage;
 use crate::movement::rng::Rng;
 use crate::movement::world::{Event, World, WorldError, WorldRules};
 use crate::step_durations::StepDurations;
+use k1_game::creature_anim::{self, Machine as CreatureAnimMachine, Seed as CreatureAnimSeed};
 use k1_game::creatures::{self, Creature, Workplace};
 use k1_game::rules::{Context, Decision, Live};
+
+pub use k1_game::creature_anim::Stage as CreatureStage;
 
 use crate::rules;
 
@@ -74,6 +77,11 @@ pub struct Simulation {
     jobs: Vec<Workplace>,
     rng: Rng,
     tick: u64,
+    /// Per-creature animation state: state-4 creatures play their special
+    /// once on world load and land in idle; every other record is Idle from
+    /// the start. Owns no clock — [`Simulation::tick`] advances it once per
+    /// caller-supplied tick (issue #70 AC4).
+    creature_anim: CreatureAnimMachine,
     /// Orders the world rejected for a reason other than "no route": the rules
     /// send no orders that should fail — an unknown creature or an off-grid
     /// goal is a bug or bad data — so they are kept for the caller to report
@@ -91,12 +99,14 @@ pub struct Simulation {
 }
 
 impl Simulation {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         map: &KonungMap,
         state: &GameState,
         map_number: usize,
         hero: Option<usize>,
         step_table: Vec<[u32; DIRECTION_COUNT]>,
+        special_frames: Vec<u32>,
         jobs: Vec<Workplace>,
         seed: u64,
     ) -> Simulation {
@@ -121,6 +131,19 @@ impl Simulation {
             }
         }
 
+        // The "the creature entered the world" event (docs/k1/creatures.md,
+        // our divergence for #38): every state-4 record starts its special at
+        // frame 0. The temporary trigger is this call site, not the original's
+        // AI-released hold of frame 0 (which needs #38's decision slot).
+        let mut creature_anim = CreatureAnimMachine::new();
+        creature_anim.enter_world(roster.iter().zip(special_frames.iter()).map(
+            |(creature, &frames)| CreatureAnimSeed {
+                id: creature.id,
+                recorded_state: creature.state,
+                special_frames: frames,
+            },
+        ));
+
         Simulation {
             world,
             roster,
@@ -128,6 +151,7 @@ impl Simulation {
             jobs,
             rng: Rng::new(seed ^ 0xDEAD_BEEF),
             tick: 0,
+            creature_anim,
             order_failures: Vec::new(),
             cooldown: rules::FailedOrderCooldown::new(WorldRules::default().repath_cooldown_ticks),
             spawn_failures,
@@ -179,6 +203,10 @@ impl Simulation {
 
     pub fn tick(&mut self) -> Vec<Event> {
         self.tick += 1;
+        // The state machine advances on the caller's tick — never on a
+        // render-frame boundary — so creature state transitions are
+        // frame-rate independent (issue #70).
+        self.creature_anim.tick();
         let live = self.live_picture();
         let group_states = k1_game::rules::group_states(&self.roster, &live);
         let mut context = Context {
@@ -223,6 +251,41 @@ impl Simulation {
         (0..self.roster.len())
             .filter_map(|index| self.creature_state(index))
             .collect()
+    }
+
+    /// The animation stage of one creature (issue #70): `Special { frame }`
+    /// while its state-4 sequence runs, `Idle` otherwise. `None` for an id the
+    /// machine never seeded.
+    pub fn creature_stage(&self, creature_id: usize) -> Option<creature_anim::Stage> {
+        self.creature_anim.stage(creature_id)
+    }
+
+    /// The animation state to show for one creature right now: 4 while its
+    /// special plays, or the record's pair when idle. The caller overlays walk
+    /// from [`CreatureState::walk_state`] on top of the idle answer.
+    pub fn creature_shown_state(&self, creature_id: usize) -> Option<u8> {
+        self.creature_anim.shown_state(creature_id)
+    }
+
+    /// Restart one creature's special from frame 0 — the seam a game event
+    /// drives (issue #70 AC3); a new appearance is never triggered by
+    /// sequence exhaustion, only by this call.
+    pub fn restart_creature_special(&mut self, creature_id: usize) -> bool {
+        self.creature_anim.restart_special(creature_id)
+    }
+
+    /// Counted pose rebuilds: one per creature whose animation-stage kind
+    /// actually changed since the machine was created (issue #70 AC6). A plain
+    /// frame advance within a running Special does not count.
+    pub fn pose_rebuilds(&self) -> u64 {
+        self.creature_anim.pose_rebuilds()
+    }
+
+    /// Creatures whose animation stage kind changed since the last call, and
+    /// updates the tracker. The viewer calls it once per tick and rebuilds
+    /// each listed creature's pose at most once (issue #70 AC6).
+    pub fn drain_creature_anim_changes(&mut self) -> Vec<usize> {
+        self.creature_anim.drain_changed()
     }
 
     pub fn creature_state(&self, index: usize) -> Option<CreatureState> {
@@ -392,6 +455,7 @@ mod tests {
             MAP_NUMBER,
             None,
             vec![[2; DIRECTION_COUNT]; creatures],
+            vec![0; creatures],
             Vec::new(),
             7,
         )
