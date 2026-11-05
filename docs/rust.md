@@ -632,19 +632,21 @@ cargo test --release --manifest-path crates/Cargo.toml -p k1-game \
 
 | Operation | Time |
 |---|---|
-| empty loop (the floor of the harness) | 0.18–0.19 ns/tick |
-| `ground_lit` — one range check | 0.70–0.74 ns |
-| `clock_face` — three divisions by the cycle constants | 0.75–0.79 ns |
-| `day_phase` — the ground light, then the ambient | 1.79–1.85 ns |
-| `ambient_kind` — the threshold scan and a table read | 3.00–3.12 ns |
-| `game_time` — the whole readout the panel shows | 5.22–5.43 ns |
+| empty loop (the floor of the harness) | 0.19–0.22 ns/tick |
+| `clock_face` — three divisions by the cycle constants | 0.83–0.95 ns |
+| `ground_window` — the window and a range check | 1.83–2.17 ns |
+| `ambient_value` — the window and the original's branch | 3.8–4.4 ns |
+| `ambient_kind` — the triple and its sign | 4.3–5.1 ns |
+| `day_phase` — the ambient, then the ground window | 5.7–6.9 ns |
+| `game_time` — the whole readout the panel shows | 12.9–14.8 ns |
 
-The day model is five nanoseconds a tick: over two orders under the cheapest
-full tick above (1.28 µs on a calm map) and seven under the 60 ms budget, so
-nothing in it is worth caching. The only loop left is the twelve-threshold scan
-behind `ambient_kind`, which is the dearest row for exactly that reason; a
-binary search or a precomputed per-tick table would save three nanoseconds and
-cost a second table to keep in step with the thresholds documented in
+The day model is at most fifteen nanoseconds a tick: two orders under the
+cheapest full tick above (1.28 µs on a calm map) and seven under the 60 ms
+budget, so nothing in it is worth caching. The most expensive parts are the
+twelve-threshold scan and the branch over the ramp formulas that computes the
+ambient triple with the original's integer halving; a binary search or a
+precomputed per-tick table would save a few nanoseconds and cost a second table
+to keep in step with the windows documented in
 [k1/time-of-day.md](k1/time-of-day.md). It is also paid by the asker, not by
 the simulation: game time is derived from `Simulation::tick` on demand
 (issue #95) and the simulation carries no accumulator of its own.

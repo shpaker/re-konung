@@ -7,7 +7,10 @@ ambient arithmetic and the gates are **confirmed** against our own byte-level re
 three binaries; the constant-light map list, the light-effects option and everything the
 coin flip means stay **hypothesis** or **by Slavik**, and are named as such where they
 appear. This page is the evidence base for the clock (#95), the rendered lighting (#96)
-and the switches (#97) under #87.
+and the switches (#97) under #87; of the three, the clock is implemented —
+`k1_game::time_of_day` derives the day from the simulation tick as this page describes,
+and its tests assert the interval trace, not the phase names (see "What the next tickets
+take" below).
 
 The tick itself is [movement.md](movement.md); the light masks that a phase lights up
 are `LIGHTS.N` and `LIGHTS.RES` ([formats/map.md](formats/map.md),
@@ -437,23 +440,33 @@ Deliberate, recorded next to the facts they bend:
 
 ## What the next tickets take from this page
 
-- #95 takes the cycle length, the two increment sites and the wording "the lighting
-  computation is gated, the day counter keeps running" (now with evidence: the increments
-  sit nowhere near the gates). Game time is the simulation's own tick
-  (`Simulation::tick_number()`): the viewer derives everything from it and accumulates
-  nothing, and the contract a test asserts is the **interval** trace — the twelve
-  thresholds and the ground-light interval — because the four day names are ours, not the
-  game's. Because the ramps halve as integers, the model's **observable** trace — what a
-  player sees change — is `1802, 3593, 5402, 8100, 18900, 19020`: a ramp leaves the value
-  it comes from on the tick whose integer half first turns non-zero, and window 13 carries
-  `(0,0,0)` for the tick after its ramp ends. #95 follows the values, since that is what
-  a screen shows; the branch spans of the interval table stay the contract for
-  comparisons. The displayed hour is the linear 24-hour reading defined
+- **#95 — implemented.** The model is `k1_game::time_of_day`, derived from the simulation's
+  own tick (`Simulation::tick_number()`); the viewer derives everything from it and
+  accumulates nothing — the lighting computation is gated, the day counter keeps running,
+  and the evidence says so: the two increment sites sit nowhere near the gates. It reports
+  the ambient triple of the window table branch by branch, ramp formulas included, before
+  the division by 100; the windows whose value is the per-day night palette are reported as
+  the darker one, which moves no boundary because both palettes are dark. The contract its
+  tests assert is the **interval** trace — the twelve thresholds and the ground-light
+  interval — because the four day names are ours, not the game's; the phase words are a
+  display reading derived from the same two classifications, tested to introduce no
+  boundary of their own. The displayed hour is the linear 24-hour reading defined
   [above](#the-hour-we-display--our-convention-not-a-fact-about-k1).
-- #96 takes the interval table, the window table with its exact ramp branches, the
-  per-channel blend rules, the three surfaces treated differently, the constant-light
-  array, the coin flip against the day index, and the two unresolved coefficients (the
-  `0.33`/`1/3` pair and the rounding of the byte-packed channels) — the presets as places
-  to stand the camera, never as boundaries.
-- #97 takes the switches-and-flags table: both user switches, both computed flags, and
-  the constant-light bypass of the day/night gate.
+- **Branch ends and value reaches are ticks apart, and the model follows the values.**
+  The ramps halve the tick distance as integers ([above](#what-a-phase-does-to-the-picture)),
+  so a ramp leaves the value it comes from a tick or two late: window 4's ramp returns
+  `(0,0,0)` at 3593 while its branch ends at 3595, and window 13's ramp reaches `(0,0,0)`
+  at 19020 while its branch ends at 19021. (The clone's float division would move every
+  ramp boundary one tick earlier — the model follows the original, not the clone.) A
+  renderer that interpolates per tick (#96) sees the values, so the observable trace of
+  the model is `1802, 3593, 5402, 8100, 18900, 19020`, not the branch list — both encode
+  the same original, one by comparison, one by arithmetic, and the branch spans of the
+  interval table stay the contract for comparisons.
+- **#96 — not implemented.** It takes the interval table, the window table with its exact
+  ramp branches, the per-channel blend rules, the three surfaces treated differently, the
+  constant-light array, the branch-vs-value distinction above, the coin flip against the
+  day index (the model leaves it undrawn; #96 draws it from the seeded generator), the two
+  unresolved coefficients (the `0.33`/`1/3` pair and the rounding of the byte-packed
+  channels), and the camera presets — as places to stand the camera, never as boundaries.
+- **#97 — not implemented.** It takes the switches-and-flags table: both user switches,
+  both computed flags, and the constant-light bypass of the day/night gate.
