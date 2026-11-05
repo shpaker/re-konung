@@ -104,39 +104,52 @@ impl Machine {
         Self::default()
     }
 
-    /// Define the world: after this call the machine holds exactly the given
-    /// seeds and nothing else. The previous contents are dropped — creatures
-    /// absent from `seeds` are removed, so a new world (map change, re-entry,
-    /// reset) is one `enter_world` with that world's seeds. The rebuild counter
-    /// restarts from this call and counts one rebuild per freshly-seeded
-    /// state-4 creature that starts in Special.
+    /// Define the world: after this call the machine holds exactly one entry
+    /// per distinct seeded id and nothing else. The previous contents are
+    /// dropped — creatures absent from `seeds` are removed, so a new world
+    /// (map change, re-entry, reset) is one `enter_world` with that world's
+    /// seeds. The rebuild counter restarts from this call and counts one
+    /// rebuild per creature that opens in Special.
     ///
     /// Each seed is initialized as [`initial_stage`] decides: a state-4 record
     /// with a sequence starts at `Special { frame: 0 }`, every other seed at
     /// Idle. The seeds are the file's records, so this is the reset the viewer's
     /// `Play → Off → Play` path needs. The clock is the caller's; the machine
     /// only tracks stages.
+    ///
+    /// Ids are unique in the producer's roster (each character is one record
+    /// slot), so a repeated id here is defensive: the last seed for an id
+    /// describes that creature, keeping one entry that `tick` advances once and
+    /// `stage` sees, rather than a duplicate the index can no longer reach.
     pub fn enter_world(&mut self, seeds: impl IntoIterator<Item = Seed>) {
         self.entries.clear();
         self.index.clear();
         self.pose_rebuilds = 0;
         for seed in seeds {
-            let stage = initial_stage(&seed);
-            self.index.insert(seed.id, self.entries.len());
-            self.entries.push(Entry {
+            let entry = Entry {
                 id: seed.id,
                 recorded_state: seed.recorded_state,
                 special_frames: seed.special_frames,
-                stage,
+                stage: initial_stage(&seed),
                 reported: Stage::Idle,
-            });
-            // A freshly seeded state-4 creature starts in Special where it had
-            // no stage before: the render will draw the special clip rather
-            // than the resting clip, which is one pose rebuild (issue #70 AC6).
-            if stage.is_special() {
-                self.pose_rebuilds += 1;
+            };
+            match self.index.get(&seed.id).copied() {
+                Some(position) => self.entries[position] = entry,
+                None => {
+                    self.index.insert(seed.id, self.entries.len());
+                    self.entries.push(entry);
+                }
             }
         }
+        // Every entry was just created, so each one that opens in Special is a
+        // pose the render draws instead of the resting clip — one rebuild each
+        // (issue #70 AC6). Counting the finished entries, not the pushes, keeps
+        // a repeated id from costing a rebuild twice.
+        self.pose_rebuilds = self
+            .entries
+            .iter()
+            .filter(|entry| entry.stage.is_special())
+            .count() as u64;
     }
 
     /// Advance every entry by one tick. A Special that reaches its last frame
@@ -484,6 +497,46 @@ mod tests {
         assert_eq!(machine.pose_rebuilds(), 0, "an all-idle world costs none");
         machine.enter_world([seed(4, 4, 4)]);
         assert_eq!(machine.pose_rebuilds(), 1, "one special is one rebuild");
+    }
+
+    #[test]
+    fn a_repeated_id_in_one_world_keeps_one_entry_described_by_the_last_seed() {
+        // The producer's roster carries unique record numbers, so this is the
+        // defensive path: one record described twice in a single world must
+        // stay one creature. A naive push would leave two entries that `tick`
+        // advances together while `index` — and so `stage` — reaches only the
+        // last, and `ids()` would repeat the id.
+        let mut machine = Machine::new();
+        machine.enter_world([
+            seed(5, 6, 0),             // an idle record first …
+            seed(5, SPECIAL_STATE, 2), // … then the special that wins
+        ]);
+        assert_eq!(
+            machine.ids().collect::<Vec<_>>(),
+            vec![5],
+            "one entry for the id, not a duplicate"
+        );
+        assert_eq!(
+            machine.stage(5),
+            Some(Stage::Special { frame: 0 }),
+            "the last seed describes the creature"
+        );
+        assert_eq!(machine.special_frames(5), Some(2));
+        assert_eq!(
+            machine.pose_rebuilds(),
+            1,
+            "one creature entering Special is one rebuild, not two"
+        );
+        // A single entry, advanced once per tick.
+        machine.tick();
+        assert_eq!(machine.stage(5), Some(Stage::Special { frame: 1 }));
+        machine.tick(); // 1 → 2 ≥ 2 → Idle
+        assert_eq!(machine.stage(5), Some(Stage::Idle));
+        assert_eq!(
+            machine.pose_rebuilds(),
+            2,
+            "the Special → Idle edge is the second and last rebuild"
+        );
     }
 
     #[test]
