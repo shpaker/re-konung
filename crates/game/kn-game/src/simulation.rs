@@ -16,7 +16,7 @@ use crate::movement::rng::Rng;
 use crate::movement::world::{Event, World, WorldError, WorldRules};
 use crate::step_durations::StepDurations;
 use k1_game::creatures::{self, Creature, Workplace};
-use k1_game::rules::{Context, Decision, Ground, Live, is_adjacent};
+use k1_game::rules::{Context, CreatureType, Decision, Ground, Live, classify, is_adjacent};
 
 use crate::rules;
 
@@ -260,26 +260,31 @@ impl Simulation {
         self.ids.iter().filter(|id| id.is_some()).count()
     }
 
-    /// Initial pixel position for each creature, keyed by `Creature.id`.
+    /// Initial pixel position for each creature in the game, keyed by
+    /// `Creature.id` — one entry per node a renderer should build.
     ///
-    /// The whole roster, including creatures the world refused to place: those
-    /// never appear in [`Self::states`], so a renderer that shows them draws
-    /// them from this load-time cell — the record cell for everyone the load
-    /// keeps where the file stands it, the jittered cell near the spawn
-    /// centre for a roaming member the world then refused. The refusal is
-    /// [`Self::spawn_failures`], which the consumer must report next to such
-    /// a static creature; trimmed members ([`Self::load_trimmed`]) are out of
-    /// the game and stand nowhere, the original's `GroupSize` shrink.
+    /// A creature the world refused to place stays in the result at its
+    /// load-time cell: a refused record is still part of the game (the world
+    /// rejected it only because the file stands it in blocked foot data or on
+    /// a cell another record holds), so it is drawn at that cell — the record
+    /// cell for everyone the load keeps where the file stands it, the jittered
+    /// cell near the spawn centre for a roaming member the world then refused
+    /// — and reported through [`Self::spawn_failures`] next to it. A creature
+    /// the load trimmed ([`Self::load_trimmed`]) is absent: the original
+    /// shrank `GroupSize`, so it is out of the game and stands nowhere — the
+    /// renderer must not build a node for it (docs/k1/creatures.md, «Roaming
+    /// squad placement on map load»).
     pub fn initial_pixels(&self) -> Vec<(usize, (i32, i32))> {
         self.roster
             .iter()
             .zip(self.load_cells.iter())
-            .map(|(c, &(x, y))| {
+            .filter(|(creature, _)| !self.load_trimmed.contains(&creature.id))
+            .map(|(creature, &(x, y))| {
                 let cell = Cell::new(
                     u32::try_from(x.max(0)).unwrap_or(0),
                     u32::try_from(y.max(0)).unwrap_or(0),
                 );
-                (c.id, cell.centre())
+                (creature.id, cell.centre())
             })
             .collect()
     }
@@ -369,24 +374,17 @@ impl Simulation {
             return;
         };
         let target = (column, row);
-        if stands_on_workplace(creature, &self.jobs, target) {
-            self.goal_reaches
-                .entry(creature.id)
-                .or_insert(GoalReach {
-                    id: creature.id,
-                    workplace: 0,
-                    walk: 0,
-                })
-                .workplace += 1;
-        } else if inside_spawn_interior(creature, target) {
-            self.goal_reaches
-                .entry(creature.id)
-                .or_insert(GoalReach {
-                    id: creature.id,
-                    workplace: 0,
-                    walk: 0,
-                })
-                .walk += 1;
+        let Some(field) = goal_reach_field(creature, &self.jobs, target) else {
+            return;
+        };
+        let reach = self.goal_reaches.entry(creature.id).or_insert(GoalReach {
+            id: creature.id,
+            workplace: 0,
+            walk: 0,
+        });
+        match field {
+            GoalField::Workplace => reach.workplace += 1,
+            GoalField::Walk => reach.walk += 1,
         }
     }
 
@@ -441,10 +439,46 @@ impl Simulation {
 // ─── Goal reach: the confirmed targets a completed order can hit ────────────
 //
 // The rules issue a bare `MoveTo`, so the counter re-derives the target's
-// kind from the same inputs the decisions had: the workplace branches of
-// `k1_game::rules::villager_decision` and the pick band of
-// `k1_game::rules::walk_target`. Anything else an order aimed at — a cell
-// no confirmed rule sends to — earns no counter.
+// kind from the same inputs the decisions had — gated on the creature's
+// decision category, because both confirmed counters originate in
+// `k1_game::rules::villager_decision` (the dynamic workplace, the static-work
+// neighbour, and the pick band of `walk_target`). A roaming monster's only
+// `MoveTo` is `monster_return`, whose target lies inside the spawn interior
+// but earns no counter (docs/k1/creatures.md, "Goal reach"). Anything else an
+// order aimed at — a cell no confirmed villager rule sends to — earns none.
+
+/// Which confirmed counter a completed order earns, if any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GoalField {
+    Workplace,
+    Walk,
+}
+
+/// The confirmed counter a creature's arrival at `cell` earns, or `None`.
+///
+/// Gated on the decision category first: only a villager's order reaches a
+/// confirmed target. Then workplace before walk, the same precedence the
+/// decisions have — the dynamic place cell or the static-work neighbour via
+/// [`stands_on_workplace`], else a cell inside the spawn interior via
+/// [`inside_spawn_interior`]. A roaming monster's `monster_return` targets the
+/// interior, so the gate is what stops its return home from being counted as
+/// a walk (docs/k1/creatures.md, "Goal reach").
+fn goal_reach_field(
+    creature: &Creature,
+    jobs: &[Workplace],
+    cell: (i16, i16),
+) -> Option<GoalField> {
+    if classify(creature) != CreatureType::Villager {
+        return None;
+    }
+    if stands_on_workplace(creature, jobs, cell) {
+        return Some(GoalField::Workplace);
+    }
+    if inside_spawn_interior(creature, cell) {
+        return Some(GoalField::Walk);
+    }
+    None
+}
 
 /// Whether `cell` is a workplace target of `creature`: the place cell of the
 /// slot the creature itself holds (the dynamic workplace — its arrival stands
@@ -870,6 +904,39 @@ mod tests {
         );
     }
 
+    /// The renderer's node list follows the game: a trimmed member (out of the
+    /// game via `GroupSize`, [`Simulation::load_trimmed`]) is absent from
+    /// [`Simulation::initial_pixels`], while the member that holds the spot
+    /// keeps its load cell. Refused creatures still appear (the unplaced test
+    /// pins that); a trimmed one must not, or the renderer draws a phantom.
+    #[test]
+    fn a_trimmed_creature_is_absent_from_the_renderer_pixels() {
+        // The same degenerate one-cell area as the trim test: records 3 and 4
+        // are trimmed, record 2 stands on the spot.
+        let map = open_map(|_, _| false);
+        let spot = Rect {
+            left: 12,
+            top: 12,
+            right: 12,
+            bottom: 12,
+        };
+        let state = roaming_state(spot, 3);
+        let sim = simulation(&map, &state, 3);
+
+        assert!(
+            sim.spawn_failures().is_empty(),
+            "the standing member is not refused: {:?}",
+            sim.spawn_failures()
+        );
+        assert_eq!(sim.load_trimmed(), &[3, 4]);
+        assert_eq!(
+            sim.initial_pixels(),
+            vec![(2, Cell::new(12, 12).centre())],
+            "the trimmed members are out of the game, so the renderer gets \
+             only the standing one at its load cell"
+        );
+    }
+
     /// The same seed loads and runs the same way: placement draws and
     /// decisions ride the seeded generators only.
     #[test]
@@ -949,5 +1016,117 @@ mod tests {
             replay.tick();
         }
         assert_eq!(replay.goal_reaches(), reaches);
+    }
+
+    /// A bare roster record for the classifier tests, which need a `Creature`
+    /// directly: the public `tick` can no longer drive a monster's return,
+    /// because the load rule re-places every roaming member inside its own
+    /// area, so `monster_return` never fires from a fresh [`Simulation`].
+    fn record(
+        group_kind: u8,
+        class_id: u8,
+        id: usize,
+        spawn: Rect,
+        workplace: Option<Workplace>,
+    ) -> Creature {
+        Creature {
+            id,
+            cell: (0, 0),
+            direction: 0,
+            state: 0,
+            class_id,
+            group: 1,
+            group_kind,
+            roaming: matches!(
+                group_kind,
+                k1_game::rules::group::FIRST_ROAMING..=k1_game::rules::group::LAST_ROAMING
+            ),
+            spawn,
+            workplace,
+            sprite_set: 0,
+        }
+    }
+
+    /// The false positive Finding 2 removes: a roaming monster standing inside
+    /// its spawn interior — exactly where `monster_return` sends a strayed
+    /// member — earns no counter, because the goal-reach verdict is gated on
+    /// the decision category, not the arrival coordinates.
+    #[test]
+    fn a_monster_arrival_inside_its_area_earns_no_counter() {
+        let spawn = Rect {
+            left: 4,
+            top: 4,
+            right: 8,
+            bottom: 8,
+        };
+        let monster = record(
+            k1_game::rules::group::FIRST_ROAMING,
+            k1_game::rules::class::WARRIOR,
+            9,
+            spawn,
+            None,
+        );
+        // (6, 6) sits strictly inside the interior, the band a walk order — or
+        // a monster's return — picks from; without the villager gate it would
+        // have counted as a walk.
+        assert_eq!(
+            goal_reach_field(&monster, &[], (6, 6)),
+            None,
+            "a roaming monster's return home is not a confirmed walk"
+        );
+    }
+
+    /// A villager holding a slot that arrives on the slot's place cell earns
+    /// the workplace counter (the dynamic branch of `villager_decision`).
+    #[test]
+    fn a_villager_on_its_place_cell_counts_a_workplace() {
+        let spawn = Rect {
+            left: 4,
+            top: 4,
+            right: 8,
+            bottom: 8,
+        };
+        let place = Workplace {
+            cell: (6, 6),
+            direction: 0,
+            role: "elder",
+            character: 9,
+        };
+        let holder = record(
+            k1_game::rules::group::VILLAGE_FIRST,
+            k1_game::rules::class::VILLAGER,
+            9,
+            spawn,
+            Some(place),
+        );
+        assert_eq!(
+            goal_reach_field(&holder, &[], (6, 6)),
+            Some(GoalField::Workplace),
+            "arrival on the held place cell is a workplace, before any walk"
+        );
+    }
+
+    /// A jobless villager arriving on a cell inside its spawn area earns the
+    /// walk counter (the `walk_target` band of `villager_decision`).
+    #[test]
+    fn a_jobless_villager_inside_its_area_counts_a_walk() {
+        let spawn = Rect {
+            left: 4,
+            top: 4,
+            right: 8,
+            bottom: 8,
+        };
+        let jobless = record(
+            k1_game::rules::group::VILLAGE_FIRST,
+            k1_game::rules::class::VILLAGER,
+            9,
+            spawn,
+            None,
+        );
+        assert_eq!(
+            goal_reach_field(&jobless, &[], (6, 6)),
+            Some(GoalField::Walk),
+            "a jobless villager landing inside the interior is a walk"
+        );
     }
 }
