@@ -34,7 +34,8 @@ use kn_render::{
     CreatureAnim, CreatureAnimReport, CreatureAnimationPlugin, CreatureMotion, CreatureNode,
     CreatureNodesVisible, CreatureRoot, CreatureSet, CreatureShadow, CreatureSim, CreatureSprite,
     GameResource, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup,
-    ScenePiece, Sequence, TextureCache, clear_scene, load_scene, ortho_scale, reset_creature_sim,
+    ScenePiece, Sequence, TextureCache, clear_scene, load_scene, ortho_scale,
+    reset_creature_positions, reset_creature_sim,
 };
 use kn_ui::{dark_theme, pointer_over_ui, sync_checked};
 
@@ -710,9 +711,11 @@ fn failed(map: MapRef, cached: usize, error: String, elapsed: Duration) -> Stats
 
 /// Кнопка "Reset positions" возвращает существ в исходные позиции текущей карты.
 ///
-/// Симуляция пересоздаётся с тем же зерном ([`SIM_SEED`]), поэтому маршруты,
-/// состояния походки и ГСЧ свежие. Карта, камера, масштаб, выбранный слой и
-/// пауза не трогаются: сцену не пересобираем и текстуры не грузим заново.
+/// Движение пересоздаётся с тем же зерном ([`SIM_SEED`]): маршруты, состояния
+/// походки и ГСЧ свежие. Машина анимации сохраняется — спец-анимация state-4,
+/// идущая в момент сброса, продолжается с текущего кадра, а не начинается
+/// заново (обзор #101, P2-#3): сброс позиций не есть сброс анимации. Карта,
+/// камера, масштаб, выбранный слой и пауза не трогаются.
 fn reset_positions(
     activate: On<Activate>,
     markers: Query<&ResetPositions>,
@@ -727,7 +730,7 @@ fn reset_positions(
     let Some(&map_ref) = viewer.maps.get(viewer.selected) else {
         return;
     };
-    reset_creature_sim(&game.0, map_ref, SIM_SEED, clock.ticks, &mut sim);
+    reset_creature_positions(&game.0, map_ref, SIM_SEED, clock.ticks, &mut sim);
 }
 
 /// Кнопка "Reset animation" (issue #70 AC4): the viewer's `Play → Off → Play`

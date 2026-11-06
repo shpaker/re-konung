@@ -81,6 +81,14 @@ pub struct CreatureAnim {
     /// recreates the whole machine, so the first observation after a reset must
     /// also count as a change; the subsystem keeps its own snapshot for that.
     pub stages: HashMap<usize, bool>,
+    /// Last observed special-frame index of each creature still playing its
+    /// special. A decrease under an unchanged [`Sequence`] is a restart the
+    /// stage-kind snapshot cannot see — "Reset animation" or a rewind returns a
+    /// mid-special creature to an earlier frame without flipping Special↔Idle —
+    /// so the swap must re-anchor on it (review of #101, P2-#3). Cleared for a
+    /// creature that has left the special, so a later re-entry is not mistaken
+    /// for a regression.
+    pub special_frames: HashMap<usize, u32>,
 }
 
 impl CreatureAnim {
@@ -127,6 +135,32 @@ impl CreatureAnim {
             }
         }
         changed
+    }
+
+    /// Creatures whose special frame regressed since the last observation: the
+    /// same clip is still playing but its frame counter moved backwards, which is
+    /// a restart the Special↔Idle snapshot cannot see — "Reset animation" returns
+    /// a mid-special creature to frame 0, and a rewind re-derives an earlier
+    /// frame (review of #101, P2-#3). Passing only the creatures currently in
+    /// `Special`; a creature that left is dropped so its next entry starts clean.
+    /// A plain forward advance only raises the frame and is never reported, so
+    /// the AC6 one-rebuild-per-change bound holds.
+    pub fn observe_specials(&mut self, playing: &[(usize, u32)]) -> HashSet<usize> {
+        let mut restarted = HashSet::new();
+        let mut seen = HashSet::new();
+        for &(id, frame) in playing {
+            seen.insert(id);
+            if self
+                .special_frames
+                .get(&id)
+                .is_some_and(|&last| frame < last)
+            {
+                restarted.insert(id);
+            }
+            self.special_frames.insert(id, frame);
+        }
+        self.special_frames.retain(|id, _| seen.contains(id));
+        restarted
     }
 }
 
@@ -391,6 +425,7 @@ pub fn build_creature_anim(
             .collect(),
         locked: HashMap::new(),
         stages: HashMap::new(),
+        special_frames: HashMap::new(),
     };
     (anim, report)
 }
@@ -727,6 +762,45 @@ pub fn reset_creature_sim(
     sim.sim_ticks = 0;
 }
 
+/// The frontend's "Reset positions" button: creatures return to the map's load
+/// cells and the walk world restarts, but the creature animation machine keeps
+/// playing — a mid-special stays mid-special, and an idle creature stays idle
+/// (review of #101, P2-#3). Where [`reset_creature_sim`] rebuilds everything and
+/// so reseeds every state-4 special to frame 0 (the animation reset), this one
+/// adopts only the fresh movement side via [`Simulation::adopt_positions_from`]
+/// and leaves the machine untouched. The already-spawned nodes stay: their clips
+/// and depth slot still describe this map, and only their placement changes.
+pub fn reset_creature_positions(
+    game: &Game,
+    map_ref: MapRef,
+    seed: u64,
+    clock_ticks: u64,
+    sim: &mut CreatureSim,
+) {
+    match game.simulation(map_ref, seed) {
+        Ok(fresh) => {
+            sim.error = None;
+            match sim.sim.as_mut() {
+                // Same map and seed: carry the movement side across, keep the machine.
+                Some(existing) => existing.adopt_positions_from(fresh),
+                // No prior simulation (a previous build failed): install the fresh one.
+                None => sim.sim = Some(fresh),
+            }
+            sim.initial_pixels = sim
+                .sim
+                .as_ref()
+                .map_or_else(Vec::new, Simulation::initial_pixels);
+        }
+        Err(error) => {
+            sim.error = Some(format!("simulation for {map_ref:?}: {error}"));
+            sim.initial_pixels = Vec::new();
+            sim.sim = None;
+        }
+    }
+    sim.epoch = clock_ticks;
+    sim.sim_ticks = 0;
+}
+
 /// Advances the simulation to the scene clock, one logical tick per clock tick.
 ///
 /// Forward is a plain catch-up. A backward step rewinds the clock, but the engine
@@ -880,6 +954,18 @@ pub fn sync_creature_animation(
         })
         .collect();
     let stage_changes = anim.observe_stages(&stage_pairs);
+    // A special whose frame counter fell since the last observation is a restart
+    // the kind flip cannot see (Reset animation / rewind): it must re-anchor even
+    // on the same `Sequence` Arc (review of #101, P2-#3). Only creatures now in
+    // Special are offered, so a plain forward advance never trips it.
+    let special_playing: Vec<(usize, u32)> = states
+        .iter()
+        .filter_map(|state| match simulation.creature_stage(state.id) {
+            Some(CreatureStage::Special { frame }) => Some((state.id, frame)),
+            _ => None,
+        })
+        .collect();
+    let special_resets = anim.observe_specials(&special_playing);
     let facing: HashMap<usize, (bool, u8)> = states
         .iter()
         .map(|state| {
@@ -924,6 +1010,7 @@ pub fn sync_creature_animation(
         if Arc::ptr_eq(&animator.sequence, &clip.sequence)
             && !(restep.contains(&tag.creature_id) && !in_special)
             && !stage_changes.contains(&tag.creature_id)
+            && !special_resets.contains(&tag.creature_id)
         {
             // A step re-anchor is a walk-cycle concern; a state-4 creature
             // re-anchors only when its Arc changes (Special ↔ rest/walk) or

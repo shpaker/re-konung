@@ -201,6 +201,36 @@ impl Simulation {
             .collect()
     }
 
+    /// Adopts the movement side of a freshly built simulation of the same map
+    /// and seed while keeping this one's creature animation machine playing.
+    ///
+    /// "Reset positions" restarts the walk world (routes, walk states, RNG,
+    /// cooldown) back to the file's load cells but must NOT restart an in-flight
+    /// state-4 special: the machine's per-creature stage is the animation, and a
+    /// positions reset is not an animation reset (review of #101, P2-#3). The
+    /// fresh simulation is built from the same `map_ref` and `seed`, so its
+    /// roster and the machine's creature ids line up; only the world-side state is
+    /// carried over, while `roster`, `jobs` and `creature_anim` stay as they were.
+    pub fn adopt_positions_from(&mut self, fresh: Simulation) {
+        let Simulation {
+            world,
+            ids,
+            rng,
+            tick,
+            order_failures,
+            cooldown,
+            spawn_failures,
+            ..
+        } = fresh;
+        self.world = world;
+        self.ids = ids;
+        self.rng = rng;
+        self.tick = tick;
+        self.order_failures = order_failures;
+        self.cooldown = cooldown;
+        self.spawn_failures = spawn_failures;
+    }
+
     pub fn tick(&mut self) -> Vec<Event> {
         self.tick += 1;
         // The state machine advances on the caller's tick — never on a
