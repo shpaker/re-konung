@@ -34,6 +34,7 @@ fn body() -> Piece {
         y: BASE.1 - 40,
         w: Some(20),
         h: Some(40),
+        depth_bottom: None,
         animation: None,
         group: PieceGroup::Characters,
         creature_id: Some(CREATURE),
@@ -47,9 +48,21 @@ fn shadow() -> Piece {
         y: BASE.1 - 10,
         w: Some(24),
         h: Some(8),
+        depth_bottom: None,
         animation: None,
         group: PieceGroup::CharacterShadows,
         creature_id: Some(CREATURE),
+    }
+}
+
+/// A body whose bottom edge sits at `bottom_edge` (its top is 40 px above), so a
+/// caller can place the occlusion line below the base and tell the base-relative
+/// height apart from both the simulation-origin distance and the absolute scene
+/// bottom.
+fn body_with_bottom(bottom_edge: i32) -> Piece {
+    Piece {
+        y: bottom_edge - 40,
+        ..body()
     }
 }
 
@@ -154,9 +167,12 @@ fn sprite_offsets_are_internal_geometry_not_distance_to_the_simulation() {
         .unwrap_or_else(|| panic!("the shadow must keep its resting animation"));
     assert_eq!(shadow_animation.anchor, (10, -10));
 
-    // The world semantics stay with the simulation: the node's plan position
-    // is the initial pixel, and the reported height keeps its current
-    // bottom-minus-origin meaning (bottom = piece.y + h = 200).
+    // The world semantics stay with the simulation: the node places from the
+    // simulation origin, and the body's bottom edge lies exactly on the base
+    // (`piece.y + h = 200 = base.y`), so its height above the base is 0 and the
+    // occlusion bottom sits on the live node row (`origin.y`), not the absolute
+    // scene bottom. Reporting the scene bottom (200) here — the P2-1 bug — would
+    // put the creature at the wrong depth once #99 relocated it off its base.
     assert_eq!(
         (plan.x, plan.y),
         SIM_ORIGIN,
@@ -164,8 +180,12 @@ fn sprite_offsets_are_internal_geometry_not_distance_to_the_simulation() {
     );
     assert_eq!(
         spawns.heights.get(&CREATURE).copied(),
-        Some(200 - SIM_ORIGIN.1),
-        "depth height semantics are unchanged (bottom − simulation origin)"
+        Some(0),
+        "a body whose bottom edge sits on the base has height 0 above the base"
+    );
+    assert_eq!(
+        plan.bottom, SIM_ORIGIN.1,
+        "the occlusion bottom is the live row (origin.y) plus the height above the base"
     );
 }
 
@@ -202,5 +222,43 @@ fn a_creature_without_a_recorded_scene_base_falls_back_to_the_origin() {
         spawns.bases.get(&CREATURE).copied(),
         Some(SIM_ORIGIN),
         "the base defaults to the origin"
+    );
+}
+
+/// The occlusion bottom follows the creature's live row even when the body's
+/// bottom edge sits below the base and the simulation relocated the creature
+/// (`base != origin`): the height is measured from the base, and `bottom` is the
+/// simulation row plus that height — never the absolute scene bottom, and never
+/// the height measured from the simulation origin (review #101, finding P2-1).
+#[test]
+fn a_body_below_the_base_keeps_its_depth_on_the_relocated_row() {
+    // base.y = 200, origin.y = 216 (relocated 16 px down); the body's bottom edge
+    // sits 20 px below the base at 220 → height above the base 20, occlusion
+    // bottom 216 + 20 = 236. The P2-1 bug reported the absolute scene bottom
+    // (220) and a height from the origin (220 − 216 = 4).
+    let mut scene = scene();
+    scene.creature_pieces = vec![body_with_bottom(BASE.1 + 20), shadow()];
+    let spawns = build_creature_spawns(
+        &scene,
+        &TextureCache::default(),
+        &anim(),
+        &[(CREATURE, SIM_ORIGIN)],
+    );
+    let plan = spawns
+        .plans
+        .iter()
+        .find(|plan| plan.id as usize == CREATURE)
+        .unwrap_or_else(|| panic!("creature #{CREATURE} must get a plan"));
+    assert_eq!(
+        spawns.heights.get(&CREATURE).copied(),
+        Some(20),
+        "height is measured from the base (220 − 200), not the simulation origin \
+         (220 − 216 = 4), which would mis-occlude a relocated creature"
+    );
+    assert_eq!(
+        plan.bottom,
+        SIM_ORIGIN.1 + 20,
+        "the occlusion bottom rides the live row (origin.y) plus the body height \
+         above its base, not the absolute scene bottom (220)"
     );
 }

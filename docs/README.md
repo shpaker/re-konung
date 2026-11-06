@@ -18,6 +18,7 @@
 - [k1/editions.md](k1/editions.md) — RUS и ENG: состав, отличия, как распаковать.
 - [k1/inventory.md](k1/inventory.md) — все файлы игры и что о них известно.
 - [k1/movement.md](k1/movement.md) — movement on the map: the fine grid, eight directions, step duration, the tick, the route limit.
+- [k1/time-of-day.md](k1/time-of-day.md) — the day counter, the 21600-tick cycle, the light phase boundaries, what a phase does to the picture, and what the two option switches gate.
 - [k1/tiled.md](k1/tiled.md) — как карта раскладывается в Tiled, как её править и сохранять.
 
 ### Статус форматов

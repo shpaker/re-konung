@@ -618,6 +618,39 @@ worth its bookkeeping. The loop itself runs over the real maps in
 creatures mid-step in the same tick for 400 ticks, map 17 with its calm
 squads not taking one step.
 
+### Game time cost
+
+Release build, AMD Ryzen 9 9950X, the spread of three runs. Measured by
+`k1-game/tests/time_of_day_cost.rs` under `#[ignore]` (issue #95) — no
+`original/` needed, the model is arithmetic over the tables of
+[k1/time-of-day.md](k1/time-of-day.md):
+
+```bash
+cargo test --release --manifest-path crates/Cargo.toml -p k1-game \
+    --test time_of_day_cost -- --ignored --nocapture
+```
+
+| Operation | Time |
+|---|---|
+| empty loop (the floor of the harness) | 0.19–0.22 ns/tick |
+| `clock_face` — three divisions by the cycle constants | 0.83–0.95 ns |
+| `ground_window` — the window and a range check | 1.83–2.17 ns |
+| `ambient_value` — the window and the original's branch | 3.8–4.4 ns |
+| `ambient_kind` — the triple and its sign | 4.3–5.1 ns |
+| `day_phase` — the ambient, then the ground window | 5.7–6.9 ns |
+| `game_time` — the whole readout the panel shows | 12.9–14.8 ns |
+
+The day model is at most fifteen nanoseconds a tick: two orders under the
+cheapest full tick above (1.28 µs on a calm map) and seven under the 60 ms
+budget, so nothing in it is worth caching. The most expensive parts are the
+twelve-threshold scan and the branch over the ramp formulas that computes the
+ambient triple with the original's integer halving; a binary search or a
+precomputed per-tick table would save a few nanoseconds and cost a second table
+to keep in step with the windows documented in
+[k1/time-of-day.md](k1/time-of-day.md). It is also paid by the asker, not by
+the simulation: game time is derived from `Simulation::tick` on demand
+(issue #95) and the simulation carries no accumulator of its own.
+
 ### Open questions
 
 - The `class` module in `k1-game::rules` is load-bearing since criteria 3 and 4:

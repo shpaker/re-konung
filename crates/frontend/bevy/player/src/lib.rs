@@ -95,7 +95,7 @@ pub fn request_start_creatures(
             return None;
         }
     };
-    motion.request(map_ref, START_SEED, scene.clone());
+    motion.request(map_ref, START_SEED, Some(hero), scene.clone());
     Some((map_ref, scene))
 }
 

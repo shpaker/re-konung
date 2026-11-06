@@ -255,6 +255,7 @@ fn reset_positions_keeps_a_mid_special_playing() {
     motion.request(
         map_ref,
         SEED,
+        None,
         game.scene(map_ref, &SceneOptions::ALL).unwrap(),
     );
     let mut app = app(game, motion);
@@ -297,6 +298,7 @@ fn reset_animation_returns_the_shown_frame_to_zero() {
     motion.request(
         map_ref,
         SEED,
+        None,
         game.scene(map_ref, &SceneOptions::ALL).unwrap(),
     );
     let mut app = app(game, motion);
@@ -346,6 +348,7 @@ fn reset_after_the_special_ends_stays_idle() {
     motion.request(
         map_ref,
         SEED,
+        None,
         game.scene(map_ref, &SceneOptions::ALL).unwrap(),
     );
     let mut app = app(game, motion);
@@ -397,6 +400,7 @@ fn repeated_reset_is_stable_and_paused_does_not_advance() {
     motion.request(
         map_ref,
         SEED,
+        None,
         game.scene(map_ref, &SceneOptions::ALL).unwrap(),
     );
     let mut app = app(game, motion);
@@ -439,6 +443,7 @@ fn reset_positions_preserves_the_game_clock_and_the_special() {
     motion.request(
         map_ref,
         SEED,
+        None,
         game.scene(map_ref, &SceneOptions::ALL).unwrap(),
     );
     let mut app = app(game, motion);
@@ -491,6 +496,7 @@ fn reset_animation_keeps_positions_and_clock_but_restarts_the_special() {
     motion.request(
         map_ref,
         SEED,
+        None,
         game.scene(map_ref, &SceneOptions::ALL).unwrap(),
     );
     let mut app = app(game, motion);

@@ -122,6 +122,7 @@ fn a_state_four_creature_plays_its_special_once_into_idle_on_screen() {
     motion.request(
         map_ref,
         START_SEED,
+        None,
         game.scene(map_ref, &SceneOptions::ALL).unwrap(),
     );
     let mut app = app(game, motion);

@@ -12,13 +12,15 @@ GitHub → Actions → **version** → Run workflow (ветка `main`). Workflo
 
 Агенты релиз не запускают и теги не ставят: это решение пользователя.
 
-## Как считается версия
+## How the version is computed
 
-Релиз собирают по мерж-коммитам PR с последнего тега `vX.Y.Z`: заголовком мерж-коммита GitHub пишет
-заголовок PR (настройка репозитория `merge_commit_title=PR_TITLE`, тело пустое), а коммиты внутри ветки
-`cliff.toml` пропускает — иначе один PR попадал бы и в текст релиза, и в расчёт версии дважды. Мерж в
-`main` потому только merge-коммитом, squash и rebase в репозитории выключены: у rebase мерж-коммита нет,
-и такой PR в релиз не попал бы вовсе.
+A release is built from the PR commits since the last tag `vX.Y.Z`: each PR lands on `main` as one
+squash commit whose subject GitHub writes from the PR title with its number
+(`squash_merge_commit_title=PR_TITLE`, `squash_merge_commit_message=COMMIT_MESSAGES`), and `cliff.toml`
+counts a commit only when its subject carries that `(#N)` marker — so one PR is never counted twice and
+an ordinary commit inside its branch never counts at all. The body keeps the commit messages, so a
+`BREAKING CHANGE:` footer still raises the version. Merges into `main` are squash commits only: merge and
+rebase are off (a rebase has no commit carrying the PR number, so such a PR would miss the release).
 
 | Заголовок PR | До 1.0 | После 1.0 |
 |---|---|---|
@@ -27,10 +29,11 @@ GitHub → Actions → **version** → Run workflow (ветка `main`). Workflo
 | несовместимые (`feat!:`, `BREAKING CHANGE:`) | minor | major |
 | только `chore`, `ci`, `docs`, `test`, `build`, `style` | релиза нет | релиза нет |
 
-Мержи до 2026-11-01 выглядели как «Merge pull request #N from <ветка>», а их заголовок PR лежал в теле —
-`commit_preprocessors` в `cliff.toml` переносит его в первую строку, чтобы и старая история считалась по PR.
-Слияния ветки в ветку (зависимые PR, пока их база не переключена на `main`) под этот вид не подпадают и в
-релиз не идут: их содержимое попадает в `main` мерж-коммитом своего PR.
+Before 2026-11-01 merges read «Merge pull request #N from <branch>» with the PR title in the body, so
+`commit_preprocessors` in `cliff.toml` lifts that title to the first line and the same `(#N)` rule still
+counts the old history. Until a dependent (stacked) PR's base is switched to `main`, its squash commit
+lands on the lower branch rather than `main`, so it does not match the rule and stays out of the release:
+its content reaches `main` through the lower PR's own squash commit.
 
 Первая версия — `v0.1.0`. Локально посмотреть, что выйдет:
 

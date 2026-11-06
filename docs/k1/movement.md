@@ -135,6 +135,9 @@ A game tick is 60 ms: Slavik `game.h:30` (`FrameTime = 60`). **Confirmed**; in
 Rust — `k1_data::objects_res::TICK_MS`, outward — `kn_game::TICK_MS`. The engine
 itself counts only ticks; milliseconds are none of its business.
 
+What the running tick count means for the hour of the game world — the day cycle
+and its light phases — is in [time-of-day.md](time-of-day.md).
+
 ## Route limit: 32 steps in the original
 
 The original's route search is capped at 32 steps: a creature goes no farther,

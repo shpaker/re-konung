@@ -33,6 +33,7 @@ pub use k1_data::characters::LayerKey;
 pub use k1_data::objects_res::TICK_MS;
 pub use k1_game::scene::{PieceGroup, PoseKind};
 pub use k1_game::textures::{Rgba, TextureError};
+pub use k1_game::time_of_day::{DayPhase, GameTime};
 
 pub type Result<T> = std::result::Result<T, GameError>;
 
@@ -72,6 +73,7 @@ pub struct Piece {
     pub animation: Option<Animation>,
     pub group: PieceGroup,
     pub creature_id: Option<usize>,
+    pub depth_bottom: Option<i32>,
 }
 
 impl Piece {
@@ -324,6 +326,18 @@ impl Game {
         Ok(self.dir.state_numbers(source.file_set())?)
     }
 
+    /// The single place a creature/character subsystem decides which `Game.N` to
+    /// load: the caller's `requested` hero, else the first available. The Scene,
+    /// the simulation and the clips all ask here, so choosing a hero other than
+    /// the first never splits them across different starting states — geometry,
+    /// roster and clips stay on one `Game.N` (review #101, finding P2-2).
+    fn hero_for(&self, source: MapSource, requested: Option<u32>) -> Result<Option<usize>> {
+        Ok(match requested {
+            Some(hero) => Some(hero as usize),
+            None => self.heroes(source)?.first().map(|&h| h as usize),
+        })
+    }
+
     /// Сцена карты в порядке наложения; текстуры декодируются отдельно
     /// ([Game::textures]) и кэшируются потребителем.
     pub fn scene(&self, map_ref: MapRef, options: &SceneOptions) -> Result<Scene> {
@@ -336,10 +350,10 @@ impl Game {
             .map(|bytes| map::parse_lights(bytes))
             .transpose()?;
 
-        let hero = match (options.hero, options.markers || options.characters) {
-            (_, false) => None,
-            (Some(hero), true) => Some(hero as usize),
-            (None, true) => self.heroes(map_ref.source)?.first().map(|&h| h as usize),
+        let hero = if options.markers || options.characters {
+            self.hero_for(map_ref.source, options.hero)?
+        } else {
+            None
         };
         let state_bytes = match hero {
             Some(hero) => Some(self.dir.state_bytes(hero as u32, files)?),
@@ -396,12 +410,26 @@ impl Game {
         }
     }
 
-    /// Headless simulation of one map: creatures walk, rules decide, engine ticks.
+    /// Headless simulation of one map using the first available hero's state:
+    /// creatures walk, rules decide, engine ticks.
     pub fn simulation(&self, map_ref: MapRef, seed: u64) -> Result<simulation::Simulation> {
+        self.simulation_with_hero(map_ref, seed, None)
+    }
+
+    /// The same, for a chosen hero: `hero` selects the `Game.N` whose state and
+    /// roster drive it, `None` the first. A caller that composed the Scene for a
+    /// specific hero must pass the same one here, or the creature geometry, the
+    /// roster and the clips come from different files (review #101, finding P2-2).
+    pub fn simulation_with_hero(
+        &self,
+        map_ref: MapRef,
+        seed: u64,
+        hero: Option<u32>,
+    ) -> Result<simulation::Simulation> {
         let files = map_ref.source.file_set();
         let map_bytes = self.dir.map_bytes(map_ref.number, files)?;
         let konung_map = map::parse(&map_bytes)?;
-        let hero = self.heroes(map_ref.source)?.first().map(|&h| h as usize);
+        let hero = self.hero_for(map_ref.source, hero)?;
         let state_bytes = match hero {
             Some(hero) => Some(self.dir.state_bytes(hero as u32, files)?),
             None => None,
@@ -432,13 +460,24 @@ impl Game {
         ))
     }
 
-    /// Idle and walk clips per creature, keyed by `Piece::creature_id` (the
-    /// character slot). The layer order matches the creature's Characters-group
-    /// pieces in the scene built from the same state, so a consumer can swap an
-    /// [`Animator`] sequence by piece position when [`WalkState`] changes.
+    /// Idle and walk clips per creature for the first available hero's state.
     pub fn creature_animations(&self, map_ref: MapRef) -> Result<Vec<(usize, CreatureAnimation)>> {
+        self.creature_animations_with_hero(map_ref, None)
+    }
+
+    /// The same, for a chosen hero: `hero` selects the `Game.N` the clips are
+    /// decoded from, `None` the first. Keyed by `Piece::creature_id` (the
+    /// character slot); the layer order matches the creature's Characters-group
+    /// pieces in the scene built from the SAME hero, so a consumer can swap an
+    /// [`Animator`] sequence by piece position when [`WalkState`] changes, and a
+    /// caller must pass the hero its Scene used (review #101, finding P2-2).
+    pub fn creature_animations_with_hero(
+        &self,
+        map_ref: MapRef,
+        hero: Option<u32>,
+    ) -> Result<Vec<(usize, CreatureAnimation)>> {
         let files = map_ref.source.file_set();
-        let hero = self.heroes(map_ref.source)?.first().map(|&h| h as usize);
+        let hero = self.hero_for(map_ref.source, hero)?;
         let state_bytes = self.dir.state_bytes(hero.unwrap_or(0) as u32, files)?;
         let state = game_state::parse(&state_bytes)?;
         Ok(self.resources.with_graphics(|graph, objects| {
@@ -716,6 +755,7 @@ fn piece(from: k1_game::scene::DrawPiece) -> Piece {
         animation: from.animation.map(animation),
         group: from.group,
         creature_id: from.creature_id,
+        depth_bottom: from.depth_bottom,
     }
 }
 
@@ -995,6 +1035,7 @@ mod tests {
             animation: None,
             group: PieceGroup::Terrain,
             creature_id: None,
+            depth_bottom: None,
         }
     }
 
@@ -1129,6 +1170,7 @@ mod tests {
                 }),
                 group: PieceGroup::Characters,
                 creature_id: None,
+                depth_bottom: None,
             }],
         };
         assert_eq!(scene.texture_ids(), [TextureId(gear), TextureId(body)]);

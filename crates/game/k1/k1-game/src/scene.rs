@@ -44,6 +44,9 @@ pub struct DrawPiece {
     pub animation: Option<DrawAnimation>,
     pub group: PieceGroup,
     pub creature_id: Option<usize>,
+    /// Logical depth bottom for DepthMap boundary lookup when it differs from
+    /// `y + height` (objects with `flags & 8`, Slavik `game.cpp:1391-1395`).
+    pub depth_bottom: Option<i32>,
 }
 
 /// Кадр анимированного куска: картинка (`None` — слоя в этом кадре не видно) и
@@ -226,6 +229,7 @@ impl DrawPiece {
             animation: None,
             group,
             creature_id: None,
+            depth_bottom: None,
         }
     }
 
@@ -240,6 +244,7 @@ impl DrawPiece {
             animation: track.animation,
             group,
             creature_id: None,
+            depth_bottom: None,
         }
     }
 
@@ -253,6 +258,7 @@ impl DrawPiece {
             animation: None,
             group,
             creature_id: None,
+            depth_bottom: None,
         }
     }
 }
@@ -425,6 +431,18 @@ pub fn object_position(x: i16, y: i16) -> (i32, i32) {
         x * map::TILE_STEP_X / 2 - (y & 1) * map::TILE_STEP_X / 4,
         y * 16,
     )
+}
+
+/// Depth-sort bottom of a placed object: pixel y + frame offset + image height,
+/// reduced by `height / 4` when per-instance flags bit 3 is set (Slavik
+/// `game.cpp:1391-1395`). The clamp at zero is from the original.
+pub fn sort_bottom(position_y: i32, offset_y: i16, height: i32, flags: u8) -> i32 {
+    let mut bottom = position_y + i32::from(offset_y) + height;
+    if flags & 8 != 0 {
+        bottom -= height / 4;
+        bottom = bottom.max(0);
+    }
+    bottom
 }
 
 /// The draw list of a map, in stacking order.
@@ -666,11 +684,13 @@ fn object_pieces(
         return;
     };
     let (x, y) = object_position(placed.x, placed.y);
-    let key = (
-        y + i32::from(simple.frames[base].offset.1) + image.height as i32,
-        0,
-        placed.slot,
+    let bottom = sort_bottom(
+        y,
+        simple.frames[base].offset.1,
+        image.height as i32,
+        placed.flags,
     );
+    let key = (bottom, 0, placed.slot);
     let object_id = placed.object_id as usize;
     // Кадр анимированного объекта длится frame_time тиков. Кадров может быть
     // много и без frame_time — такой объект игра не анимирует (и `render.py`, и
@@ -714,6 +734,11 @@ fn object_pieces(
     .map(|track| DrawPiece::track(PieceGroup::Objects, track))
     .into_iter()
     .collect::<Vec<_>>();
+    if placed.flags & 8 != 0
+        && let Some(main) = stack.first_mut()
+    {
+        main.depth_bottom = Some(bottom);
+    }
     // Огни объекта — сразу поверх него: все кадры анимации своего вида, по тике
     // на кадр. У кадра огня нет своего смещения, угол задаёт точка огня.
     for flame in &simple.flames {

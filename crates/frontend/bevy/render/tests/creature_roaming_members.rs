@@ -126,6 +126,7 @@ fn every_loaded_roaming_member_gets_a_unique_creature_plan() {
         let (anim, _report) = build_creature_anim(
             &game,
             map_ref,
+            None,
             &scene.creature_pieces,
             &mut cache,
             &mut images,
@@ -232,7 +233,7 @@ fn roaming_member_node_positions_match_the_simulation() {
 
     let scene = game.scene(map_ref, &SceneOptions::ALL).unwrap();
     let mut motion = CreatureMotion::default();
-    motion.request(map_ref, SEED, scene);
+    motion.request(map_ref, SEED, None, scene);
     let mut app = App::new();
     app.add_plugins((
         MinimalPlugins,

@@ -12,3 +12,4 @@ pub mod resources;
 pub mod rules;
 pub mod scene;
 pub mod textures;
+pub mod time_of_day;

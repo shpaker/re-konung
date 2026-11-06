@@ -130,7 +130,11 @@ def _draw_objects(
         shadow = None
         if frame.shadow is not None:
             shadow = (frame.shadow, 0, x + frame.shadow_offset[0], y + frame.shadow_offset[1])
-        key = (image_y + frame.image.height, 0, placed.slot)
+        key_bottom = image_y + frame.image.height
+        if placed.flags & 8:
+            key_bottom -= frame.image.height // 4
+            key_bottom = max(0, key_bottom)
+        key = (key_bottom, 0, placed.slot)
         pieces: list[Piece] = [(frame.image, simple.palette_offset, image_x, image_y)]
         # Огни объекта — сразу поверх него, первый кадр анимации своего вида,
         # от позиции объекта (Slavik game.cpp:1587-1597)

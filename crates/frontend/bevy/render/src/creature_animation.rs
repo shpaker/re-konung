@@ -205,6 +205,11 @@ pub struct CreatureSim {
     pub initial_pixels: Vec<(usize, (i32, i32))>,
     pub epoch: u64,
     pub sim_ticks: u64,
+    /// The `Game.N` the running simulation, its clips and the Scene were built
+    /// for (`None` — the first). A rebuild — reset or a backward replay — reloads
+    /// this same hero so the creature geometry never drifts onto another hero's
+    /// state (review #101, finding P2-2).
+    pub hero: Option<u32>,
     /// Whether this map's creature nodes have been spawned; reset on rebuild so
     /// they are built once.
     pub creatures_spawned: bool,
@@ -252,6 +257,10 @@ impl Default for CreatureDepth {
 pub struct CreatureMotion {
     pub map: Option<MapRef>,
     pub seed: u64,
+    /// Which `Game.N` the frontend composed the Scene for; the simulation and the
+    /// clips must load the same hero's state, so it rides the request (`None` —
+    /// the first, the viewer's default; review #101, P2-2).
+    pub hero: Option<u32>,
     pub scene: Option<Scene>,
     pub rebuild: bool,
 }
@@ -259,10 +268,13 @@ pub struct CreatureMotion {
 impl CreatureMotion {
     /// Asks for `map`'s creatures to be built from `scene` at the next run of
     /// [`prepare_creatures`]. `seed` fixes the simulation's spawn so a reset
-    /// reproduces the first build exactly.
-    pub fn request(&mut self, map: MapRef, seed: u64, scene: Scene) {
+    /// reproduces the first build exactly, and `hero` must be the same `Game.N`
+    /// the frontend built `scene` from, so geometry, roster and clips stay on one
+    /// starting state (review #101, P2-2).
+    pub fn request(&mut self, map: MapRef, seed: u64, hero: Option<u32>, scene: Scene) {
         self.map = Some(map);
         self.seed = seed;
+        self.hero = hero;
         self.scene = Some(scene);
         self.rebuild = true;
     }
@@ -289,8 +301,10 @@ pub struct CreatureAnimReport {
 #[derive(Resource, Default)]
 pub struct CreatureSpawns {
     pub plans: Vec<CreatureData>,
-    /// Body height in pixels per creature (`CreatureData::bottom - origin.y`),
-    /// used to turn a live cell into an occlusion bottom without a scene lookup.
+    /// Body height in pixels per creature, measured from the creature's Scene
+    /// composition base (`scene_bottom − base.y`), so `sync_creature_nodes` adds
+    /// it to the live node row to get the occlusion bottom without a scene
+    /// lookup; it equals `CreatureData::bottom − origin.y` (review #101, P2-1).
     pub heights: HashMap<usize, i32>,
     /// Spawn pixel per creature, the origin the occlusion bottom and depth are
     /// measured against (the simulation's own position for that creature).
@@ -365,11 +379,12 @@ impl Plugin for CreatureAnimationPlugin {
 pub fn build_creature_anim(
     game: &Game,
     map_ref: MapRef,
+    hero: Option<u32>,
     creature_pieces: &[Piece],
     cache: &mut TextureCache,
     images: &mut Assets<Image>,
 ) -> (CreatureAnim, CreatureAnimReport) {
-    let animations = match game.creature_animations(map_ref) {
+    let animations = match game.creature_animations_with_hero(map_ref, hero) {
         Ok(animations) => animations,
         Err(error) => {
             return (
@@ -610,10 +625,14 @@ pub fn build_creature_spawns(
 /// Body layers keep their scene order, which indexes [`CreatureSequences::body`].
 ///
 /// Piece offsets and resting anchors are reduced against `base` (the Scene
-/// composition origin), while the plan's position, its `bottom` and the height
-/// stay on the simulation `origin` (`id`/`origin` seed the node's world place and
-/// occlusion). For a static creature `base == origin` and the reduction is the
-/// identity (review #101, P2-2).
+/// composition origin), while the node's world position rides the simulation
+/// `origin`. Body height is the lowest body edge measured from `base` (the
+/// shadow never sets it), so the returned height and `CreatureData::bottom` stay
+/// correct when the Scene composed a creature elsewhere than the simulation
+/// places it (`base != origin`, review #101, finding P2-1): `bottom` is
+/// `origin.y + height`, the occlusion line at the creature's live row. For a
+/// static creature `base == origin` and this reduces to the scene bottom, the
+/// historical value.
 fn build_creature_plan(
     pieces: Vec<&Piece>,
     cache: &TextureCache,
@@ -624,7 +643,9 @@ fn build_creature_plan(
 ) -> (CreatureData, i32) {
     let mut layers: Vec<LayerData> = Vec::new();
     let mut shadow: Option<LayerData> = None;
-    let mut bottom = i32::MIN;
+    // The lowest body edge in absolute scene coordinates; the shadow never
+    // contributes, so it never sets the occlusion line.
+    let mut scene_bottom = i32::MIN;
     for piece in pieces {
         let entry = piece.texture.as_ref().and_then(|id| cache.get(id));
         let size = piece_size(piece, entry.map_or(UVec2::ZERO, |entry| entry.size));
@@ -636,11 +657,20 @@ fn build_creature_plan(
         if piece.group == PieceGroup::CharacterShadows {
             shadow = Some(layer);
         } else {
-            bottom = bottom.max(piece.y + size.y as i32);
+            scene_bottom = scene_bottom.max(piece.y + size.y as i32);
             layers.push(layer);
         }
     }
-    let bottom = if bottom == i32::MIN { origin.1 } else { bottom };
+    // Height above the Scene composition base, not the simulation origin: the
+    // occlusion line must follow the creature's live row, so `bottom` is the
+    // origin row plus this height rather than the absolute scene bottom — the
+    // old code kept the pre-relocation position's offset once #99 moved a member.
+    let height = if scene_bottom == i32::MIN {
+        0
+    } else {
+        scene_bottom - base.1
+    };
+    let bottom = origin.1 + height;
     let sequences = anim.creatures.get(&id);
     let animations = layers
         .iter()
@@ -659,7 +689,7 @@ fn build_creature_plan(
             shadow,
             shadow_animation,
         },
-        bottom - origin.1,
+        height,
     )
 }
 
@@ -696,7 +726,14 @@ pub fn build_depth_map(scene: &Scene, cache: &TextureCache) -> DepthMap {
                     .and_then(|id| cache.get(id))
                     .map_or(0, |entry| entry.size.y as i32)
             });
-            (piece.y + height, order as f32 * Z_STEP)
+            // A flag-8 object carries its own occlusion bottom (`depth_bottom`),
+            // the original's per-object depth-sort adjustment (review #103); it
+            // wins over the plain texture bottom so a creature standing behind
+            // such an object hides at the line the original uses.
+            (
+                piece.depth_bottom.unwrap_or(piece.y + height),
+                order as f32 * Z_STEP,
+            )
         })
         .collect();
     DepthMap::build(stacks.into_iter())
@@ -745,8 +782,14 @@ pub fn prepare_creatures(
         commands.entity(root).despawn();
     }
     sim.creatures_spawned = false;
+    // Remember the hero the Scene was composed for: every later rebuild (reset,
+    // backward replay) reloads this same `Game.N` (review #101, P2-2).
+    sim.hero = request.hero;
     depth.map = build_depth_map(&scene, &cache);
-    match game.0.simulation(map_ref, request.seed) {
+    match game
+        .0
+        .simulation_with_hero(map_ref, request.seed, request.hero)
+    {
         Ok(simulation) => {
             sim.error = None;
             sim.initial_pixels = simulation.initial_pixels();
@@ -768,6 +811,7 @@ pub fn prepare_creatures(
     let (built, built_report) = build_creature_anim(
         &game.0,
         map_ref,
+        request.hero,
         &scene.creature_pieces,
         &mut cache,
         &mut images,
@@ -790,7 +834,7 @@ pub fn reset_creature_sim(
     clock_ticks: u64,
     sim: &mut CreatureSim,
 ) {
-    match game.simulation(map_ref, seed) {
+    match game.simulation_with_hero(map_ref, seed, sim.hero) {
         Ok(simulation) => {
             sim.error = None;
             sim.initial_pixels = simulation.initial_pixels();
@@ -838,7 +882,7 @@ pub fn reset_creature_positions(
     clock_ticks: u64,
     sim: &mut CreatureSim,
 ) {
-    match game.simulation(map_ref, seed) {
+    match game.simulation_with_hero(map_ref, seed, sim.hero) {
         Ok(fresh) => {
             sim.error = None;
             match sim.sim.as_mut() {
@@ -890,7 +934,11 @@ pub fn advance_creature_sim(
         let Some(map_ref) = request.map else {
             return;
         };
-        let Some(mut replayed) = game.0.simulation(map_ref, request.seed).ok() else {
+        let Some(mut replayed) = game
+            .0
+            .simulation_with_hero(map_ref, request.seed, sim.hero)
+            .ok()
+        else {
             return;
         };
         for _ in 0..target {
