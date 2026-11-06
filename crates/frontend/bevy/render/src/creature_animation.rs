@@ -292,9 +292,16 @@ pub struct CreatureSpawns {
     /// Body height in pixels per creature (`CreatureData::bottom - origin.y`),
     /// used to turn a live cell into an occlusion bottom without a scene lookup.
     pub heights: HashMap<usize, i32>,
-    /// Spawn pixel per creature, the origin every clip corner is reduced
-    /// against when a swap re-anchors its animator.
+    /// Spawn pixel per creature, the origin the occlusion bottom and depth are
+    /// measured against (the simulation's own position for that creature).
     pub origins: HashMap<usize, (i32, i32)>,
+    /// Scene composition origin per creature — the base every piece offset and
+    /// animation anchor is reduced against (`Scene::creature_origins`), kept
+    /// apart from [`Self::origins`] so the sprite's local geometry stays fixed to
+    /// the creature even when the simulation places it elsewhere than the Scene
+    /// composed it (review #101, P2-2). Falls back to the origin, i.e. the
+    /// identity, for a creature the Scene carries no origin for.
+    pub bases: HashMap<usize, (i32, i32)>,
 }
 
 /// The creature-animation subsystem: its resources, its systems and the ordering
@@ -567,6 +574,7 @@ pub fn build_creature_spawns(
     let mut plans = Vec::new();
     let mut heights = HashMap::new();
     let mut origins = HashMap::new();
+    let mut bases = HashMap::new();
     for &(id, origin) in initial_pixels {
         let pieces: Vec<&Piece> = scene
             .creature_pieces
@@ -576,15 +584,23 @@ pub fn build_creature_spawns(
         if pieces.is_empty() {
             continue;
         }
-        let (plan, height) = build_creature_plan(pieces, cache, anim, id, origin);
+        // The Scene composed this creature's pieces around its own origin cell;
+        // reduce the local geometry against that, never against the simulation
+        // origin, so the sprite stays put while the node rides the simulation
+        // (review #101, P2-2). A creature the Scene carries no origin for keeps
+        // the historical behaviour: base == origin, the identity reduction.
+        let base = scene.creature_origins.get(&id).copied().unwrap_or(origin);
+        let (plan, height) = build_creature_plan(pieces, cache, anim, id, origin, base);
         plans.push(plan);
         heights.insert(id, height);
         origins.insert(id, origin);
+        bases.insert(id, base);
     }
     CreatureSpawns {
         plans,
         heights,
         origins,
+        bases,
     }
 }
 
@@ -592,12 +608,19 @@ pub fn build_creature_spawns(
 ///
 /// `bottom` is the lowest body edge (the shadow never sets the occlusion line).
 /// Body layers keep their scene order, which indexes [`CreatureSequences::body`].
+///
+/// Piece offsets and resting anchors are reduced against `base` (the Scene
+/// composition origin), while the plan's position, its `bottom` and the height
+/// stay on the simulation `origin` (`id`/`origin` seed the node's world place and
+/// occlusion). For a static creature `base == origin` and the reduction is the
+/// identity (review #101, P2-2).
 fn build_creature_plan(
     pieces: Vec<&Piece>,
     cache: &TextureCache,
     anim: &CreatureAnim,
     id: usize,
     origin: (i32, i32),
+    base: (i32, i32),
 ) -> (CreatureData, i32) {
     let mut layers: Vec<LayerData> = Vec::new();
     let mut shadow: Option<LayerData> = None;
@@ -608,7 +631,7 @@ fn build_creature_plan(
         let layer = LayerData {
             image: entry.map_or_else(Handle::default, |entry| entry.handle.clone()),
             size,
-            offset: Vec2::new((piece.x - origin.0) as f32, (piece.y - origin.1) as f32),
+            offset: Vec2::new((piece.x - base.0) as f32, (piece.y - base.1) as f32),
         };
         if piece.group == PieceGroup::CharacterShadows {
             shadow = Some(layer);
@@ -622,9 +645,9 @@ fn build_creature_plan(
     let animations = layers
         .iter()
         .enumerate()
-        .map(|(index, _)| rest_animation(sequences.and_then(|c| c.body.get(&index)), origin))
+        .map(|(index, _)| rest_animation(sequences.and_then(|c| c.body.get(&index)), base))
         .collect();
-    let shadow_animation = sequences.and_then(|c| rest_animation(Some(&c.shadow), origin));
+    let shadow_animation = sequences.and_then(|c| rest_animation(Some(&c.shadow), base));
     (
         CreatureData {
             id: id as u32,
@@ -641,14 +664,16 @@ fn build_creature_plan(
 }
 
 /// The resting [`LayerAnimation`] of a layer, if it has a resting sequence,
-/// anchored on the clip's own base corner relative to the creature's origin —
-/// the same coordinates the node lives in.
-fn rest_animation(layer: Option<&LayerSequences>, origin: (i32, i32)) -> Option<LayerAnimation> {
+/// anchored on the clip's own base corner reduced to the creature's Scene
+/// composition origin — the same local coordinates its piece offset lives in, so
+/// the resting clip and the static piece land on one spot regardless of where the
+/// simulation places the node (review #101, P2-2).
+fn rest_animation(layer: Option<&LayerSequences>, base: (i32, i32)) -> Option<LayerAnimation> {
     let clip = layer?.rest.as_ref()?;
     Some(LayerAnimation {
         sequence: Arc::clone(&clip.sequence),
         base: clip.base,
-        anchor: (clip.corner.0 - origin.0, clip.corner.1 - origin.1),
+        anchor: (clip.corner.0 - base.0, clip.corner.1 - base.1),
     })
 }
 
@@ -1057,6 +1082,16 @@ pub fn sync_creature_animation(
         let Some(&origin) = spawns.origins.get(&tag.creature_id) else {
             continue;
         };
+        // Re-anchor against the Scene composition origin, not the simulation
+        // origin, so a clip's frame lands at the same node-local spot its resting
+        // piece occupies even after the simulation moved the node elsewhere
+        // (review #101, P2-2); a creature with no recorded base keeps the
+        // identity, base == origin.
+        let base = spawns
+            .bases
+            .get(&tag.creature_id)
+            .copied()
+            .unwrap_or(origin);
         let elapsed = elapsed.get(&tag.creature_id).copied().unwrap_or(0);
         // Anchor the swap so the current tick shows the correct frame: the
         // special opens on the tick its frame counter started, the walk opens
@@ -1068,18 +1103,18 @@ pub fn sync_creature_animation(
                 .ticks
                 .saturating_sub(u64::from(elapsed.saturating_sub(1)))
         };
-        apply_clip(&mut animator, clip, origin, step_start);
+        apply_clip(&mut animator, clip, base, step_start);
     }
 }
 
-/// Installs `clip` on `animator`, re-anchored on the clip's own base corner at
-/// `at_tick`.
-fn apply_clip(animator: &mut Animator, clip: &Clip, origin: (i32, i32), at_tick: u64) {
+/// Installs `clip` on `animator`, re-anchored on the clip's own base corner
+/// reduced to the creature's Scene composition origin `base` at `at_tick`.
+fn apply_clip(animator: &mut Animator, clip: &Clip, base: (i32, i32), at_tick: u64) {
     animator.play_at(
         Arc::clone(&clip.sequence),
         clip.base,
         at_tick,
-        (clip.corner.0 - origin.0, clip.corner.1 - origin.1),
+        (clip.corner.0 - base.0, clip.corner.1 - base.1),
     );
 }
 

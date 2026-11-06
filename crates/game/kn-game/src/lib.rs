@@ -143,6 +143,20 @@ pub struct Scene {
     /// untouched and the nodes no longer drop the members the static list
     /// omits (review #101, P2-1). Empty unless the characters layer is on.
     pub creature_pieces: Vec<Piece>,
+    /// The Scene composition origin of each creature's geometry — the cell whose
+    /// absolute pixel [`creature_geometry`] composed its resting pieces around —
+    /// keyed by `Piece::creature_id` (the record slot, the same id the renderer
+    /// builds nodes from).
+    ///
+    /// The creature renderer reduces every piece offset and animation anchor
+    /// against this base, never against the simulation's spawn pixel, so a
+    /// sprite's local geometry stays fixed to the creature while the node's
+    /// world position comes solely from the simulation — which diverges from the
+    /// Scene origin once `place_roaming` re-parks roaming squad members at load
+    /// (review #101, P2-2). For a static creature the base equals its simulation
+    /// origin, so the reduction is the identity and output is unchanged. A side
+    /// table on the facade [`Scene`], never in the digest-guarded `pieces`.
+    pub creature_origins: std::collections::HashMap<usize, (i32, i32)>,
 }
 
 impl Scene {
@@ -346,25 +360,31 @@ impl Game {
             state: state.as_ref(),
             overlays: overlays(options),
         };
-        let (pieces, creature_pieces) = self.resources.with_graphics(|graph, objects| {
-            let draw =
-                k1_game::scene::draw_list(&input, graph, Some(objects), &self.resources.tables)?;
-            // The roster-driven creature geometry rides along with the scene but
-            // never enters `draw_list`, so the digest-guarded source list is
-            // untouched; built only when the characters layer is on.
-            let creatures = match (options.characters, state.as_ref()) {
-                (true, Some(state)) => {
-                    let graphics =
-                        k1_game::scene::Graphics::new(graph, objects, &self.resources.tables);
-                    creature_geometry(state, map_ref.number as usize, hero, &graphics)
-                }
-                _ => Vec::new(),
-            };
-            Ok::<_, GameError>((draw, creatures))
-        })??;
+        let (pieces, creature_pieces, creature_origins) =
+            self.resources.with_graphics(|graph, objects| {
+                let draw = k1_game::scene::draw_list(
+                    &input,
+                    graph,
+                    Some(objects),
+                    &self.resources.tables,
+                )?;
+                // The roster-driven creature geometry rides along with the scene but
+                // never enters `draw_list`, so the digest-guarded source list is
+                // untouched; built only when the characters layer is on.
+                let (creatures, origins) = match (options.characters, state.as_ref()) {
+                    (true, Some(state)) => {
+                        let graphics =
+                            k1_game::scene::Graphics::new(graph, objects, &self.resources.tables);
+                        creature_geometry(state, map_ref.number as usize, hero, &graphics)
+                    }
+                    _ => (Vec::new(), std::collections::HashMap::new()),
+                };
+                Ok::<_, GameError>((draw, creatures, origins))
+            })??;
         Ok(Scene {
             pieces: pieces.into_iter().map(piece).collect(),
             creature_pieces,
+            creature_origins,
         })
     }
 
@@ -639,6 +659,7 @@ impl Game {
             // The headless check counts the static draw list only; it renders no
             // creatures, so it needs no roster geometry (review #101, P2-1).
             creature_pieces: Vec::new(),
+            creature_origins: std::collections::HashMap::new(),
         };
         let ids = scene.texture_ids();
         let stats = scene.animation_stats();
@@ -836,9 +857,10 @@ fn creature_geometry(
     map_number: usize,
     hero: Option<usize>,
     graphics: &k1_game::scene::Graphics<'_>,
-) -> Vec<Piece> {
+) -> (Vec<Piece>, std::collections::HashMap<usize, (i32, i32)>) {
     let roster = k1_game::creatures::roster(state, map_number, hero);
     let mut pieces = Vec::new();
+    let mut origins = std::collections::HashMap::new();
     for creature in &roster {
         let Some(character) = state.characters.get(creature.id).and_then(Option::as_ref) else {
             continue;
@@ -848,12 +870,20 @@ fn creature_geometry(
         let Some(pose) = creature_rest_pose(character, px, py, state, graphics) else {
             continue;
         };
+        let before = pieces.len();
         pieces.extend(pose.pieces.into_iter().map(piece));
         if let Some(shadow) = pose.shadow {
             pieces.push(piece(shadow));
         }
+        // Keyed by the record slot — the `Piece::creature_id` the renderer joins
+        // on, not the roster index — so a piece and its origin share one key. Only
+        // creatures that contributed geometry are recorded, matching the
+        // renderer's "no pieces, no node" policy.
+        if pieces.len() > before {
+            origins.insert(character.slot, (px, py));
+        }
     }
-    pieces
+    (pieces, origins)
 }
 
 /// The animation state a walking creature draws: the walk row of its sprite
@@ -1014,6 +1044,7 @@ mod tests {
         };
         let scene = Scene {
             creature_pieces: Vec::new(),
+            creature_origins: std::collections::HashMap::new(),
             pieces: vec![
                 piece(solid),
                 piece(TextureKey::Tile { index: 7 }),
@@ -1043,6 +1074,7 @@ mod tests {
         };
         let scene = Scene {
             creature_pieces: Vec::new(),
+            creature_origins: std::collections::HashMap::new(),
             pieces: vec![
                 Piece {
                     animation: Some(animation()),
@@ -1084,6 +1116,7 @@ mod tests {
         };
         let scene = Scene {
             creature_pieces: Vec::new(),
+            creature_origins: std::collections::HashMap::new(),
             pieces: vec![Piece {
                 texture: None,
                 x: 0,
@@ -1113,6 +1146,7 @@ mod tests {
     fn static_scene_has_no_animation() {
         let scene = Scene {
             creature_pieces: Vec::new(),
+            creature_origins: std::collections::HashMap::new(),
             pieces: vec![piece(TextureKey::Tile { index: 1 })],
         };
         assert_eq!(

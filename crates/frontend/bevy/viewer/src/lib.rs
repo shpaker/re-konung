@@ -1460,6 +1460,7 @@ mod tests {
         };
         let scene = kn_game::Scene {
             creature_pieces: Vec::new(),
+            creature_origins: std::collections::HashMap::new(),
             pieces: vec![
                 piece(100, PieceGroup::Objects),    // order 0 → z 0
                 piece(500, PieceGroup::Objects),    // order 1 → z 0.01
