@@ -9,3 +9,6 @@ description = "Отображение сцены игр серии «Князь�
 kn-game = { path = "../../../game/kn-game" }
 bevy = "0.20"
 thiserror = "2"
+
+[dev-dependencies]
+k1-data = { path = "../../../game/k1/k1-data" }

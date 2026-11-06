@@ -130,6 +130,19 @@ pub struct AnimationFrame {
 #[derive(Debug, Clone, Default)]
 pub struct Scene {
     pub pieces: Vec<Piece>,
+    /// Resting geometry for every creature the map's roster loads, keyed by
+    /// `Piece::creature_id` — the set the creature renderer builds nodes from.
+    ///
+    /// Kept apart from [`Scene::pieces`] on purpose: `pieces` is the
+    /// digest-guarded source draw list, assembled once through
+    /// `k1_game::scene::draw_list` over [`k1_data::characters::placed`], which
+    /// under-emits a roaming squad (only its first member). This collection
+    /// instead covers every loaded member — roaming 2..n included — by posing
+    /// each roster record at its own cell through the same
+    /// `character_pose`/`compose` path, so the source list and its digest are
+    /// untouched and the nodes no longer drop the members the static list
+    /// omits (review #101, P2-1). Empty unless the characters layer is on.
+    pub creature_pieces: Vec<Piece>,
 }
 
 impl Scene {
@@ -333,11 +346,25 @@ impl Game {
             state: state.as_ref(),
             overlays: overlays(options),
         };
-        let pieces = self.resources.with_graphics(|graph, objects| {
-            k1_game::scene::draw_list(&input, graph, Some(objects), &self.resources.tables)
+        let (pieces, creature_pieces) = self.resources.with_graphics(|graph, objects| {
+            let draw =
+                k1_game::scene::draw_list(&input, graph, Some(objects), &self.resources.tables)?;
+            // The roster-driven creature geometry rides along with the scene but
+            // never enters `draw_list`, so the digest-guarded source list is
+            // untouched; built only when the characters layer is on.
+            let creatures = match (options.characters, state.as_ref()) {
+                (true, Some(state)) => {
+                    let graphics =
+                        k1_game::scene::Graphics::new(graph, objects, &self.resources.tables);
+                    creature_geometry(state, map_ref.number as usize, hero, &graphics)
+                }
+                _ => Vec::new(),
+            };
+            Ok::<_, GameError>((draw, creatures))
         })??;
         Ok(Scene {
             pieces: pieces.into_iter().map(piece).collect(),
+            creature_pieces,
         })
     }
 
@@ -394,33 +421,32 @@ impl Game {
         let hero = self.heroes(map_ref.source)?.first().map(|&h| h as usize);
         let state_bytes = self.dir.state_bytes(hero.unwrap_or(0) as u32, files)?;
         let state = game_state::parse(&state_bytes)?;
-        let entities = game_state::on_map(&state, map_ref.number as usize, hero);
         Ok(self.resources.with_graphics(|graph, objects| {
             let graphics = k1_game::scene::Graphics::new(graph, objects, &self.resources.tables);
+            let roster = k1_game::creatures::roster(&state, map_ref.number as usize, hero);
             let mut result = Vec::new();
-            for (character, x, y) in k1_data::characters::placed(&entities, &state) {
-                let (px, py) = game_state::character_position(x, y);
+            // Every loaded roster creature, not `characters::placed`: a roaming
+            // squad's members 2..n live in the roster and the simulation but are
+            // omitted there, so the clips — and the nodes built from them — must
+            // be driven by the roster to cover them (review #101, P2-1).
+            for creature in &roster {
+                let Some(character) = state.characters.get(creature.id).and_then(Option::as_ref)
+                else {
+                    continue;
+                };
+                let (px, py) = game_state::character_position(
+                    i32::from(creature.cell.0),
+                    i32::from(creature.cell.1),
+                );
                 // A state-4 record's resting clip is its idle pair (state 6 for
                 // a dynamic creature, docs/k1/creatures.md); the record's own
                 // state 4 becomes the `special` clip the viewer swaps to while
                 // the machine plays it. Every other record shows the state its
                 // file carries.
                 let is_special = character.state == k1_game::creature_anim::SPECIAL_STATE;
-                let rest_state = if is_special { 6 } else { character.state };
-                let rest = match k1_game::scene::pose_in(
-                    character,
-                    px,
-                    py,
-                    &state,
-                    &graphics,
-                    &PoseKind {
-                        state: rest_state,
-                        direction: character.direction,
-                        frame: Some(0),
-                    },
-                ) {
-                    Ok(Some(pose)) => clips_of(pose),
-                    _ => continue,
+                let rest = match creature_rest_pose(character, px, py, &state, &graphics) {
+                    Some(pose) => clips_of(pose),
+                    None => continue,
                 };
                 let walk: Vec<Option<CreatureClips>> = (0..DIRECTIONS as u8)
                     .map(|direction| {
@@ -610,6 +636,9 @@ impl Game {
             k1_game::scene::draw_list(&input, graph, Some(objects), &self.resources.tables)?;
         let scene = Scene {
             pieces: pieces.into_iter().map(piece).collect(),
+            // The headless check counts the static draw list only; it renders no
+            // creatures, so it needs no roster geometry (review #101, P2-1).
+            creature_pieces: Vec::new(),
         };
         let ids = scene.texture_ids();
         let stats = scene.animation_stats();
@@ -753,6 +782,78 @@ fn creature_layer(piece: k1_game::scene::DrawPiece, key: LayerKey) -> CreatureLa
         corner: (piece.x, piece.y),
         key,
     }
+}
+
+/// The resting [`Pose`] a creature shows when neither walking nor playing a
+/// special: its idle pair. A state-4 record rests on state 6 (a dynamic
+/// creature's idle, docs/k1/creatures.md) so its static base and clips match the
+/// idle it returns to; every other record rests on the state its file carries.
+///
+/// Shared by [`Game::creature_animations`] and [`creature_geometry`] so the
+/// node's static geometry and its resting clips come from one pose, never two
+/// that could list the layers differently.
+fn creature_rest_pose(
+    character: &game_state::Character,
+    x: i32,
+    y: i32,
+    state: &GameState,
+    graphics: &k1_game::scene::Graphics<'_>,
+) -> Option<k1_game::scene::Pose> {
+    let rest_state = if character.state == k1_game::creature_anim::SPECIAL_STATE {
+        6
+    } else {
+        character.state
+    };
+    k1_game::scene::pose_in(
+        character,
+        x,
+        y,
+        state,
+        graphics,
+        &PoseKind {
+            state: rest_state,
+            direction: character.direction,
+            frame: Some(0),
+        },
+    )
+    .ok()
+    .flatten()
+}
+
+/// Resting geometry for every creature `map_number` loads, in roster order,
+/// keyed by `Piece::creature_id`.
+///
+/// Driven by [`k1_game::creatures::roster`] — the set the simulation actually
+/// loads — not by [`k1_data::characters::placed`], which under-emits a roaming
+/// squad to its first member: each member is posed at its own record cell
+/// through [`creature_rest_pose`], the same path the static scene uses, so the
+/// whole squad gets node geometry while the digest-guarded `draw_list` stays
+/// untouched (review #101, P2-1). A creature whose resting pose composes to
+/// nothing contributes no piece, matching the renderer's "no pieces, no node"
+/// policy.
+fn creature_geometry(
+    state: &GameState,
+    map_number: usize,
+    hero: Option<usize>,
+    graphics: &k1_game::scene::Graphics<'_>,
+) -> Vec<Piece> {
+    let roster = k1_game::creatures::roster(state, map_number, hero);
+    let mut pieces = Vec::new();
+    for creature in &roster {
+        let Some(character) = state.characters.get(creature.id).and_then(Option::as_ref) else {
+            continue;
+        };
+        let (px, py) =
+            game_state::character_position(i32::from(creature.cell.0), i32::from(creature.cell.1));
+        let Some(pose) = creature_rest_pose(character, px, py, state, graphics) else {
+            continue;
+        };
+        pieces.extend(pose.pieces.into_iter().map(piece));
+        if let Some(shadow) = pose.shadow {
+            pieces.push(piece(shadow));
+        }
+    }
+    pieces
 }
 
 /// The animation state a walking creature draws: the walk row of its sprite
@@ -912,6 +1013,7 @@ mod tests {
             color: [1, 2, 3, 4],
         };
         let scene = Scene {
+            creature_pieces: Vec::new(),
             pieces: vec![
                 piece(solid),
                 piece(TextureKey::Tile { index: 7 }),
@@ -940,6 +1042,7 @@ mod tests {
             frames: vec![frame(Some(first)), frame(Some(second)), frame(Some(shared))],
         };
         let scene = Scene {
+            creature_pieces: Vec::new(),
             pieces: vec![
                 Piece {
                     animation: Some(animation()),
@@ -980,6 +1083,7 @@ mod tests {
             palette: 3,
         };
         let scene = Scene {
+            creature_pieces: Vec::new(),
             pieces: vec![Piece {
                 texture: None,
                 x: 0,
@@ -1008,6 +1112,7 @@ mod tests {
     #[test]
     fn static_scene_has_no_animation() {
         let scene = Scene {
+            creature_pieces: Vec::new(),
             pieces: vec![piece(TextureKey::Tile { index: 1 })],
         };
         assert_eq!(

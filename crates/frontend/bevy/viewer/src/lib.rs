@@ -1258,10 +1258,12 @@ mod tests {
         }
     }
 
-    /// The resting clip must be anchored exactly where the scene draws the
+    /// The resting clip must be anchored exactly where the node draws the
     /// piece, or a creature would be born displaced and only the swaps would
-    /// read correct. Both come from one pose build, so they must agree on
-    /// every real creature (data test, skips without `original/`).
+    /// read correct. Both come from one roster pose build — the clips from
+    /// `creature_animations`, the node geometry from `Scene::creature_pieces` —
+    /// so they must agree on every real creature, including a roaming member the
+    /// static draw list omits (data test, skips without `original/`).
     #[test]
     fn the_rest_clips_are_anchored_where_the_scene_draws_the_layer() {
         let Some((dir, map_ref)) = game_and_first_map() else {
@@ -1272,7 +1274,7 @@ mod tests {
         let mut checked = 0;
         for (slot, anim) in game.creature_animations(map_ref).unwrap() {
             let pieces: Vec<&Piece> = scene
-                .pieces
+                .creature_pieces
                 .iter()
                 .filter(|piece| {
                     piece.creature_id == Some(slot) && piece.group != PieceGroup::CharacterShadows
@@ -1457,6 +1459,7 @@ mod tests {
             creature_id: None,
         };
         let scene = kn_game::Scene {
+            creature_pieces: Vec::new(),
             pieces: vec![
                 piece(100, PieceGroup::Objects),    // order 0 → z 0
                 piece(500, PieceGroup::Objects),    // order 1 → z 0.01
@@ -2374,9 +2377,15 @@ mod tests {
         let game = Game::open(&dir).unwrap();
         let mut cache = TextureCache::default();
         let mut images = Assets::<Image>::default();
-        let (anim, report) = build_creature_anim(&game, map_ref, &mut cache, &mut images);
-        println!("walk diagnostics: {report:?}");
         let scene = game.scene(map_ref, &SceneOptions::ALL).unwrap();
+        let (anim, report) = build_creature_anim(
+            &game,
+            map_ref,
+            &scene.creature_pieces,
+            &mut cache,
+            &mut images,
+        );
+        println!("walk diagnostics: {report:?}");
         let mut sim_resource = CreatureSim::default();
         sim_resource.sim = game.simulation(map_ref, SIM_SEED).ok();
         sim_resource.initial_pixels = sim_resource.sim.as_ref().unwrap().initial_pixels();
@@ -2620,8 +2629,14 @@ mod tests {
         let game = Game::open(&dir).unwrap();
         let mut cache = TextureCache::default();
         let mut images = Assets::<Image>::default();
-        let (anim, _report) = build_creature_anim(&game, map_ref, &mut cache, &mut images);
         let scene = game.scene(map_ref, &SceneOptions::ALL).unwrap();
+        let (anim, _report) = build_creature_anim(
+            &game,
+            map_ref,
+            &scene.creature_pieces,
+            &mut cache,
+            &mut images,
+        );
         let simulation = game.simulation(map_ref, SIM_SEED).ok();
         let initial = home(simulation.as_ref().unwrap());
         let initial_by_id: HashMap<usize, (i32, i32)> = initial.iter().copied().collect();

@@ -483,6 +483,7 @@ mod tests {
         // объектами), и узел группы обязан сохранить общие номера: по ним
         // считается z, и перестановка уронила бы огонь под дерево
         let scene = Scene {
+            creature_pieces: Vec::new(),
             pieces: vec![
                 group_piece(PieceGroup::Terrain),
                 group_piece(PieceGroup::Objects),

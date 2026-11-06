@@ -145,11 +145,12 @@ fn check_reports_no_errors() {
     }
 }
 
-/// Idle/walk clips line up with the scene's Characters pieces for the same creature.
+/// Idle/walk clips line up with the roster creature pieces for the same creature.
 ///
 /// `kn_render` swaps an `Animator` by piece position, so `rest.layers` must be as
-/// long as the creature's Characters pieces in the scene, and `walk` must carry one
-/// entry per sprite direction. A mismatch would draw the wrong layer during a step.
+/// long as the creature's Characters pieces in the roster set the nodes are built
+/// from (`Scene::creature_pieces`), and `walk` must carry one entry per sprite
+/// direction. A mismatch would draw the wrong layer during a step.
 #[test]
 fn creature_animation_layers_align_with_scene_pieces() {
     use kn_game::PieceGroup;
@@ -159,7 +160,7 @@ fn creature_animation_layers_align_with_scene_pieces() {
         let map_ref = game.maps().unwrap()[0];
         let scene = game.scene(map_ref, &SceneOptions::ALL).unwrap();
         let characters: Vec<usize> = scene
-            .pieces
+            .creature_pieces
             .iter()
             .filter(|piece| piece.group == PieceGroup::Characters)
             .filter_map(|piece| piece.creature_id)

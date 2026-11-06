@@ -358,6 +358,7 @@ impl Plugin for CreatureAnimationPlugin {
 pub fn build_creature_anim(
     game: &Game,
     map_ref: MapRef,
+    creature_pieces: &[Piece],
     cache: &mut TextureCache,
     images: &mut Assets<Image>,
 ) -> (CreatureAnim, CreatureAnimReport) {
@@ -395,6 +396,16 @@ pub fn build_creature_anim(
             for animation in frames.flatten() {
                 seen.extend(animation.frames.iter().filter_map(|frame| frame.texture));
             }
+        }
+    }
+    // A creature with neither walk nor special never reaches `creature_animations`
+    // and so contributes no clip here, yet its node still shows its resting base
+    // image; that texture is only in the roster piece set, so it is decoded too,
+    // or the static member would be a blank node (review #101, P2-1).
+    for piece in creature_pieces {
+        seen.extend(piece.texture);
+        if let Some(animation) = &piece.animation {
+            seen.extend(animation.frames.iter().filter_map(|frame| frame.texture));
         }
     }
     let texture_error = cache
@@ -536,13 +547,17 @@ fn clip_seq(layer: Option<&GameCreatureLayer>, cache: &TextureCache) -> Option<C
     })
 }
 
-/// Builds every creature's [`CreatureData`] from its scene pieces.
+/// Builds every creature's [`CreatureData`] from its roster creature pieces.
 ///
-/// A creature's body/equipment pieces (group `Characters`) and shadow piece
-/// (`CharacterShadows`) carry their own geometry in the scene; each is placed
-/// relative to the creature's origin cell, so the whole set rides the node as it
-/// moves. Only creatures that actually have scene pieces get a plan; roster
-/// order keeps the result deterministic.
+/// Geometry comes from [`Scene::creature_pieces`] — the roster-driven set that
+/// carries a resting pose for every loaded creature, roaming squad members 2..n
+/// included — not from [`Scene::pieces`], the digest-guarded source list that
+/// under-emits a squad to its first member (review #101, P2-1). A creature's
+/// body/equipment pieces (group `Characters`) and shadow piece
+/// (`CharacterShadows`) carry their own geometry; each is placed relative to the
+/// creature's origin cell, so the whole set rides the node as it moves. Only
+/// creatures that actually have pieces get a plan; roster order keeps the result
+/// deterministic.
 pub fn build_creature_spawns(
     scene: &Scene,
     cache: &TextureCache,
@@ -554,7 +569,7 @@ pub fn build_creature_spawns(
     let mut origins = HashMap::new();
     for &(id, origin) in initial_pixels {
         let pieces: Vec<&Piece> = scene
-            .pieces
+            .creature_pieces
             .iter()
             .filter(|piece| piece.creature_id == Some(id))
             .collect();
@@ -725,7 +740,13 @@ pub fn prepare_creatures(
     // and a later backward step from rewinding to absolute clock time (#68).
     sim.epoch = clock.ticks;
     sim.sim_ticks = 0;
-    let (built, built_report) = build_creature_anim(&game.0, map_ref, &mut cache, &mut images);
+    let (built, built_report) = build_creature_anim(
+        &game.0,
+        map_ref,
+        &scene.creature_pieces,
+        &mut cache,
+        &mut images,
+    );
     *anim = built;
     *report = built_report;
     *spawns = build_creature_spawns(&scene, &cache, &anim, &sim.initial_pixels);
