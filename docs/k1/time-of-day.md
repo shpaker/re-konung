@@ -7,7 +7,10 @@ ambient arithmetic and the gates are **confirmed** against our own byte-level re
 three binaries; the constant-light map list, the light-effects option and everything the
 coin flip means stay **hypothesis** or **by Slavik**, and are named as such where they
 appear. This page is the evidence base for the clock (#95), the rendered lighting (#96)
-and the switches (#97) under #87.
+and the switches (#97) under #87; of the three, the clock is implemented —
+`k1_game::time_of_day` derives the day from the simulation tick as this page describes,
+and its tests assert the interval trace, not the phase names (see "What the next tickets
+take" below).
 
 The tick itself is [movement.md](movement.md); the light masks that a phase lights up
 are `LIGHTS.N` and `LIGHTS.RES` ([formats/map.md](formats/map.md),
@@ -421,11 +424,19 @@ Deliberate, recorded next to the facts they bend:
   to do with the world. Our day is 21600 ticks of the simulation's own tick — the counter
   `Simulation::tick` advances, not a second clock; 21.6 minutes at the 60 ms tick. A modern
   game speed, when it comes, will change how fast that tick advances and never the cycle.
-- **The day is not re-zeroed by a map load.** The original's counter is zeroed when a map
-  record is activated — every activation we can see the code for — while our time is one
-  continuous function of the session's tick and a map change does not rewind it. A per-map
-  restart of the hour is an artefact of the original's activation store; a world whose day
-  jumps at every door is not what #87 asks for.
+- **The day travels through a game transition; a viewer map switch is not one.** The
+  original's counter is zeroed when a map record is activated — every activation we can
+  see the code for — running two different things together that we split. A game-side
+  transition, the player walking between maps in the Player, keeps the session's day:
+  time is one continuous function of the session's tick and a transition does not rewind
+  it; the travel ticket must carry the day across, because a world whose day jumps at
+  every door is not what #87 asks for. The viewer switching to another map is not a
+  transition: each map there is an independent scene with a simulation of its own, and
+  that scene's day begins with it — the viewer test
+  `switching_to_another_map_recreates_the_day_with_the_new_simulation` holds this tool
+  contract, not a game rule. A per-map restart of the hour is an artefact of the
+  original's activation store, and neither surface copies it as a rule: the Player
+  travels, the viewer scenes are separate by construction.
 - **A clock face the original may not have.** The original's interface shows no confirmed hour,
   so the HH:MM the viewer shows is our display convention over the tick, and it stays a label:
   no rule reads it.
@@ -437,23 +448,40 @@ Deliberate, recorded next to the facts they bend:
 
 ## What the next tickets take from this page
 
-- #95 takes the cycle length, the two increment sites and the wording "the lighting
-  computation is gated, the day counter keeps running" (now with evidence: the increments
-  sit nowhere near the gates). Game time is the simulation's own tick
-  (`Simulation::tick_number()`): the viewer derives everything from it and accumulates
-  nothing, and the contract a test asserts is the **interval** trace — the twelve
-  thresholds and the ground-light interval — because the four day names are ours, not the
-  game's. Because the ramps halve as integers, the model's **observable** trace — what a
-  player sees change — is `1802, 3593, 5402, 8100, 18900, 19020`: a ramp leaves the value
-  it comes from on the tick whose integer half first turns non-zero, and window 13 carries
-  `(0,0,0)` for the tick after its ramp ends. #95 follows the values, since that is what
-  a screen shows; the branch spans of the interval table stay the contract for
-  comparisons. The displayed hour is the linear 24-hour reading defined
+- **#95 — implemented.** The model is `k1_game::time_of_day`, derived from the simulation's
+  own tick (`Simulation::tick_number()`); the viewer derives everything from it and
+  accumulates nothing — the lighting computation is gated, the day counter keeps running,
+  and the evidence says so: the two increment sites sit nowhere near the gates. It reports
+  the ambient triple of the window table branch by branch, ramp formulas included, before
+  the division by 100; the windows whose value is the per-day night palette are reported as
+  the darker one, which moves no boundary because both palettes are dark. The contract its
+  tests assert is the **interval** trace — the twelve thresholds and the ground-light
+  interval — because the four day names are ours, not the game's; the phase words are a
+  display reading derived from the same two classifications, tested to introduce no
+  boundary of their own. The displayed hour is the linear 24-hour reading defined
   [above](#the-hour-we-display--our-convention-not-a-fact-about-k1).
-- #96 takes the interval table, the window table with its exact ramp branches, the
-  per-channel blend rules, the three surfaces treated differently, the constant-light
-  array, the coin flip against the day index, and the two unresolved coefficients (the
-  `0.33`/`1/3` pair and the rounding of the byte-packed channels) — the presets as places
-  to stand the camera, never as boundaries.
-- #97 takes the switches-and-flags table: both user switches, both computed flags, and
-  the constant-light bypass of the day/night gate.
+- **Branch ends and value reaches are ticks apart, and the model follows the values.**
+  The ramps halve the tick distance as integers ([above](#what-a-phase-does-to-the-picture)),
+  so a ramp leaves the value it comes from a tick or two late: window 4's ramp returns
+  `(0,0,0)` at 3593 while its branch ends at 3595, and window 13's ramp reaches `(0,0,0)`
+  at 19020 while its branch ends at 19021. (The clone's float division would move every
+  ramp boundary one tick earlier — the model follows the original, not the clone.) A
+  renderer that interpolates per tick (#96) sees the values, so the observable trace of
+  the model is `1802, 3593, 5402, 8100, 18900, 19020`, not the branch list — both encode
+  the same original, one by comparison, one by arithmetic, and the branch spans of the
+  interval table stay the contract for comparisons.
+- **#96 — not implemented.** It takes the interval table, the window table with its exact
+  ramp branches, the per-channel blend rules, the three surfaces treated differently, the
+  constant-light array, the branch-vs-value distinction above, the coin flip against the
+  day index (the model leaves it undrawn; #96 draws it from the seeded generator), the two
+  unresolved coefficients (the `0.33`/`1/3` pair and the rounding of the byte-packed
+  channels), and the camera presets — as places to stand the camera, never as boundaries.
+- **#97 — not implemented.** It takes the switches-and-flags table: both user switches,
+  both computed flags, and the constant-light bypass of the day/night gate.
+- **Neither #96 nor #97 owns the day.** Both read it from the running simulation —
+  `Simulation::game_time()` — and change only how it is drawn or which part of the
+  lighting computation runs. What the day does at a map change is none of their business:
+  the viewer's fresh day per independent scene and the Player's travelling day are the
+  surfaces' own contracts (above), and the lighting must follow whichever day the
+  simulation reports, never re-derive, re-zero or cache it — otherwise the viewer's
+  fresh-day convention would leak into the game as a rule.
