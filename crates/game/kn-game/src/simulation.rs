@@ -15,8 +15,11 @@ use crate::movement::passage::Passage;
 use crate::movement::rng::Rng;
 use crate::movement::world::{Event, World, WorldError, WorldRules};
 use crate::step_durations::StepDurations;
+use k1_game::creature_anim::{self, Machine as CreatureAnimMachine, Seed as CreatureAnimSeed};
 use k1_game::creatures::{self, Creature, Workplace};
 use k1_game::rules::{Context, CreatureType, Decision, Ground, Live, classify, is_adjacent};
+
+pub use k1_game::creature_anim::Stage as CreatureStage;
 
 use crate::rules;
 
@@ -86,6 +89,11 @@ pub struct Simulation {
     jobs: Vec<Workplace>,
     rng: Rng,
     tick: u64,
+    /// Per-creature animation state: state-4 creatures play their special
+    /// once on world load and land in idle; every other record is Idle from
+    /// the start. Owns no clock — [`Simulation::tick`] advances it once per
+    /// caller-supplied tick (issue #70 AC4).
+    creature_anim: CreatureAnimMachine,
     /// Orders the world rejected for a reason other than "no route": the rules
     /// send no orders that should fail — an unknown creature or an off-grid
     /// goal is a bug or bad data — so they are kept for the caller to report
@@ -143,12 +151,14 @@ pub struct GoalReach {
 }
 
 impl Simulation {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         map: &KonungMap,
         state: &GameState,
         map_number: usize,
         hero: Option<usize>,
         step_table: Vec<[u32; DIRECTION_COUNT]>,
+        special_frames: Vec<u32>,
         jobs: Vec<Workplace>,
         seed: u64,
     ) -> Simulation {
@@ -195,6 +205,19 @@ impl Simulation {
             }
         }
 
+        // The "the creature entered the world" event (docs/k1/creatures.md,
+        // our divergence for #38): every state-4 record starts its special at
+        // frame 0. The temporary trigger is this call site, not the original's
+        // AI-released hold of frame 0 (which needs #38's decision slot).
+        let mut creature_anim = CreatureAnimMachine::new();
+        creature_anim.enter_world(roster.iter().zip(special_frames.iter()).map(
+            |(creature, &frames)| CreatureAnimSeed {
+                id: creature.id,
+                recorded_state: creature.state,
+                special_frames: frames,
+            },
+        ));
+
         Simulation {
             world,
             roster,
@@ -202,6 +225,7 @@ impl Simulation {
             jobs,
             rng: Rng::new(seed ^ 0xDEAD_BEEF),
             tick: 0,
+            creature_anim,
             order_failures: Vec::new(),
             cooldown: rules::FailedOrderCooldown::new(WorldRules::default().repath_cooldown_ticks),
             spawn_failures,
@@ -294,8 +318,42 @@ impl Simulation {
             .collect()
     }
 
+    /// Adopts the movement side of a freshly built simulation of the same map
+    /// and seed while keeping this one's creature animation machine playing.
+    ///
+    /// "Reset positions" restarts the walk world (routes, walk states, RNG,
+    /// cooldown) back to the file's load cells but must NOT restart an in-flight
+    /// state-4 special (the machine's per-creature stage is the animation) and
+    /// must NOT rewind the simulation's own clock — `tick` is the game-time
+    /// source (#95), so it is deliberately left untouched: only the world-side
+    /// movement state is carried over, while `roster`, `jobs`, `creature_anim`
+    /// and `tick` stay as they were (review of #101, P2-#3). The fresh
+    /// simulation is built from the same `map_ref` and `seed`, so its roster and
+    /// the machine's creature ids line up.
+    pub fn adopt_positions_from(&mut self, fresh: Simulation) {
+        let Simulation {
+            world,
+            ids,
+            rng,
+            order_failures,
+            cooldown,
+            spawn_failures,
+            ..
+        } = fresh;
+        self.world = world;
+        self.ids = ids;
+        self.rng = rng;
+        self.order_failures = order_failures;
+        self.cooldown = cooldown;
+        self.spawn_failures = spawn_failures;
+    }
+
     pub fn tick(&mut self) -> Vec<Event> {
         self.tick += 1;
+        // The state machine advances on the caller's tick — never on a
+        // render-frame boundary — so creature state transitions are
+        // frame-rate independent (issue #70).
+        self.creature_anim.tick();
         let live = self.live_picture();
         let group_states = k1_game::rules::group_states(&self.roster, &live);
         let mut context = Context {
@@ -397,6 +455,48 @@ impl Simulation {
         (0..self.roster.len())
             .filter_map(|index| self.creature_state(index))
             .collect()
+    }
+
+    /// The animation stage of one creature (issue #70): `Special { frame }`
+    /// while its state-4 sequence runs, `Idle` otherwise. `None` for an id the
+    /// machine never seeded.
+    pub fn creature_stage(&self, creature_id: usize) -> Option<creature_anim::Stage> {
+        self.creature_anim.stage(creature_id)
+    }
+
+    /// The animation state to show for one creature right now: 4 while its
+    /// special plays, or the record's pair when idle. The caller overlays walk
+    /// from [`CreatureState::walk_state`] on top of the idle answer.
+    pub fn creature_shown_state(&self, creature_id: usize) -> Option<u8> {
+        self.creature_anim.shown_state(creature_id)
+    }
+
+    /// Restart one creature's special from frame 0 — the seam a game event
+    /// drives (issue #70 AC3); a new appearance is never triggered by
+    /// sequence exhaustion, only by this call.
+    pub fn restart_creature_special(&mut self, creature_id: usize) -> bool {
+        self.creature_anim.restart_special(creature_id)
+    }
+
+    /// Restart every state-4 creature's special from frame 0 — the viewer's
+    /// "Reset animation" (review of #101, P2-#3): only the animation machine
+    /// rewinds, the walk world and the game clock stay exactly where they are.
+    pub fn restart_all_specials(&mut self) {
+        self.creature_anim.restart_all_specials();
+    }
+
+    /// Counted pose rebuilds: one per creature whose animation-stage kind
+    /// actually changed since the machine was created (issue #70 AC6). A plain
+    /// frame advance within a running Special does not count.
+    pub fn pose_rebuilds(&self) -> u64 {
+        self.creature_anim.pose_rebuilds()
+    }
+
+    /// Creatures whose animation stage kind changed since the last call, and
+    /// updates the tracker. The viewer calls it once per tick and rebuilds
+    /// each listed creature's pose at most once (issue #70 AC6).
+    pub fn drain_creature_anim_changes(&mut self) -> Vec<usize> {
+        self.creature_anim.drain_changed()
     }
 
     pub fn creature_state(&self, index: usize) -> Option<CreatureState> {
@@ -681,6 +781,7 @@ mod tests {
             MAP_NUMBER,
             None,
             vec![[2; DIRECTION_COUNT]; creatures],
+            vec![0; creatures],
             jobs,
             7,
         )
@@ -1158,7 +1259,7 @@ mod tests {
             right: 8,
             bottom: 8,
         };
-        let state = roaming_state(spawn, &[(5, 5)]);
+        let state = roaming_state(spawn, 1);
         let mut sim = simulation(&map, &state, 1);
 
         let mut boundaries: Vec<u64> = Vec::new();
@@ -1188,7 +1289,7 @@ mod tests {
             right: 8,
             bottom: 8,
         };
-        let state = roaming_state(spawn, &[(5, 5)]);
+        let state = roaming_state(spawn, 1);
         let mut sim = simulation(&map, &state, 1);
 
         for tick in 1..=600u64 {
@@ -1211,7 +1312,7 @@ mod tests {
             right: 8,
             bottom: 8,
         };
-        let state = roaming_state(spawn, &[(5, 5)]);
+        let state = roaming_state(spawn, 1);
         const TICKS: u64 = 400;
 
         let run = |seed: u64| -> Vec<GameTime> {
@@ -1221,6 +1322,7 @@ mod tests {
                 MAP_NUMBER,
                 None,
                 vec![[2; DIRECTION_COUNT]; 1],
+                Vec::new(),
                 Vec::new(),
                 seed,
             );
@@ -1240,6 +1342,7 @@ mod tests {
             MAP_NUMBER,
             None,
             vec![[2; DIRECTION_COUNT]; 1],
+            Vec::new(),
             Vec::new(),
             RUN_SEED,
         );
@@ -1261,7 +1364,7 @@ mod tests {
             right: 8,
             bottom: 8,
         };
-        let state = roaming_state(spawn, &[(5, 5)]);
+        let state = roaming_state(spawn, 1);
 
         let mut sim1 = simulation(&map, &state, 1);
         let mut sim2 = simulation(&map, &state, 1);

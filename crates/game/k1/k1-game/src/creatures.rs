@@ -169,3 +169,34 @@ pub fn step_durations(
         })
         .collect()
 }
+
+/// Frames of the state-4 special sequence at each roster creature's facing
+/// direction, or 0 where the creature's sprite carries no such row. Feeds
+/// [`crate::creature_anim::Seed::special_frames`] on world load.
+///
+/// Only the three dynamic classes 0x46, 0x4c and 0x55 record state 4 in the
+/// shipped files (docs/k1/creatures.md, "Our measurement"); a human is queried
+/// the same way and answers 0, so the machine never seeds it into Special.
+pub fn special_frame_counts(
+    state: &GameState,
+    creatures: &[Creature],
+    graph: &GraphRes<'_>,
+    objects: &ObjectsRes<'_>,
+) -> Vec<u32> {
+    creatures
+        .iter()
+        .map(|creature| {
+            state
+                .characters
+                .get(creature.id)
+                .and_then(Option::as_ref)
+                .map(|character| {
+                    let mut probe = (*character).clone();
+                    probe.state = crate::creature_anim::SPECIAL_STATE;
+                    u32::try_from(k1_data::characters::frame_count(&probe, graph, objects))
+                        .unwrap_or(0)
+                })
+                .unwrap_or(0)
+        })
+        .collect()
+}

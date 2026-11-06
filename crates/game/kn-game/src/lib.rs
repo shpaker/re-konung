@@ -132,6 +132,33 @@ pub struct AnimationFrame {
 #[derive(Debug, Clone, Default)]
 pub struct Scene {
     pub pieces: Vec<Piece>,
+    /// Resting geometry for every creature the map's roster loads, keyed by
+    /// `Piece::creature_id` — the set the creature renderer builds nodes from.
+    ///
+    /// Kept apart from [`Scene::pieces`] on purpose: `pieces` is the
+    /// digest-guarded source draw list, assembled once through
+    /// `k1_game::scene::draw_list` over [`k1_data::characters::placed`], which
+    /// under-emits a roaming squad (only its first member). This collection
+    /// instead covers every loaded member — roaming 2..n included — by posing
+    /// each roster record at its own cell through the same
+    /// `character_pose`/`compose` path, so the source list and its digest are
+    /// untouched and the nodes no longer drop the members the static list
+    /// omits (review #101, P2-1). Empty unless the characters layer is on.
+    pub creature_pieces: Vec<Piece>,
+    /// The Scene composition origin of each creature's geometry — the cell whose
+    /// absolute pixel [`creature_geometry`] composed its resting pieces around —
+    /// keyed by `Piece::creature_id` (the record slot, the same id the renderer
+    /// builds nodes from).
+    ///
+    /// The creature renderer reduces every piece offset and animation anchor
+    /// against this base, never against the simulation's spawn pixel, so a
+    /// sprite's local geometry stays fixed to the creature while the node's
+    /// world position comes solely from the simulation — which diverges from the
+    /// Scene origin once `place_roaming` re-parks roaming squad members at load
+    /// (review #101, P2-2). For a static creature the base equals its simulation
+    /// origin, so the reduction is the identity and output is unchanged. A side
+    /// table on the facade [`Scene`], never in the digest-guarded `pieces`.
+    pub creature_origins: std::collections::HashMap<usize, (i32, i32)>,
 }
 
 impl Scene {
@@ -299,6 +326,18 @@ impl Game {
         Ok(self.dir.state_numbers(source.file_set())?)
     }
 
+    /// The single place a creature/character subsystem decides which `Game.N` to
+    /// load: the caller's `requested` hero, else the first available. The Scene,
+    /// the simulation and the clips all ask here, so choosing a hero other than
+    /// the first never splits them across different starting states — geometry,
+    /// roster and clips stay on one `Game.N` (review #101, finding P2-2).
+    fn hero_for(&self, source: MapSource, requested: Option<u32>) -> Result<Option<usize>> {
+        Ok(match requested {
+            Some(hero) => Some(hero as usize),
+            None => self.heroes(source)?.first().map(|&h| h as usize),
+        })
+    }
+
     /// Сцена карты в порядке наложения; текстуры декодируются отдельно
     /// ([Game::textures]) и кэшируются потребителем.
     pub fn scene(&self, map_ref: MapRef, options: &SceneOptions) -> Result<Scene> {
@@ -311,10 +350,10 @@ impl Game {
             .map(|bytes| map::parse_lights(bytes))
             .transpose()?;
 
-        let hero = match (options.hero, options.markers || options.characters) {
-            (_, false) => None,
-            (Some(hero), true) => Some(hero as usize),
-            (None, true) => self.heroes(map_ref.source)?.first().map(|&h| h as usize),
+        let hero = if options.markers || options.characters {
+            self.hero_for(map_ref.source, options.hero)?
+        } else {
+            None
         };
         let state_bytes = match hero {
             Some(hero) => Some(self.dir.state_bytes(hero as u32, files)?),
@@ -335,11 +374,31 @@ impl Game {
             state: state.as_ref(),
             overlays: overlays(options),
         };
-        let pieces = self.resources.with_graphics(|graph, objects| {
-            k1_game::scene::draw_list(&input, graph, Some(objects), &self.resources.tables)
-        })??;
+        let (pieces, creature_pieces, creature_origins) =
+            self.resources.with_graphics(|graph, objects| {
+                let draw = k1_game::scene::draw_list(
+                    &input,
+                    graph,
+                    Some(objects),
+                    &self.resources.tables,
+                )?;
+                // The roster-driven creature geometry rides along with the scene but
+                // never enters `draw_list`, so the digest-guarded source list is
+                // untouched; built only when the characters layer is on.
+                let (creatures, origins) = match (options.characters, state.as_ref()) {
+                    (true, Some(state)) => {
+                        let graphics =
+                            k1_game::scene::Graphics::new(graph, objects, &self.resources.tables);
+                        creature_geometry(state, map_ref.number as usize, hero, &graphics)
+                    }
+                    _ => (Vec::new(), std::collections::HashMap::new()),
+                };
+                Ok::<_, GameError>((draw, creatures, origins))
+            })??;
         Ok(Scene {
             pieces: pieces.into_iter().map(piece).collect(),
+            creature_pieces,
+            creature_origins,
         })
     }
 
@@ -351,12 +410,26 @@ impl Game {
         }
     }
 
-    /// Headless simulation of one map: creatures walk, rules decide, engine ticks.
+    /// Headless simulation of one map using the first available hero's state:
+    /// creatures walk, rules decide, engine ticks.
     pub fn simulation(&self, map_ref: MapRef, seed: u64) -> Result<simulation::Simulation> {
+        self.simulation_with_hero(map_ref, seed, None)
+    }
+
+    /// The same, for a chosen hero: `hero` selects the `Game.N` whose state and
+    /// roster drive it, `None` the first. A caller that composed the Scene for a
+    /// specific hero must pass the same one here, or the creature geometry, the
+    /// roster and the clips come from different files (review #101, finding P2-2).
+    pub fn simulation_with_hero(
+        &self,
+        map_ref: MapRef,
+        seed: u64,
+        hero: Option<u32>,
+    ) -> Result<simulation::Simulation> {
         let files = map_ref.source.file_set();
         let map_bytes = self.dir.map_bytes(map_ref.number, files)?;
         let konung_map = map::parse(&map_bytes)?;
-        let hero = self.heroes(map_ref.source)?.first().map(|&h| h as usize);
+        let hero = self.hero_for(map_ref.source, hero)?;
         let state_bytes = match hero {
             Some(hero) => Some(self.dir.state_bytes(hero as u32, files)?),
             None => None,
@@ -368,9 +441,12 @@ impl Game {
         let state = state
             .ok_or_else(|| GameError::Io(std::io::Error::other("no game state for simulation")))?;
         let jobs = k1_game::creatures::job_slots(&state, map_ref.number as usize);
-        let step_table = self.resources.with_graphics(|graph, objects| {
+        let (step_table, special_frames) = self.resources.with_graphics(|graph, objects| {
             let roster = k1_game::creatures::roster(&state, map_ref.number as usize, hero);
-            k1_game::creatures::step_durations(&state, &roster, graph, objects)
+            let steps = k1_game::creatures::step_durations(&state, &roster, graph, objects);
+            let specials =
+                k1_game::creatures::special_frame_counts(&state, &roster, graph, objects);
+            (steps, specials)
         })?;
         Ok(simulation::Simulation::new(
             &konung_map,
@@ -378,36 +454,58 @@ impl Game {
             map_ref.number as usize,
             hero,
             step_table,
+            special_frames,
             jobs,
             seed,
         ))
     }
 
-    /// Idle and walk clips per creature, keyed by `Piece::creature_id` (the
-    /// character slot). The layer order matches the creature's Characters-group
-    /// pieces in the scene built from the same state, so a consumer can swap an
-    /// [`Animator`] sequence by piece position when [`WalkState`] changes.
+    /// Idle and walk clips per creature for the first available hero's state.
     pub fn creature_animations(&self, map_ref: MapRef) -> Result<Vec<(usize, CreatureAnimation)>> {
+        self.creature_animations_with_hero(map_ref, None)
+    }
+
+    /// The same, for a chosen hero: `hero` selects the `Game.N` the clips are
+    /// decoded from, `None` the first. Keyed by `Piece::creature_id` (the
+    /// character slot); the layer order matches the creature's Characters-group
+    /// pieces in the scene built from the SAME hero, so a consumer can swap an
+    /// [`Animator`] sequence by piece position when [`WalkState`] changes, and a
+    /// caller must pass the hero its Scene used (review #101, finding P2-2).
+    pub fn creature_animations_with_hero(
+        &self,
+        map_ref: MapRef,
+        hero: Option<u32>,
+    ) -> Result<Vec<(usize, CreatureAnimation)>> {
         let files = map_ref.source.file_set();
-        let hero = self.heroes(map_ref.source)?.first().map(|&h| h as usize);
+        let hero = self.hero_for(map_ref.source, hero)?;
         let state_bytes = self.dir.state_bytes(hero.unwrap_or(0) as u32, files)?;
         let state = game_state::parse(&state_bytes)?;
-        let entities = game_state::on_map(&state, map_ref.number as usize, hero);
         Ok(self.resources.with_graphics(|graph, objects| {
             let graphics = k1_game::scene::Graphics::new(graph, objects, &self.resources.tables);
+            let roster = k1_game::creatures::roster(&state, map_ref.number as usize, hero);
             let mut result = Vec::new();
-            for (character, x, y) in k1_data::characters::placed(&entities, &state) {
-                let (px, py) = game_state::character_position(x, y);
-                let rest = match k1_game::scene::pose_in(
-                    character,
-                    px,
-                    py,
-                    &state,
-                    &graphics,
-                    &PoseKind::of_record(character),
-                ) {
-                    Ok(Some(pose)) => clips_of(pose),
-                    _ => continue,
+            // Every loaded roster creature, not `characters::placed`: a roaming
+            // squad's members 2..n live in the roster and the simulation but are
+            // omitted there, so the clips — and the nodes built from them — must
+            // be driven by the roster to cover them (review #101, P2-1).
+            for creature in &roster {
+                let Some(character) = state.characters.get(creature.id).and_then(Option::as_ref)
+                else {
+                    continue;
+                };
+                let (px, py) = game_state::character_position(
+                    i32::from(creature.cell.0),
+                    i32::from(creature.cell.1),
+                );
+                // A state-4 record's resting clip is its idle pair (state 6 for
+                // a dynamic creature, docs/k1/creatures.md); the record's own
+                // state 4 becomes the `special` clip the viewer swaps to while
+                // the machine plays it. Every other record shows the state its
+                // file carries.
+                let is_special = character.state == k1_game::creature_anim::SPECIAL_STATE;
+                let rest = match creature_rest_pose(character, px, py, &state, &graphics) {
+                    Some(pose) => clips_of(pose),
+                    None => continue,
                 };
                 let walk: Vec<Option<CreatureClips>> = (0..DIRECTIONS as u8)
                     .map(|direction| {
@@ -424,8 +522,37 @@ impl Game {
                         .map(clips_of)
                     })
                     .collect();
-                if walk.iter().any(|clip| clip.is_some()) {
-                    result.push((character.slot, CreatureAnimation { rest, walk }));
+                // Only a state-4 record can have a special; a human's state 4 is
+                // the shot, which is out of #70's scope and must not be routed
+                // through the appearance clip (docs/k1/creatures.md).
+                let special = is_special
+                    .then(|| {
+                        k1_game::scene::pose_in(
+                            character,
+                            px,
+                            py,
+                            &state,
+                            &graphics,
+                            &PoseKind {
+                                state: k1_game::creature_anim::SPECIAL_STATE,
+                                direction: character.direction,
+                                frame: Some(0),
+                            },
+                        )
+                        .ok()
+                        .flatten()
+                        .map(clips_of)
+                    })
+                    .flatten();
+                if walk.iter().any(|clip| clip.is_some()) || special.is_some() {
+                    result.push((
+                        character.slot,
+                        CreatureAnimation {
+                            rest,
+                            walk,
+                            special,
+                        },
+                    ));
                 }
             }
             result
@@ -568,6 +695,10 @@ impl Game {
             k1_game::scene::draw_list(&input, graph, Some(objects), &self.resources.tables)?;
         let scene = Scene {
             pieces: pieces.into_iter().map(piece).collect(),
+            // The headless check counts the static draw list only; it renders no
+            // creatures, so it needs no roster geometry (review #101, P2-1).
+            creature_pieces: Vec::new(),
+            creature_origins: std::collections::HashMap::new(),
         };
         let ids = scene.texture_ids();
         let stats = scene.animation_stats();
@@ -673,12 +804,20 @@ pub struct CreatureClips {
     pub shadow: Option<CreatureLayer>,
 }
 
-/// What a creature shows resting and walking: `walk[direction]` is the walk pose
-/// facing that sprite direction, `None` where the creature has no walk frames.
+/// What a creature shows resting, walking and — for the three dynamic classes
+/// that record state 4 in `Game.N` — playing their one-shot appearance or
+/// transformation animation (docs/k1/creatures.md, "State 4 — two meanings
+/// under one number", issue #70).
+///
+/// `walk[direction]` is the walk pose facing that sprite direction, `None`
+/// where the creature has no walk frames. `special` is `None` for every
+/// human (a human's state 4 is a shot, out of #70's scope) and for a dynamic
+/// creature whose sprite carries no state-4 row.
 #[derive(Debug, Clone)]
 pub struct CreatureAnimation {
     pub rest: CreatureClips,
     pub walk: Vec<Option<CreatureClips>>,
+    pub special: Option<CreatureClips>,
 }
 
 /// The pose's own clips, in the order the scene lists the creature's pieces:
@@ -704,6 +843,87 @@ fn creature_layer(piece: k1_game::scene::DrawPiece, key: LayerKey) -> CreatureLa
         corner: (piece.x, piece.y),
         key,
     }
+}
+
+/// The resting [`Pose`] a creature shows when neither walking nor playing a
+/// special: its idle pair. A state-4 record rests on state 6 (a dynamic
+/// creature's idle, docs/k1/creatures.md) so its static base and clips match the
+/// idle it returns to; every other record rests on the state its file carries.
+///
+/// Shared by [`Game::creature_animations`] and [`creature_geometry`] so the
+/// node's static geometry and its resting clips come from one pose, never two
+/// that could list the layers differently.
+fn creature_rest_pose(
+    character: &game_state::Character,
+    x: i32,
+    y: i32,
+    state: &GameState,
+    graphics: &k1_game::scene::Graphics<'_>,
+) -> Option<k1_game::scene::Pose> {
+    let rest_state = if character.state == k1_game::creature_anim::SPECIAL_STATE {
+        6
+    } else {
+        character.state
+    };
+    k1_game::scene::pose_in(
+        character,
+        x,
+        y,
+        state,
+        graphics,
+        &PoseKind {
+            state: rest_state,
+            direction: character.direction,
+            frame: Some(0),
+        },
+    )
+    .ok()
+    .flatten()
+}
+
+/// Resting geometry for every creature `map_number` loads, in roster order,
+/// keyed by `Piece::creature_id`.
+///
+/// Driven by [`k1_game::creatures::roster`] — the set the simulation actually
+/// loads — not by [`k1_data::characters::placed`], which under-emits a roaming
+/// squad to its first member: each member is posed at its own record cell
+/// through [`creature_rest_pose`], the same path the static scene uses, so the
+/// whole squad gets node geometry while the digest-guarded `draw_list` stays
+/// untouched (review #101, P2-1). A creature whose resting pose composes to
+/// nothing contributes no piece, matching the renderer's "no pieces, no node"
+/// policy.
+fn creature_geometry(
+    state: &GameState,
+    map_number: usize,
+    hero: Option<usize>,
+    graphics: &k1_game::scene::Graphics<'_>,
+) -> (Vec<Piece>, std::collections::HashMap<usize, (i32, i32)>) {
+    let roster = k1_game::creatures::roster(state, map_number, hero);
+    let mut pieces = Vec::new();
+    let mut origins = std::collections::HashMap::new();
+    for creature in &roster {
+        let Some(character) = state.characters.get(creature.id).and_then(Option::as_ref) else {
+            continue;
+        };
+        let (px, py) =
+            game_state::character_position(i32::from(creature.cell.0), i32::from(creature.cell.1));
+        let Some(pose) = creature_rest_pose(character, px, py, state, graphics) else {
+            continue;
+        };
+        let before = pieces.len();
+        pieces.extend(pose.pieces.into_iter().map(piece));
+        if let Some(shadow) = pose.shadow {
+            pieces.push(piece(shadow));
+        }
+        // Keyed by the record slot — the `Piece::creature_id` the renderer joins
+        // on, not the roster index — so a piece and its origin share one key. Only
+        // creatures that contributed geometry are recorded, matching the
+        // renderer's "no pieces, no node" policy.
+        if pieces.len() > before {
+            origins.insert(character.slot, (px, py));
+        }
+    }
+    (pieces, origins)
 }
 
 /// The animation state a walking creature draws: the walk row of its sprite
@@ -864,6 +1084,8 @@ mod tests {
             color: [1, 2, 3, 4],
         };
         let scene = Scene {
+            creature_pieces: Vec::new(),
+            creature_origins: std::collections::HashMap::new(),
             pieces: vec![
                 piece(solid),
                 piece(TextureKey::Tile { index: 7 }),
@@ -892,6 +1114,8 @@ mod tests {
             frames: vec![frame(Some(first)), frame(Some(second)), frame(Some(shared))],
         };
         let scene = Scene {
+            creature_pieces: Vec::new(),
+            creature_origins: std::collections::HashMap::new(),
             pieces: vec![
                 Piece {
                     animation: Some(animation()),
@@ -932,6 +1156,8 @@ mod tests {
             palette: 3,
         };
         let scene = Scene {
+            creature_pieces: Vec::new(),
+            creature_origins: std::collections::HashMap::new(),
             pieces: vec![Piece {
                 texture: None,
                 x: 0,
@@ -961,6 +1187,8 @@ mod tests {
     #[test]
     fn static_scene_has_no_animation() {
         let scene = Scene {
+            creature_pieces: Vec::new(),
+            creature_origins: std::collections::HashMap::new(),
             pieces: vec![piece(TextureKey::Tile { index: 1 })],
         };
         assert_eq!(

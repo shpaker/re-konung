@@ -559,11 +559,61 @@ measurements»). The two uses are disjoint by data, not by convention: the human
 branch above needs a bow in slot 1 and a quiver, and these records hold neither, so
 not one of them can be a shot. What each sequence shows — rising from the ground,
 jumping out of a burrow, a human↔beast change — is the content of the
-dynamic-object sequences and belongs to the viewer's #70, not to combat: **#77
+dynamic-object sequences and belongs to issue #70, not to combat: **#77
 launches a shot on the human path only and must never route a dynamic creature's
 state-4 sequence through the shoot loop.** Whether the monster branch that plays
 state 4 for these classes also releases an arrow is **unknown** («What stays
 unknown»), so that branch stays unimplemented rather than folded into #77.
+
+**Our implementation of the one-shot play mode (#70).** The machine that
+drives the special lives in the Bevy-free game layer
+(`crates/game/k1/k1-game/src/creature_anim.rs`); the visual half — loading the
+state-4 and walk clips, composing a creature's sprites and syncing them to the
+scene clock — is one subsystem in `kn-render` (`creature_animation.rs`), added as
+`CreatureAnimationPlugin` by both windows, so the player shows the same play mode
+as the viewer and neither window reimplements it. The state itself and the
+Special → idle transition belong to the game layer, so a future simulation tick
+and #38's AI can feed the same seam (`ARCHITECTURE.md`, "Boundary rules"); the
+render layer reads the stage and never decides it. The machine owns no clock: the
+caller hands it ticks one by one — the viewer's scene clock, the player's tick, or
+a headless test's counter — and creature transitions are therefore independent
+of the render frame rate. Two intentional differences from the original sit
+next to that decision:
+
+- **The world-load trigger stands in for the original's AI-released frame-0
+  hold until #38.** The clone holds state-4 `Frame == 0` until the state-4
+  branch of the monster decision advances it
+  ([`game_play.cpp:3226-3232`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3226-L3232),
+  [`game_play.cpp:3312-3317`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3312-L3317)),
+  and nothing runs while the frame counter is at zero. Our AI decision slot
+  does not exist yet (#38), so an unheld state-4 creature would freeze on its
+  frame 0 — the flat bone pile for a skeleton, the mound for an Eechetik, the
+  human shape for Ion — forever. The temporary trigger is the explicit
+  "the creature entered the world" event: a state-4 record starts its
+  sequence at frame 0 on map load and cannot block. `Machine::enter_world` is
+  that seam; when #38 brings the decision slot, that slot becomes another
+  caller of the same API and this divergence closes.
+- **Both windows play it once; the viewer can replay it.** The original replays the special once per
+  map entry ([`game.cpp:692`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L692))
+  and its frame counter clamps without a modulo
+  ([`game_play.cpp:3727-3735`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3727-L3735)),
+  so on-screen a state-4 creature rises once and stands. Both of our windows do the
+  same on map load — the player asks the subsystem for its start map, and the fresh
+  machine seeded from the file plays the sequence (`crates/frontend/bevy/player/tests/creatures.rs`).
+  The viewer additionally replays it on every `Play → Off → Play` reset, which
+  is our UI equivalent of the original's fresh map entry. Nothing re-enters
+  Special on sequence exhaustion — the machine only re-enters via
+  `Machine::restart_special`, the game-event seam (#70 AC3) that a later
+  simulation or gameplay event drives. The viewer's Play toggle itself is
+  Playing/Paused/Off (a playback control, not a per-clip play mode); the
+  one-shot vs. looping distinction belongs to the machine and to the clips
+  `kn-render` composes from them.
+
+Idle and walk stay loops as before — the state machine does not touch them
+(`Stage::Idle` is the caller's overlay of walk on rest via the simulation's
+`WalkState`), and map objects and flames keep looping through the same
+global-clock path in `kn-render` that predates #70. Nothing in the fix writes
+map data, so the byte-exact round-trip tests continue to pass.
 
 **State 5 — the melee blow.** Three entries, none of them an order. A character
 walking a route that steps onto a cell held by an enemy it may hit takes the state

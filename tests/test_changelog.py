@@ -26,9 +26,23 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+# A git hook exports GIT_DIR at the repository it guards: pushing from a linked worktree
+# points it at the branch, so a child git/git-cliff built on os.environ would act on the
+# branch instead of the throwaway repo under test. Drop these per child; the caller's own
+# environment stays untouched.
+_AMBIENT_GIT_DIR_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+
+
+def _hermetic_env(base: dict[str, str]) -> dict[str, str]:
+    env = dict(base)
+    for var in _AMBIENT_GIT_DIR_VARS:
+        env.pop(var, None)
+    return env
+
+
 def _env(base: dict[str, str], stamp: datetime) -> dict[str, str]:
     iso = stamp.strftime("%Y-%m-%dT%H:%M:%S +0000")
-    env = dict(base)
+    env = _hermetic_env(base)
     env["GIT_AUTHOR_DATE"] = iso
     env["GIT_COMMITTER_DATE"] = iso
     return env
@@ -51,6 +65,7 @@ def _cliff(repo: Path, *args: str) -> str:
     run = subprocess.run(
         ["uv", "run", "--no-project", "--with", GIT_CLIFF, "git-cliff", *args],
         cwd=repo,
+        env=_hermetic_env(os.environ),
         capture_output=True,
         text=True,
         encoding="utf-8",

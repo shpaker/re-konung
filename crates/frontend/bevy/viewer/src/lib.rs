@@ -5,7 +5,7 @@
 //! одна система. CLI parsing and the headless check live in the `kn-viewer`
 //! app crate.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,18 +27,16 @@ use bevy::{
     ui::Checked,
     ui_widgets::{Activate, ValueChange},
 };
-use kn_game::simulation::{CreatureState, Simulation, WalkState};
-use kn_game::{
-    CreatureAnimation, CreatureClips, CreatureLayer, DayPhase, Game, MapRef, MapSource, Piece,
-    PieceGroup, SceneOptions, TICK_MS, group_is_shown,
-};
+use kn_game::simulation::Simulation;
+use kn_game::{DayPhase, Game, MapRef, MapSource, Piece, SceneOptions, TICK_MS, group_is_shown};
 use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
     AnimPlugin, AnimSet, Animator, CameraApply, CameraBounds, CameraInput, CameraState, Clock,
-    CreatureData, CreatureNode, CreatureRoot, CreatureShadow, DepthMap, GameResource,
-    LayerAnimation, LayerData, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState,
-    SceneGroup, ScenePiece, Sequence, TextureCache, Z_STEP, clear_scene, load_scene, ortho_scale,
-    piece_sequence, piece_size, spawn_creature, update_creature_depth,
+    CreatureAnim, CreatureAnimReport, CreatureAnimationPlugin, CreatureMotion, CreatureNode,
+    CreatureNodesVisible, CreatureRoot, CreatureSet, CreatureShadow, CreatureSim, CreatureSprite,
+    GameResource, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup,
+    ScenePiece, Sequence, TextureCache, clear_scene, load_scene, ortho_scale,
+    reset_creature_animations, reset_creature_positions,
 };
 use kn_ui::{dark_theme, pointer_over_ui, sync_checked};
 
@@ -163,402 +161,13 @@ pub struct Stats {
 /// exact spawn of the first build (same seed, same map → same initial state).
 const SIM_SEED: u64 = 42;
 
-/// Simulation driving creature positions; recreated on map rebuild and on reset.
+/// Per-creature id labels the viewer draws above the creatures. The creature
+/// nodes themselves belong to the shared subsystem: `kn_render` spawns and
+/// animates them, the viewer only puts its diagnostics on top (issue #70).
 #[derive(Resource, Default)]
-struct SimulationResource {
-    sim: Option<Simulation>,
-    initial_pixels: Vec<(usize, (i32, i32))>,
+struct CreatureLabels {
     label_root: Option<Entity>,
     labels_spawned: bool,
-    /// Root of the creature nodes, despawned on map rebuild.
-    creature_root: Option<Entity>,
-    /// Whether this map's creature nodes have been spawned; reset on rebuild and
-    /// after a reset so nodes are rebuilt once.
-    creatures_spawned: bool,
-    /// Why this map's simulation failed to build, if it did; surfaced in the panel
-    /// instead of silently showing a scene with no moving creatures (review #68).
-    error: Option<String>,
-}
-
-/// Depth map built from scene stack boundaries, used for dynamic z on creature move.
-#[derive(Resource)]
-struct SceneDepth {
-    map: DepthMap,
-}
-
-impl Default for SceneDepth {
-    fn default() -> Self {
-        Self {
-            map: DepthMap::build(Vec::new().into_iter()),
-        }
-    }
-}
-
-/// Simulation clock, relative to an epoch: the clock tick at which the current
-/// simulation's tick 0 sits, and the ticks it has advanced since. A reset or a map
-/// change moves the epoch to the clock so the fresh simulation neither replays the
-/// ticks the old one already ran nor rewinds to absolute clock time on a backward
-/// step (review #68). The simulation's clock position is `epoch + sim_ticks`.
-#[derive(Resource, Default)]
-struct SimTickTracker {
-    epoch: u64,
-    sim_ticks: u64,
-}
-
-/// Idle and walk [`Sequence`]s per creature for the `WalkState` swap; rebuilt on
-/// map change together with [`SimulationResource`].
-#[derive(Resource, Default)]
-struct CreatureAnim {
-    creatures: HashMap<usize, CreatureSequences>,
-    /// Last observed `(from, to)` and `step_elapsed` per creature: the first
-    /// frame a step is seen on re-anchors its clips, so the walk cycle runs
-    /// step-relative like the original's `Frame` counter (Slavik
-    /// `game_play.cpp:3727-3740`) instead of free-running against the global clock.
-    locked: HashMap<usize, (StepKey, u32)>,
-}
-
-/// What identifies the step a creature is on, for [`CreatureAnim::locked`].
-type StepKey = ((i32, i32), Option<(i32, i32)>);
-
-impl CreatureAnim {
-    /// Creatures whose step is new or restarted since the last observation —
-    /// their clips must open on the step's base frame. The lock updates here, so
-    /// a step re-anchors exactly once, on its first observation.
-    ///
-    /// A falling `step_elapsed` under an unchanged key is a restart: the world
-    /// can cancel a step whose destination became impassable (`cancel_step`) and
-    /// order the same `(from, to)` again, and the key alone cannot tell that
-    /// from a step still running — without re-anchoring the cycle would keep
-    /// running past the halfway point and wrap a cell behind the creature
-    /// (review #68).
-    fn observe_steps(&mut self, states: &[CreatureState]) -> HashSet<usize> {
-        let mut restep = HashSet::new();
-        for state in states {
-            let observed = ((state.pixel, state.step_to_pixel), state.step_elapsed);
-            let restarted = match self.locked.get(&state.id) {
-                Some(&(last_key, last_elapsed)) => {
-                    last_key != observed.0 || observed.1 < last_elapsed
-                }
-                None => true,
-            };
-            if restarted {
-                restep.insert(state.id);
-            }
-            // Recorded every observation, not only on a re-anchor: the restart
-            // test compares against the highest tick the step was last seen on.
-            self.locked.insert(state.id, observed);
-        }
-        restep
-    }
-}
-
-/// Sequences for one creature's pieces: `body` by Characters-group layer index,
-/// `shadow` for its ground shadow.
-struct CreatureSequences {
-    body: HashMap<usize, LayerSequences>,
-    shadow: LayerSequences,
-}
-
-/// Resting sequence and one per walk direction for a single layer.
-struct LayerSequences {
-    rest: Option<Clip>,
-    walk: Vec<Option<Clip>>,
-}
-
-/// A built sequence and the frame it should show when play restarts. `corner`
-/// is the clip's base-frame corner in absolute map pixels: a swap re-anchors
-/// the animator on `corner` minus the creature's origin, because the clip's
-/// frame offsets are relative to that corner, not to the resting piece's.
-struct Clip {
-    sequence: Arc<Sequence>,
-    base: usize,
-    corner: (i32, i32),
-}
-
-/// One [`CreatureData`] per creature to spawn, rebuilt with the scene. Kept as a
-/// resource so the spawn system runs it once per map, after the depth map exists.
-#[derive(Resource, Default)]
-struct CreatureSpawns {
-    plans: Vec<CreatureData>,
-    /// Body height in pixels per creature (`CreatureData::bottom - origin.y`),
-    /// used to turn a live cell into an occlusion bottom without a scene lookup.
-    heights: HashMap<usize, i32>,
-    /// Spawn pixel per creature, the origin every clip corner is reduced
-    /// against when a swap re-anchors its animator.
-    origins: HashMap<usize, (i32, i32)>,
-}
-
-/// A sprite under a [`CreatureNode`]: which creature it belongs to and which of
-/// its layers it is (or the shadow), so the animation system swaps its sequence.
-#[derive(Component)]
-struct CreatureSprite {
-    creature_id: usize,
-    layer: usize,
-    is_shadow: bool,
-}
-
-/// Slots pinning the creature pipeline around [`kn_render::AnimSet::Sprites`]:
-/// clips are chosen before the frame write and nodes placed after it.
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum CreatureSet {
-    Swap,
-    Nodes,
-}
-
-/// Decodes the walk frames the scene does not carry and builds the swap
-/// sequences; a creature whose walk cannot be decoded simply keeps its record
-/// pose. Nothing about that is silent: every reason a walk is missing or
-/// partial is pushed into `problems` for the diagnostics panel (review #68) —
-/// a creature walking on its rest pose is a rendering defect, not an absence
-/// of creatures to explain away.
-fn build_creature_anim(
-    game: &Game,
-    map_ref: MapRef,
-    cache: &mut TextureCache,
-    images: &mut Assets<Image>,
-    problems: &mut Vec<String>,
-) -> CreatureAnim {
-    let animations = match game.creature_animations(map_ref) {
-        Ok(animations) => animations,
-        Err(error) => {
-            problems.push(format!(
-                "walk animations for {map_ref:?}: {error}; every creature keeps its record pose"
-            ));
-            return CreatureAnim::default();
-        }
-    };
-    let mut seen = HashSet::new();
-    for (_, anim) in &animations {
-        for clips in std::iter::once(&anim.rest).chain(anim.walk.iter().flatten()) {
-            // Both the layer's static base and every animation frame are drawn.
-            seen.extend(clips.layers.iter().filter_map(|layer| layer.base));
-            seen.extend(clips.shadow.as_ref().and_then(|layer| layer.base));
-            let frames = clips
-                .layers
-                .iter()
-                .map(|layer| layer.animation.as_ref())
-                .chain(std::iter::once(
-                    clips
-                        .shadow
-                        .as_ref()
-                        .and_then(|layer| layer.animation.as_ref()),
-                ));
-            for animation in frames.flatten() {
-                seen.extend(animation.frames.iter().filter_map(|frame| frame.texture));
-            }
-        }
-    }
-    if let Err(error) = cache.load(game, &seen.into_iter().collect::<Vec<_>>(), images) {
-        warn!("walk textures for {map_ref:?}: {error}");
-        problems.push(format!(
-            "walk textures for {map_ref:?}: {error}; undecoded walk frames draw the rest pose"
-        ));
-    }
-    let without_walk = animations
-        .iter()
-        .filter(|(_, anim)| anim.walk.iter().all(Option::is_none))
-        .count();
-    let partial_walk = animations
-        .iter()
-        .filter(|(_, anim)| {
-            anim.walk.iter().any(Option::is_some) && anim.walk.iter().any(Option::is_none)
-        })
-        .count();
-    if without_walk > 0 {
-        problems.push(format!(
-            "{without_walk} creature(s) of {} have no walk frames at all: they draw \
-             the rest pose while the simulation walks them",
-            animations.len()
-        ));
-    }
-    if partial_walk > 0 {
-        problems.push(format!(
-            "{partial_walk} creature(s) of {} lack walk frames in some directions: \
-             those steps draw the rest pose",
-            animations.len()
-        ));
-    }
-    CreatureAnim {
-        creatures: animations
-            .into_iter()
-            .map(|(id, anim)| (id, build_sequences(&anim, cache)))
-            .collect(),
-        locked: HashMap::new(),
-    }
-}
-
-/// One creature's clips → sequences, aligned to the scene's layers by
-/// [`kn_game::LayerKey`], never by position: see [`pose_matched_layers`].
-fn build_sequences(anim: &CreatureAnimation, cache: &TextureCache) -> CreatureSequences {
-    let matched = pose_matched_layers(&anim.rest.layers, &anim.walk);
-    let body = anim
-        .rest
-        .layers
-        .iter()
-        .enumerate()
-        .map(|(index, rest_layer)| {
-            let rest = clip_seq(Some(rest_layer), cache);
-            let walk = matched[index]
-                .iter()
-                .map(|layer| clip_seq(*layer, cache))
-                .collect();
-            (index, LayerSequences { rest, walk })
-        })
-        .collect();
-    let rest = clip_seq(anim.rest.shadow.as_ref(), cache);
-    let walk = anim
-        .walk
-        .iter()
-        .map(|dir| {
-            dir.as_ref()
-                .and_then(|clips| clips.shadow.as_ref())
-                .and_then(|layer| clip_seq(Some(layer), cache))
-        })
-        .collect();
-    CreatureSequences {
-        body,
-        shadow: LayerSequences { rest, walk },
-    }
-}
-
-/// For each rest layer, the layer of every walk pose that draws the same part.
-///
-/// The match is by [`kn_game::LayerKey`]: pose tracks are ordered by first
-/// appearance within one pose, so a walk pose may list the same layers in
-/// another order, and an index join would bolt one part's walk clip onto
-/// another's piece — equipment sliding across the sprite on every step
-/// (review #68).
-fn pose_matched_layers<'a>(
-    rest: &'a [CreatureLayer],
-    walk: &'a [Option<CreatureClips>],
-) -> Vec<Vec<Option<&'a CreatureLayer>>> {
-    rest.iter()
-        .map(|rest_layer| {
-            walk.iter()
-                .map(|dir| {
-                    dir.as_ref().and_then(|clips| {
-                        clips
-                            .layers
-                            .iter()
-                            .find(|layer| layer.key == rest_layer.key)
-                    })
-                })
-                .collect()
-        })
-        .collect()
-}
-
-/// Frames of one layer → a swap clip; `None` when no frame decoded.
-fn clip_seq(layer: Option<&CreatureLayer>, cache: &TextureCache) -> Option<Clip> {
-    let layer = layer?;
-    let animation = layer.animation.as_ref()?;
-    let sequence = piece_sequence(animation, cache)?;
-    Some(Clip {
-        sequence,
-        base: animation.base,
-        corner: layer.corner,
-    })
-}
-
-/// Builds every creature's [`CreatureData`] from its scene pieces.
-///
-/// A creature's body/equipment pieces (group `Characters`) and shadow piece
-/// (`CharacterShadows`) carry their own geometry in the scene; each is placed
-/// relative to the creature's origin cell, so the whole set rides the node as it
-/// moves. Only creatures that actually have scene pieces get a plan; roster
-/// order keeps the result deterministic.
-fn build_creature_spawns(
-    scene: &kn_game::Scene,
-    cache: &TextureCache,
-    anim: &CreatureAnim,
-    initial_pixels: &[(usize, (i32, i32))],
-) -> CreatureSpawns {
-    let mut plans = Vec::new();
-    let mut heights = HashMap::new();
-    let mut origins = HashMap::new();
-    for &(id, origin) in initial_pixels {
-        let pieces: Vec<&Piece> = scene
-            .pieces
-            .iter()
-            .filter(|piece| piece.creature_id == Some(id))
-            .collect();
-        if pieces.is_empty() {
-            continue;
-        }
-        let (plan, height) = build_creature_plan(pieces, cache, anim, id, origin);
-        plans.push(plan);
-        heights.insert(id, height);
-        origins.insert(id, origin);
-    }
-    CreatureSpawns {
-        plans,
-        heights,
-        origins,
-    }
-}
-
-/// One creature's pieces → spawn data, with body height reported for depth.
-///
-/// `bottom` is the lowest body edge (the shadow never sets the occlusion line).
-/// Body layers keep their scene order, which indexes [`CreatureSequences::body`].
-fn build_creature_plan(
-    pieces: Vec<&Piece>,
-    cache: &TextureCache,
-    anim: &CreatureAnim,
-    id: usize,
-    origin: (i32, i32),
-) -> (CreatureData, i32) {
-    let mut layers: Vec<LayerData> = Vec::new();
-    let mut shadow: Option<LayerData> = None;
-    let mut bottom = i32::MIN;
-    for piece in pieces {
-        let entry = piece.texture.as_ref().and_then(|id| cache.get(id));
-        let size = piece_size(piece, entry.map_or(UVec2::ZERO, |entry| entry.size));
-        let layer = LayerData {
-            image: entry.map_or_else(Handle::default, |entry| entry.handle.clone()),
-            size,
-            offset: Vec2::new((piece.x - origin.0) as f32, (piece.y - origin.1) as f32),
-        };
-        if piece.group == PieceGroup::CharacterShadows {
-            shadow = Some(layer);
-        } else {
-            bottom = bottom.max(piece.y + size.y as i32);
-            layers.push(layer);
-        }
-    }
-    let bottom = if bottom == i32::MIN { origin.1 } else { bottom };
-    let sequences = anim.creatures.get(&id);
-    let animations = layers
-        .iter()
-        .enumerate()
-        .map(|(index, _)| rest_animation(sequences.and_then(|c| c.body.get(&index)), origin))
-        .collect();
-    let shadow_animation = sequences.and_then(|c| rest_animation(Some(&c.shadow), origin));
-    (
-        CreatureData {
-            id: id as u32,
-            x: origin.0,
-            y: origin.1,
-            bottom,
-            layers,
-            animations,
-            shadow,
-            shadow_animation,
-        },
-        bottom - origin.1,
-    )
-}
-
-/// The resting [`LayerAnimation`] of a layer, if it has a resting sequence,
-/// anchored on the clip's own base corner relative to the creature's origin —
-/// the same coordinates the node lives in.
-fn rest_animation(layer: Option<&LayerSequences>, origin: (i32, i32)) -> Option<LayerAnimation> {
-    let clip = layer?.rest.as_ref()?;
-    Some(LayerAnimation {
-        sequence: Arc::clone(&clip.sequence),
-        base: clip.base,
-        anchor: (clip.corner.0 - origin.0, clip.corner.1 - origin.1),
-    })
 }
 
 /// World-space text label above a creature, showing `#ID`.
@@ -580,6 +189,13 @@ struct PlaybackToggle;
 /// от активаций других кнопок (у выпадющего списка карт они тоже бывают).
 #[derive(Component, Clone, Copy, Default)]
 struct ResetPositions;
+
+/// Кнопка "Reset animation" (issue #70 AC4): brings the clock and the
+/// creature state machine back to what the file records, so the next Play
+/// replays the state-4 special from frame 0. Distinct from "Reset positions",
+/// which returns creatures to their cell pixels but leaves the clock alone.
+#[derive(Component, Clone, Copy, Default)]
+struct ResetAnimation;
 
 /// Подпись элемента интерфейса, включающего оверлей.
 #[derive(Component, Clone, Copy, Default)]
@@ -632,6 +248,9 @@ pub fn run_viewer(config: ViewerConfig) {
             MapCameraPlugin,
             // Тик игры: на нём меняются кадры объектов, персонажей и огней
             AnimPlugin::new(TICK_MS as f32),
+            // Составные спрайты существ, их клипы и синхронизация кадров: та же
+            // подсистема, что поднимает существ в проигрывателе (#70)
+            CreatureAnimationPlugin,
             FrameTimeDiagnosticsPlugin::default(),
         ))
         .insert_resource(dark_theme())
@@ -639,11 +258,7 @@ pub fn run_viewer(config: ViewerConfig) {
         .init_resource::<TextureCache>()
         .init_resource::<ActiveRoot>()
         .init_resource::<Stats>()
-        .init_resource::<SimulationResource>()
-        .init_resource::<SimTickTracker>()
-        .init_resource::<SceneDepth>()
-        .init_resource::<CreatureAnim>()
-        .init_resource::<CreatureSpawns>()
+        .init_resource::<CreatureLabels>()
         .insert_resource(Rebuild { map: true })
         .insert_resource(Viewer {
             maps: config.maps.clone(),
@@ -666,29 +281,29 @@ pub fn run_viewer(config: ViewerConfig) {
                 rebuild_scene,
                 sync_groups,
                 sync_creature_visibility,
-                advance_simulation,
                 spawn_creature_labels,
-                spawn_creatures,
-                sync_creature_animation.in_set(CreatureSet::Swap),
-                sync_creature_nodes.in_set(CreatureSet::Nodes),
                 diagnostics,
             )
                 .chain()
                 // The frame's clock position must be settled before the simulation
-                // catches up to it and before the creature systems read it, and
-                // clips must be chosen before `apply_animators` writes sprites and
-                // the nodes placed after them — never left to the scheduler's
-                // placement of two unconstrained chains (review #68).
+                // catches up to it and before the creature systems read it, and the
+                // map a rebuild asks for must be requested before the shared
+                // subsystem builds it — never left to the scheduler's placement of
+                // two unconstrained chains (review #68).
                 .after(AnimSet::Clock)
                 .after(CameraInput)
+                .before(CreatureSet::Prepare)
                 .before(CameraApply),
         )
-        .configure_sets(
+        // The viewer's diagnostics on top of the shared pipeline: the id rides the
+        // body image, so it can only be placed once the subsystem has written the
+        // node and the frame's sprite offsets.
+        .add_systems(
             Update,
-            (
-                AnimSet::Sprites.after(CreatureSet::Swap),
-                CreatureSet::Nodes.after(AnimSet::Sprites),
-            ),
+            sync_creature_labels
+                .after(CreatureSet::Swap)
+                .after(AnimSet::Sprites)
+                .after(CreatureSet::Nodes),
         )
         .run();
 }
@@ -809,6 +424,12 @@ fn panel(labels: Vec<String>, selected: usize) -> impl Scene {
             ResetPositions
             on(reset_positions)
             --
+            @FeathersButton {
+                @caption: bsn! { @caption("Reset animation") }
+            }
+            ResetAnimation
+            on(reset_animation)
+            --
             @caption("") Diagnostics
         ]
     }
@@ -927,12 +548,9 @@ fn rebuild_scene(
     mut active: ResMut<ActiveRoot>,
     mut stats: ResMut<Stats>,
     mut pending: ResMut<PendingFrame>,
-    mut sim_resource: ResMut<SimulationResource>,
-    mut sim_tracker: ResMut<SimTickTracker>,
-    mut scene_depth: ResMut<SceneDepth>,
-    mut creature_anim: ResMut<CreatureAnim>,
-    mut creature_spawns: ResMut<CreatureSpawns>,
-    clock: Res<Clock>,
+    mut labels: ResMut<CreatureLabels>,
+    mut motion: ResMut<CreatureMotion>,
+    mut visible: ResMut<CreatureNodesVisible>,
 ) {
     if !rebuild.map {
         return;
@@ -982,87 +600,25 @@ fn rebuild_scene(
         problems: loaded.problems,
         error: None,
     };
-    match game.0.simulation(map_ref, SIM_SEED) {
-        Ok(simulation) => {
-            sim_resource.error = None;
-            sim_resource.initial_pixels = simulation.initial_pixels();
-            sim_resource.sim = Some(simulation);
-        }
-        Err(error) => {
-            sim_resource.error = Some(format!("simulation for {map_ref:?}: {error}"));
-            warn!("map {map_ref:?}: simulation failed to build: {error}");
-            sim_resource.initial_pixels = Vec::new();
-            sim_resource.sim = None;
-        }
-    }
-    sim_resource.labels_spawned = false;
-    if let Some(root) = sim_resource.label_root.take() {
+    // The scene's creatures belong to the shared subsystem: it builds the
+    // simulation, the clips, the depth map and the nodes from the scene handed
+    // over here. The viewer only retires its own labels and decides whether the
+    // creatures are born visible, so a map change with characters off shows
+    // nothing for the first frame (review #68).
+    labels.labels_spawned = false;
+    if let Some(root) = labels.label_root.take() {
         commands.entity(root).despawn();
     }
-    if let Some(root) = sim_resource.creature_root.take() {
-        commands.entity(root).despawn();
-    }
-    sim_resource.creatures_spawned = false;
-    // The fresh simulation starts at tick 0 from the current clock: set the epoch so
-    // `advance_simulation` neither replays the accumulated history as one burst nor
-    // rewinds to absolute clock time on a later backward step (review #68).
-    sim_tracker.epoch = clock.ticks;
-    sim_tracker.sim_ticks = 0;
-    scene_depth.map = build_scene_depth(&scene, &cache);
-    *creature_anim = build_creature_anim(
-        &game.0,
-        map_ref,
-        &mut cache,
-        &mut images,
-        &mut stats.problems,
-    );
-    *creature_spawns =
-        build_creature_spawns(&scene, &cache, &creature_anim, &sim_resource.initial_pixels);
+    visible.0 = viewer.is_on(Overlay::Characters);
+    // The viewer has no hero picker, so it asks for the first hero (`None`), the
+    // same choice its `SceneOptions::ALL` scene resolved to (review #101, P2-2).
+    motion.request(map_ref, SIM_SEED, None, scene);
 }
 
 /// Видимость куска по включённым слоям: границы сцены считают только по тому,
 /// что действительно на экране.
 fn shown(options: &SceneOptions) -> impl Fn(&Piece) -> bool + '_ {
     move |piece| group_is_shown(piece.group, options)
-}
-
-/// Builds a depth map from the scene's sorted pieces for creature z-interpolation.
-fn build_scene_depth(scene: &kn_game::Scene, cache: &TextureCache) -> DepthMap {
-    let stacks: Vec<(i32, f32)> = scene
-        .pieces
-        .iter()
-        .enumerate()
-        // Flames ride their object's draw slot; their bottom sits above the
-        // object's and their z is higher, so as contributors they would put a
-        // creature standing on that row in front of the burning object itself
-        // (review #68).
-        .filter(|(_, p)| is_depth_relevant(p.group) && !p.is_flame())
-        .map(|(order, piece)| {
-            let height = piece.h.unwrap_or_else(|| {
-                piece
-                    .texture
-                    .as_ref()
-                    .and_then(|id| cache.get(id))
-                    .map_or(0, |entry| entry.size.y as i32)
-            });
-            (
-                piece.depth_bottom.unwrap_or(piece.y + height),
-                order as f32 * Z_STEP,
-            )
-        })
-        .collect();
-    DepthMap::build(stacks.into_iter())
-}
-
-/// Only static stacks participate in depth ordering.
-///
-/// Characters and their shadows are drawn by their own [`CreatureNode`]s and move
-/// every frame; putting them in the map would let a creature depth-sort against
-/// another creature rather than against the static objects it should hide behind
-/// (review #68). Terrain and the ground layers sit below everything by scene order
-/// and never occlude a creature, so they are excluded too.
-fn is_depth_relevant(group: PieceGroup) -> bool {
-    matches!(group, PieceGroup::Objects)
 }
 
 /// Переносит переключатели слоёв в видимость групп кусков.
@@ -1156,76 +712,20 @@ fn failed(map: MapRef, cached: usize, error: String, elapsed: Duration) -> Stats
     }
 }
 
-/// Advances the simulation to the clock, one logical tick per clock tick.
-///
-/// Time is simulation-relative: the clock tick that maps to the simulation's tick 0
-/// is the tracker's `epoch`, moved to the clock by a reset or a map change. Forward
-/// is a plain catch-up. A backward `Step` rewinds the clock, but the engine has no
-/// reverse tick, so we rebuild the map's simulation and replay it forward to the
-/// *epoch-relative* target — a reset is the zero point, so stepping back just after
-/// one replays nothing instead of the whole clock (review #68). Replaying from seed
-/// is deterministic, so the rewound state equals what forward stepping reached there.
-fn advance_simulation(
-    clock: Res<Clock>,
-    mut tracker: ResMut<SimTickTracker>,
-    mut sim: ResMut<SimulationResource>,
-    game: Res<GameResource>,
-    viewer: Res<Viewer>,
-) {
-    let Some(&map_ref) = viewer.maps.get(viewer.selected) else {
-        tracker.epoch = clock.ticks;
-        tracker.sim_ticks = 0;
-        return;
-    };
-    if sim.sim.is_none() {
-        tracker.epoch = clock.ticks;
-        tracker.sim_ticks = 0;
-        return;
-    }
-    let target = clock.ticks.saturating_sub(tracker.epoch);
-    if target < tracker.sim_ticks {
-        // Backward: rebuild and replay forward to the epoch-relative target. This
-        // runs only when the clock actually moved behind the simulation, not every
-        // frame, so a shallow rewind after a reset (target near 0) is cheap.
-        let Some(replayed) = replay_simulation(&game.0, map_ref, target) else {
-            return;
-        };
-        sim.initial_pixels = replayed.initial_pixels();
-        sim.sim = Some(replayed);
-        tracker.sim_ticks = target;
-        return;
-    }
-    while tracker.sim_ticks < target {
-        let Some(simulation) = sim.sim.as_mut() else {
-            break;
-        };
-        simulation.tick();
-        tracker.sim_ticks += 1;
-    }
-}
-
-/// A fresh map simulation advanced to `ticks`, matching forward stepping exactly.
-fn replay_simulation(game: &Game, map_ref: MapRef, ticks: u64) -> Option<Simulation> {
-    let mut simulation = game.simulation(map_ref, SIM_SEED).ok()?;
-    for _ in 0..ticks {
-        simulation.tick();
-    }
-    Some(simulation)
-}
-
 /// Кнопка "Reset positions" возвращает существ в исходные позиции текущей карты.
 ///
-/// Симуляция пересоздаётся с тем же зерном ([`SIM_SEED`]), поэтому маршруты,
-/// состояния походки и ГСЧ свежие. Карта, камера, масштаб, выбранный слой и
-/// пауза не трогаются: сцену не пересобираем и текстуры не грузим заново.
+/// Движение пересоздаётся с тем же зерном ([`SIM_SEED`]): маршруты, состояния
+/// походки и ГСЧ свежие. Машина анимации сохраняется — спец-анимация state-4,
+/// идущая в момент сброса, продолжается с текущего кадра, а не начинается
+/// заново (обзор #101, P2-#3): сброс позиций не есть сброс анимации. Карта,
+/// камера, масштаб, выбранный слой и пауза не трогаются.
 fn reset_positions(
     activate: On<Activate>,
     markers: Query<&ResetPositions>,
     game: Res<GameResource>,
     viewer: Res<Viewer>,
     clock: Res<Clock>,
-    mut sim: ResMut<SimulationResource>,
-    mut tracker: ResMut<SimTickTracker>,
+    mut sim: ResMut<CreatureSim>,
 ) {
     if markers.get(activate.entity).is_err() {
         return;
@@ -1233,35 +733,28 @@ fn reset_positions(
     let Some(&map_ref) = viewer.maps.get(viewer.selected) else {
         return;
     };
-    reset_simulation(&game.0, map_ref, clock.ticks, &mut sim, &mut tracker);
+    reset_creature_positions(&game.0, map_ref, SIM_SEED, clock.ticks, &mut sim);
 }
 
-/// Rebuilds the map's simulation and pins the tracker's epoch to the clock.
-///
-/// The fresh simulation is at tick 0 from this point: `epoch = clock_ticks` keeps it
-/// from replaying ticks the old one already ran and makes a later backward Step
-/// rewind against the reset, not absolute clock time. Creature nodes are not
-/// recreated — `sync_creature_nodes` repositions them from the state each frame.
-fn reset_simulation(
-    game: &Game,
-    map_ref: MapRef,
-    clock_ticks: u64,
-    sim: &mut SimulationResource,
-    tracker: &mut SimTickTracker,
+/// Кнопка "Reset animation" (обзор #101, P2-#3): заново запускает анимации с
+/// нулевого кадра, не трогая ни позиции существ, ни игровые часы. Отличается от
+/// полного сброса (`Play → Off → Play`, issue #70 AC4): тот пересобирает
+/// симуляцию и возвращает всех в клетки загрузки, а эта кнопка лишь отматывает
+/// машину анимации — спец state-4 начинается с кадра 0, а координаты и
+/// накопленное время симуляции остаются. Карта, камера, часы и пауза не
+/// трогаются.
+fn reset_animation(
+    activate: On<Activate>,
+    markers: Query<&ResetAnimation>,
+    mut sim: ResMut<CreatureSim>,
 ) {
-    match game.simulation(map_ref, SIM_SEED) {
-        Ok(simulation) => {
-            sim.error = None;
-            sim.initial_pixels = simulation.initial_pixels();
-            sim.sim = Some(simulation);
-        }
-        Err(error) => {
-            sim.error = Some(format!("simulation for {map_ref:?}: {error}"));
-            sim.sim = None;
-        }
+    if markers.get(activate.entity).is_err() {
+        return;
     }
-    tracker.epoch = clock_ticks;
-    tracker.sim_ticks = 0;
+    // Only the machine rewinds: positions and the simulation clock are kept, and
+    // the animator re-anchors on the same clip through the special-frame
+    // regression the subsystem's `observe_specials` reports (review of #101, P2-#3).
+    reset_creature_animations(&mut sim);
 }
 
 const LABEL_OFFSET_Y: f32 = 50.0;
@@ -1270,13 +763,16 @@ const LABEL_OFFSET_Y: f32 = 50.0;
 /// `KN_CREATURE_DEBUG` in the environment to log, per creature id, the simulation
 /// tick, cell, step from/to, `step_elapsed`, the cell pixel the node sits on, the
 /// node position and z as this frame writes them, and the simulation's own
-/// facing direction; [`sync_creature_animation`] adds each sprite's clip, anchor,
-/// phase and shown frame with its local offset and the world position as it will
-/// be drawn (the frame's `GlobalTransform`s are only propagated at the end of the
-/// update, so reading them would log the previous frame). Comparing
-/// `sim_dir`/`from`/`to` (which change only at a logical tick) with the sprite's
-/// world position separates a node jump from an image jump: the node only ever
-/// sits on cell pixels, the glide to the next cell lives in the frame offsets.
+/// facing direction; the same pass ([`sync_creature_labels`]) adds each sprite's
+/// chosen clip — named by [`clip_identity`] against the clips the subsystem built
+/// — with its anchor, phase and shown frame, its local offset and the world
+/// position as it will be drawn (the frame's `GlobalTransform`s are only
+/// propagated at the end of the update, so reading them would log the previous
+/// frame). Comparing `sim_dir`/`from`/`to` (which change only at a logical tick)
+/// with the sprite's world position separates a node jump from an image jump: the
+/// node only ever sits on cell pixels, the glide to the next cell lives in the
+/// frame offsets. The logging stays here, in the viewer: the shared subsystem in
+/// `kn-render` writes no diagnostics of its own.
 static CREATURE_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 fn creature_debug() -> bool {
@@ -1284,15 +780,16 @@ fn creature_debug() -> bool {
 }
 
 fn spawn_creature_labels(
-    mut sim: ResMut<SimulationResource>,
+    sim: Res<CreatureSim>,
+    mut labels: ResMut<CreatureLabels>,
     viewer: Res<Viewer>,
     mut commands: Commands,
 ) {
-    if sim.labels_spawned || sim.sim.is_none() {
+    if labels.labels_spawned || sim.sim.is_none() {
         return;
     }
     let states = sim.sim.as_ref().unwrap().states();
-    sim.labels_spawned = true;
+    labels.labels_spawned = true;
     // Born with the Characters overlay's visibility, not a fixed one: a root
     // that were `Visible` would render for the frame before
     // [`sync_creature_visibility`] hides it, leaking creature ids over an
@@ -1305,7 +802,7 @@ fn spawn_creature_labels(
     let root = commands
         .spawn((LabelRoot, Transform::IDENTITY, target))
         .id();
-    sim.label_root = Some(root);
+    labels.label_root = Some(root);
     let mut children = Vec::new();
     for state in &states {
         let (px, py) = state.pixel;
@@ -1330,85 +827,30 @@ fn spawn_creature_labels(
     commands.entity(root).add_children(&children);
 }
 
-/// Spawns the creature nodes once per map, tagging each child sprite so the
-/// animation system can find its layer. Runs after [`rebuild_scene`] laid out the
-/// depth map, so every node is born at its correct depth.
-fn spawn_creatures(
-    mut commands: Commands,
-    mut sim: ResMut<SimulationResource>,
-    spawns: Res<CreatureSpawns>,
-    scene_depth: Res<SceneDepth>,
-    viewer: Res<Viewer>,
-) {
-    if sim.creatures_spawned || sim.sim.is_none() {
-        return;
-    }
-    sim.creatures_spawned = true;
-    // Same rule as the label root: born visible only when the Characters
-    // overlay is on, so a map change with characters off shows nothing for a
-    // frame (review #68).
-    let target = if viewer.is_on(Overlay::Characters) {
-        Visibility::Inherited
-    } else {
-        Visibility::Hidden
-    };
-    let root = commands
-        .spawn((CreatureRoot, Transform::IDENTITY, target))
-        .id();
-    sim.creature_root = Some(root);
-    for plan in &spawns.plans {
-        let spawned = spawn_creature(&mut commands, root, plan, &scene_depth.map);
-        for (layer, child) in spawned.layers.iter().enumerate() {
-            commands.entity(*child).insert(CreatureSprite {
-                creature_id: plan.id as usize,
-                layer,
-                is_shadow: false,
-            });
-        }
-        if let Some(shadow) = spawned.shadow {
-            commands.entity(shadow).insert(CreatureSprite {
-                creature_id: plan.id as usize,
-                layer: 0,
-                is_shadow: true,
-            });
-        }
-    }
-}
-
-/// Puts each creature node at its live cell and depth, and its label above it.
+/// Puts each id label above its creature's body image and logs the frame's
+/// creature state under `KN_CREATURE_DEBUG`.
 ///
-/// The node owns the creature's world position and z; its sprite children carry
-/// only local offsets and per-frame deltas, so they follow the node untouched and
-/// body, equipment and shadow stay in lockstep (review #68). The node sits on the
-/// simulation cell's pixel for the whole step: the glide to the next cell lives in
-/// the walk frames' own offsets (docs/k1/movement.md, "Step duration"), so sliding
-/// the node along with them would double the travel and snap the image back by a
-/// cell at every cycle wrap.
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
-fn sync_creature_nodes(
-    sim: Res<SimulationResource>,
-    scene_depth: Res<SceneDepth>,
-    spawns: Res<CreatureSpawns>,
+/// The label rides the image, not the cell: during a step the image is a cell
+/// away from the node, carried there by its walk frames. The world position is
+/// the node's — the shared subsystem wrote this frame's cell into it — plus the
+/// sprite's local offset, which `apply_animators` has just updated; the sprite's
+/// own `GlobalTransform` would still carry the previous frame, because
+/// propagation runs at the end of the update (review #68).
+#[allow(clippy::type_complexity)]
+fn sync_creature_labels(
+    sim: Res<CreatureSim>,
     clock: Res<Clock>,
-    // `Without<CreatureSprite>` on top of `Without<CreatureShadow>`: the node
-    // now writes the `Transform` the `sprites` query reads, and without the
-    // filter Bevy cannot prove an entity never carries both (B0001).
-    mut nodes: Query<
-        (&mut CreatureNode, &mut Transform),
-        (Without<CreatureShadow>, Without<CreatureSprite>),
-    >,
-    // `Without<CreatureShadow>` keeps shadows out: they carry `CreatureSprite`
-    // too, and this query reads the `Transform` the `shadows` query writes.
+    anim: Res<CreatureAnim>,
     sprites: Query<(&CreatureSprite, &Transform), Without<CreatureShadow>>,
-    // `CreatureShadow` marks only the shadow children, disjoint from the nodes.
-    mut shadows: Query<(&CreatureShadow, &ChildOf, &mut Transform)>,
+    nodes: Query<(&CreatureNode, &Transform)>,
+    // Read-only over the sprites, so it overlaps the queries above freely.
+    clips: Query<(&CreatureSprite, &Animator, &Transform)>,
+    // `Without<CreatureNode>` on top of `Without<CreatureSprite>`: this pass
+    // writes the `Transform` the two queries above read, and Bevy cannot prove
+    // an entity never carries both (B0001).
     mut labels: Query<
         (&CreatureLabel, &mut Transform),
-        (
-            Without<CreatureNode>,
-            Without<CreatureShadow>,
-            Without<CreatureSprite>,
-        ),
+        (Without<CreatureSprite>, Without<CreatureNode>),
     >,
 ) {
     let Some(ref simulation) = sim.sim else {
@@ -1417,12 +859,6 @@ fn sync_creature_nodes(
     let states = simulation.states();
     let drawn: HashMap<usize, (i32, i32)> =
         states.iter().map(|state| (state.id, state.pixel)).collect();
-    // A label rides above the body image, not the cell: during a step the image
-    // is a cell away from the node, carried there by its walk frames. The world
-    // position is the node's — this frame's cell, which the loop below writes —
-    // plus the sprite's local offset, which `apply_animators` has just updated;
-    // the sprite's own `GlobalTransform` would still carry the previous frame
-    // (propagation runs at the end of the update, review #68).
     let mut label_at: HashMap<usize, (f32, f32, usize)> = HashMap::new();
     for (tag, transform) in &sprites {
         if tag.is_shadow {
@@ -1447,60 +883,6 @@ fn sync_creature_nodes(
         .into_iter()
         .map(|(id, (x, y, _))| (id, (x, y)))
         .collect();
-    for (mut node, mut transform) in &mut nodes {
-        let id = node.id as usize;
-        let Some(&(x, y)) = drawn.get(&id) else {
-            continue;
-        };
-        transform.translation.x = x as f32;
-        transform.translation.y = -(y as f32);
-        // Occlusion bottom from the live cell and this creature's body height.
-        let height = spawns.heights.get(&id).copied().unwrap_or(0);
-        let bottom = (y + height).max(0);
-        update_creature_depth(&mut node, &mut transform, bottom, &scene_depth.map);
-        if creature_debug()
-            && let Some(state) = states.iter().find(|state| state.id == id)
-        {
-            // The world position is the `Transform` just written: the node's
-            // parent is the identity root, and this frame's `GlobalTransform`
-            // is only propagated at the end of the update, so reading it here
-            // would log the previous frame (review #68).
-            info!(
-                "creature #{id} tick={} cell=({},{}) from=({},{}) to={:?} elapsed={}/{} \
-                 pixel=({},{}) render=({:.1},{:.1}) z={:.4} \
-                 sim_dir={:?} walk={:?}",
-                clock.ticks,
-                state.cell.0,
-                state.cell.1,
-                state.pixel.0,
-                state.pixel.1,
-                state.step_to_pixel,
-                state.step_elapsed,
-                state.step_ticks,
-                x,
-                y,
-                transform.translation.x,
-                transform.translation.y,
-                transform.translation.z,
-                state.direction,
-                state.walk_state,
-            );
-        }
-    }
-    // The shadow rides the node but holds its slot's shadow z — over the
-    // ground the creature stands on, under its feet — so its local z cancels
-    // the node's body z, which `update_creature_depth` rewrites whenever the
-    // bottom edge moves (review #68).
-    for (_, parent, mut transform) in &mut shadows {
-        let Ok(node) = nodes.get(parent.0) else {
-            continue;
-        };
-        let slot = scene_depth.map.creature_slot(node.0.bottom, node.0.id);
-        let target = slot.shadow - node.1.translation.z;
-        if transform.translation.z != target {
-            transform.translation.z = target;
-        }
-    }
     for (label, mut transform) in &mut labels {
         let Some(&(x, y)) = label_at.get(&label.creature_id) else {
             continue;
@@ -1508,137 +890,103 @@ fn sync_creature_nodes(
         transform.translation.x = x;
         transform.translation.y = y - LABEL_OFFSET_Y;
     }
-}
-
-/// Swaps each creature sprite's [`Animator`] between the resting and the walking
-/// sequence when the simulation's [`WalkState`] or facing direction changes,
-/// keeping body, equipment and shadow of one creature in step.
-///
-/// The swap re-anchors the animator on the clip's own base corner: every clip's
-/// frame offsets are relative to that corner, so an animator left on the
-/// resting corner would render the new clip displaced by the corner difference
-/// — the periodic image jump of review #68. A step seen for the first time
-/// re-anchors too, opening the cycle `(elapsed - 1)` frames in: the walk frames
-/// carry the travel across a step, so their index must run with the step like the
-/// original's `Frame` counter (Slavik `game_play.cpp:3727-3740`), not free-run
-/// against the global clock and wrap to the first frame mid-step.
-fn sync_creature_animation(
-    sim: Res<SimulationResource>,
-    mut anim: ResMut<CreatureAnim>,
-    spawns: Res<CreatureSpawns>,
-    clock: Res<Clock>,
-    mut sprites: Query<(&CreatureSprite, &mut Animator, &Transform)>,
-) {
-    let Some(ref simulation) = sim.sim else {
+    if !creature_debug() {
         return;
+    }
+    for (node, transform) in &nodes {
+        let id = node.id as usize;
+        let Some(state) = states.iter().find(|state| state.id == id) else {
+            continue;
+        };
+        // The world position is the `Transform` the subsystem just wrote: the
+        // node's parent is the identity root, and this frame's `GlobalTransform`
+        // is only propagated at the end of the update, so reading it here would
+        // log the previous frame (review #68).
+        info!(
+            "creature #{id} tick={} cell=({},{}) from=({},{}) to={:?} elapsed={}/{} \
+             pixel=({},{}) render=({:.1},{:.1}) z={:.4} \
+             sim_dir={:?} walk={:?}",
+            clock.ticks,
+            state.cell.0,
+            state.cell.1,
+            state.pixel.0,
+            state.pixel.1,
+            state.step_to_pixel,
+            state.step_elapsed,
+            state.step_ticks,
+            state.pixel.0,
+            state.pixel.1,
+            transform.translation.x,
+            transform.translation.y,
+            transform.translation.z,
+            state.direction,
+            state.walk_state,
+        );
+    }
+    for (tag, animator, transform) in &clips {
+        let local = transform.translation;
+        // The world position as it will be drawn: this frame's cell pixel plus
+        // this sprite's local offset. The sprite's own `GlobalTransform` still
+        // holds the previous frame — propagation runs at the end of the update.
+        let (world_x, world_y) = drawn
+            .get(&tag.creature_id)
+            .map_or((local.x, local.y), |&(x, y)| {
+                (x as f32 + local.x, -(y as f32) + local.y)
+            });
+        let chosen = clip_identity(&anim, tag, &animator.sequence);
+        info!(
+            "creature #{} {} clip={} base={} corner={:?} shown={:?} anchor=({},{}) phase={} \
+             local=({:.1},{:.1}) world=({:.1},{:.1})",
+            tag.creature_id,
+            if tag.is_shadow { "shadow" } else { "body" },
+            chosen
+                .as_ref()
+                .map_or("foreign", |(kind, _, _)| kind.as_str()),
+            chosen.as_ref().map_or(0, |(_, base, _)| *base),
+            chosen.as_ref().map(|(_, _, corner)| *corner),
+            animator.shown(),
+            animator.x,
+            animator.y,
+            animator.phase,
+            local.x,
+            local.y,
+            world_x,
+            world_y,
+        );
+    }
+}
+
+/// Names the clip an animator holds — `rest`, `walk[dir]` or `special` — by
+/// matching its `Arc` against the clips the subsystem built for that layer, so
+/// the debug line says what is on screen without the viewer choosing a clip
+/// itself. `None` when the animator carries a sequence of its own.
+fn clip_identity(
+    anim: &CreatureAnim,
+    tag: &CreatureSprite,
+    sequence: &Arc<Sequence>,
+) -> Option<(String, usize, (i32, i32))> {
+    let sequences = anim.creatures.get(&tag.creature_id)?;
+    let layer = if tag.is_shadow {
+        &sequences.shadow
+    } else {
+        sequences.body.get(&tag.layer)?
     };
-    let states = simulation.states();
-    let restep = anim.observe_steps(&states);
-    let facing: HashMap<usize, (bool, u8, u32)> = states
-        .iter()
-        .map(|state| {
-            (
-                state.id,
-                (
-                    state.walk_state == WalkState::Walk,
-                    state.direction.unwrap_or(0),
-                    state.step_elapsed,
-                ),
-            )
-        })
-        .collect();
-    for (tag, mut animator, transform) in &mut sprites {
-        let Some(&(walking, direction, elapsed)) = facing.get(&tag.creature_id) else {
-            continue;
-        };
-        let Some(creature) = anim.creatures.get(&tag.creature_id) else {
-            continue;
-        };
-        let layer = if tag.is_shadow {
-            &creature.shadow
-        } else {
-            match creature.body.get(&tag.layer) {
-                Some(layer) => layer,
-                None => continue,
-            }
-        };
-        let clip = select_clip(layer, walking, direction);
-        let Some(clip) = clip else { continue };
-        if creature_debug() {
-            let local = transform.translation;
-            // The world position as it will be drawn: the current tick's cell
-            // pixel, which `sync_creature_nodes` writes to the node this frame,
-            // plus this frame's local offset. The sprite's own `GlobalTransform`
-            // still holds the previous frame here — propagation runs at the end
-            // of the update (review #68).
-            let (world_x, world_y) = states
+    std::iter::once(("rest".to_string(), layer.rest.as_ref()))
+        .chain(
+            layer
+                .walk
                 .iter()
-                .find(|state| state.id == tag.creature_id)
-                .map_or((local.x, local.y), |state| {
-                    (
-                        state.pixel.0 as f32 + local.x,
-                        -(state.pixel.1 as f32) + local.y,
-                    )
-                });
-            info!(
-                "creature #{} {} base={} corner={:?} shown={:?} anchor=({},{}) phase={} \
-                 local=({:.1},{:.1}) world=({:.1},{:.1}) walking={walking} dir={direction}",
-                tag.creature_id,
-                if tag.is_shadow { "shadow" } else { "body" },
-                clip.base,
-                clip.corner,
-                animator.shown(),
-                animator.x,
-                animator.y,
-                animator.phase,
-                local.x,
-                local.y,
-                world_x,
-                world_y,
-            );
-        }
-        if Arc::ptr_eq(&animator.sequence, &clip.sequence) && !restep.contains(&tag.creature_id) {
-            continue;
-        }
-        let Some(&origin) = spawns.origins.get(&tag.creature_id) else {
-            continue;
-        };
-        // The step began `elapsed - 1` ticks ago: opening the clip on its base
-        // frame there puts the shown frame at base + elapsed - 1 now — the
-        // step-relative index, correct even when catch-up first saw the step late.
-        let step_start = clock
-            .ticks
-            .saturating_sub(u64::from(elapsed.saturating_sub(1)));
-        apply_clip(&mut animator, clip, origin, step_start);
-    }
-}
-
-/// Point one animator at one clip: open it on the clip's base frame at the
-/// current clock tick and re-anchor on the clip's own corner, reduced to the
-/// creature's local coordinates.
-///
-/// Both halves are load-bearing (review #68): the shared clock never returns to
-/// zero, so without a per-clip phase the swap would show a foreign frame; and
-/// every clip's frame offsets are relative to its own base corner, so an
-/// animator left on the previous corner would render the image displaced by the
-/// corner difference — the periodic one-cell jump.
-fn apply_clip(animator: &mut Animator, clip: &Clip, origin: (i32, i32), at_tick: u64) {
-    animator.play_at(
-        Arc::clone(&clip.sequence),
-        clip.base,
-        at_tick,
-        (clip.corner.0 - origin.0, clip.corner.1 - origin.1),
-    );
-}
-
-/// Which clip a piece shows: the walk sequence for its facing direction while
-/// walking, otherwise the resting one. A missing walk direction falls back to
-/// resting, so an unmapped direction never blanks the creature.
-fn select_clip(layer: &LayerSequences, walking: bool, direction: u8) -> Option<&Clip> {
-    if walking && let Some(walk) = layer.walk.get(direction as usize).and_then(Option::as_ref) {
-        return Some(walk);
-    }
-    layer.rest.as_ref()
+                .enumerate()
+                .map(|(dir, clip)| (format!("walk[{dir}]"), clip.as_ref())),
+        )
+        .chain(std::iter::once((
+            "special".to_string(),
+            layer.special.as_ref(),
+        )))
+        .find_map(|(kind, clip)| {
+            clip.filter(|clip| Arc::ptr_eq(&clip.sequence, sequence))
+                .map(|clip| (kind, clip.base, clip.corner))
+        })
 }
 
 /// Как состояние воспроизведения подписать в диагностике.
@@ -1699,7 +1047,8 @@ fn piece_counts(pieces: &Query<&InheritedVisibility, With<ScenePiece>>) -> (usiz
 #[allow(clippy::too_many_arguments)]
 fn diagnostics(
     stats: Res<Stats>,
-    sim: Res<SimulationResource>,
+    sim: Res<CreatureSim>,
+    creatures: Res<CreatureAnimReport>,
     viewer: Res<Viewer>,
     clock: Res<Clock>,
     zoom: Res<CameraState>,
@@ -1730,6 +1079,7 @@ fn diagnostics(
                 .error
                 .as_ref()
                 .map_or(String::new(), |error| format!(" · {error}"));
+            let creatures = creature_report(&creatures);
             // Карта без огней и движущихся объектов — без этой строки
             let playback = if stats.animated_pieces == 0 {
                 String::new()
@@ -1744,7 +1094,7 @@ fn diagnostics(
             };
             let time = game_time_line(sim.sim.as_ref());
             format!(
-                "{} {} · {pieces} · {} textures · {} ms{problems}{sim_error}\nzoom ×{} · {} fps{playback}{time}",
+                "{} {} · {pieces} · {} textures · {} ms{problems}{sim_error}{creatures}\nzoom ×{} · {} fps{playback}{time}",
                 match map.source {
                     MapSource::Game => "map",
                     MapSource::Tutorial => "tutorial",
@@ -1763,11 +1113,47 @@ fn diagnostics(
     }
 }
 
+/// How the shared subsystem's creature findings read in this viewer's panel. A
+/// creature walking on its rest pose is a rendering defect, not an absence of
+/// creatures to explain away, so every reason the subsystem reported shows
+/// (review #68). The wording is the viewer's; the numbers come from kn-render.
+fn creature_report(report: &CreatureAnimReport) -> String {
+    if let Some(error) = &report.error {
+        return format!(" · creatures: {error}");
+    }
+    let mut parts = Vec::new();
+    if report.total != 0 {
+        parts.push(format!("{} creatures", report.total));
+    }
+    if report.without_walk != 0 {
+        parts.push(format!("{} without walk", report.without_walk));
+    }
+    if report.partial_walk != 0 {
+        parts.push(format!("{} partial walk", report.partial_walk));
+    }
+    if let Some(error) = &report.texture_error {
+        parts.push(format!("walk: {error}"));
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" · {}", parts.join(" · "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
     use super::*;
+    use kn_game::simulation::{CreatureState, Simulation, WalkState};
     use kn_game::{GameTime, LayerKey, PieceGroup};
-    use kn_render::Frame;
+    use kn_render::{
+        Animator, Clip, CreatureAnim, CreatureDepth, CreatureSpawns, LayerSequences, Sequence,
+        advance_creature_sim, build_creature_anim, build_creature_spawns, build_depth_map,
+        reset_creature_sim, select_clip, spawn_creature_nodes, sync_creature_nodes,
+    };
 
     fn state(
         pixel: (i32, i32),
@@ -1844,35 +1230,6 @@ mod tests {
         assert!(anim.observe_steps(&[state((58, 0), None, 0, 0)]).is_empty());
     }
 
-    /// The walk cycle is opened at the tick the step started, not the tick it was
-    /// first observed: `elapsed - 1` ticks after the base frame, so the shown
-    /// frame runs with the step like the original's per-tick `Frame` counter.
-    #[test]
-    fn apply_clip_opens_the_frame_the_step_has_reached() {
-        let frames = (0..12)
-            .map(|_| Frame::new(Handle::default(), Vec2::new(8.0, 8.0), Vec2::ZERO))
-            .collect();
-        let clip = Clip {
-            sequence: Arc::new(Sequence::new(frames)),
-            base: 0,
-            corner: (0, 0),
-        };
-        let mut animator = Animator::new(Arc::clone(&clip.sequence), 0, 0);
-        let clock_ticks = 100u64;
-        let elapsed = 3u32;
-        apply_clip(
-            &mut animator,
-            &clip,
-            (0, 0),
-            clock_ticks.saturating_sub(u64::from(elapsed - 1)),
-        );
-        assert_eq!(
-            clip.sequence.frame_at(clock_ticks, animator.phase),
-            (elapsed - 1) as usize,
-            "three ticks into a step shows its third frame"
-        );
-    }
-
     /// The measurement behind the display model (docs/k1/movement.md, "Step
     /// duration"): a walk sequence carries the cell travel in its own frame
     /// offsets — from the first frame to the last it slides to within ~10 px of
@@ -1939,101 +1296,12 @@ mod tests {
         }
     }
 
-    fn data_layer(key: LayerKey, corner: (i32, i32)) -> CreatureLayer {
-        CreatureLayer {
-            base: None,
-            animation: None,
-            corner,
-            key,
-        }
-    }
-
-    /// A walk pose may list the same layers in another order than the resting
-    /// one (tracks are ordered by first appearance per pose), so a join by
-    /// position would bolt the gear's walk clip onto the body's piece and the
-    /// body's onto the gear's — equipment sliding across the sprite on every
-    /// step. The join must follow [`LayerKey`].
-    #[test]
-    fn walk_layers_join_to_their_part_not_their_position() {
-        let rest = [
-            data_layer(LayerKey::Body, (0, 0)),
-            data_layer(LayerKey::Gear { slot: 1 }, (4, 40)),
-        ];
-        // Direction 0 lists the layers reversed, direction 1 has no gear at all.
-        let reversed = CreatureClips {
-            layers: vec![
-                data_layer(LayerKey::Gear { slot: 1 }, (6, 44)),
-                data_layer(LayerKey::Body, (2, 1)),
-            ],
-            shadow: None,
-        };
-        let gearless = CreatureClips {
-            layers: vec![data_layer(LayerKey::Body, (3, 2))],
-            shadow: None,
-        };
-        let walk = [Some(reversed), Some(gearless), None];
-
-        let matched = pose_matched_layers(&rest, &walk);
-        assert_eq!(matched.len(), 2);
-        assert_eq!(
-            matched[0][0].map(|layer| layer.key),
-            Some(LayerKey::Body),
-            "the body's walk clip must be the body's, not the first listed"
-        );
-        assert_eq!(
-            matched[0][0].map(|layer| layer.corner),
-            Some((2, 1)),
-            "the body's clip keeps the walk pose's own corner"
-        );
-        assert_eq!(
-            matched[1][0].map(|layer| layer.key),
-            Some(LayerKey::Gear { slot: 1 }),
-            "the gear's walk clip must be the gear's, not the second listed"
-        );
-        assert!(
-            matched[1][1].is_none(),
-            "a pose without the part contributes no clip"
-        );
-        assert!(
-            matched[0][2].is_none(),
-            "a missing pose contributes nothing"
-        );
-    }
-
-    /// A swap re-anchors the animator on the clip's own corner reduced to the
-    /// creature's origin: leaving the resting anchor there displaced the image
-    /// by the corner difference — the periodic jump review #68 is about.
-    #[test]
-    fn apply_clip_reanchors_on_the_clips_own_corner() {
-        let rest_sequence = Arc::new(Sequence::new(Vec::new()));
-        let walk_sequence = Arc::new(Sequence::new(Vec::new()));
-        let mut animator = Animator::with_base(Arc::clone(&rest_sequence), 4, 40, 0);
-        let walk = Clip {
-            sequence: Arc::clone(&walk_sequence),
-            base: 0,
-            corner: (62, 26),
-        };
-
-        apply_clip(&mut animator, &walk, (4, 10), 9);
-
-        assert_eq!(
-            (animator.x, animator.y),
-            (58, 16),
-            "the anchor is the clip corner in the creature's local coordinates"
-        );
-        assert!(Arc::ptr_eq(&animator.sequence, &walk_sequence));
-        assert_eq!(animator.shown(), None, "the swap forces a sprite rewrite");
-        assert_eq!(
-            walk_sequence.frame_at(9, animator.phase),
-            walk.base,
-            "the clip opens on its base frame at the current tick"
-        );
-    }
-
-    /// The resting clip must be anchored exactly where the scene draws the
+    /// The resting clip must be anchored exactly where the node draws the
     /// piece, or a creature would be born displaced and only the swaps would
-    /// read correct. Both come from one pose build, so they must agree on
-    /// every real creature (data test, skips without `original/`).
+    /// read correct. Both come from one roster pose build — the clips from
+    /// `creature_animations`, the node geometry from `Scene::creature_pieces` —
+    /// so they must agree on every real creature, including a roaming member the
+    /// static draw list omits (data test, skips without `original/`).
     #[test]
     fn the_rest_clips_are_anchored_where_the_scene_draws_the_layer() {
         let Some((dir, map_ref)) = game_and_first_map() else {
@@ -2044,7 +1312,7 @@ mod tests {
         let mut checked = 0;
         for (slot, anim) in game.creature_animations(map_ref).unwrap() {
             let pieces: Vec<&Piece> = scene
-                .pieces
+                .creature_pieces
                 .iter()
                 .filter(|piece| {
                     piece.creature_id == Some(slot) && piece.group != PieceGroup::CharacterShadows
@@ -2082,8 +1350,9 @@ mod tests {
                     }
                 })
                 .collect(),
+            special: None,
         };
-        select_clip(&layer, walking, direction)
+        select_clip(&layer, walking, direction, false)
             .map(|clip| clip.base)
             .unwrap()
     }
@@ -2110,8 +1379,9 @@ mod tests {
             walk: (0..8)
                 .map(|d| if d == 5 { Some(clip_of(1)) } else { None })
                 .collect(),
+            special: None,
         };
-        let chosen = select_clip(&layer, true, 7).unwrap();
+        let chosen = select_clip(&layer, true, 7, false).unwrap();
         assert_eq!(chosen.base, 0);
     }
 
@@ -2120,9 +1390,94 @@ mod tests {
         let layer = LayerSequences {
             rest: Some(clip_of(0)),
             walk: Vec::new(),
+            special: None,
         };
-        let chosen = select_clip(&layer, true, 200).unwrap();
+        let chosen = select_clip(&layer, true, 200, false).unwrap();
         assert_eq!(chosen.base, 0, "направление вне таблицы не роняет выбор");
+    }
+
+    /// The state machine's Special stage picks the state-4 clip even while the
+    /// simulation reports the creature as walking (issue #70 AC2/AC5).
+    #[test]
+    fn in_special_picks_the_state_four_clip_winning_over_walk() {
+        let layer = LayerSequences {
+            rest: Some(clip_of(0)),
+            walk: (0..8).map(|_| Some(clip_of(1))).collect(),
+            special: Some(clip_of(2)),
+        };
+        let chosen = select_clip(&layer, true, 3, true).unwrap();
+        assert_eq!(chosen.base, 2, "the special wins over walk");
+    }
+
+    /// A creature the state machine has put in Idle returns to the resting or
+    /// walk clip on the next frame (issue #70 AC2: the transition into idle is
+    /// continuous — the machine hands back the pair without a hold).
+    #[test]
+    fn after_special_idle_picks_the_rest_clip() {
+        let layer = LayerSequences {
+            rest: Some(clip_of(0)),
+            walk: (0..8).map(|_| Some(clip_of(1))).collect(),
+            special: Some(clip_of(2)),
+        };
+        let chosen = select_clip(&layer, false, 3, false).unwrap();
+        assert_eq!(
+            chosen.base, 0,
+            "the idle pose after the special is the rest clip"
+        );
+    }
+
+    /// A missing special clip falls back to rest so a state-4 creature whose
+    /// sequence did not decode still draws something (never a blank).
+    #[test]
+    fn missing_special_falls_back_to_rest() {
+        let layer = LayerSequences {
+            rest: Some(clip_of(0)),
+            walk: Vec::new(),
+            special: None,
+        };
+        let chosen = select_clip(&layer, false, 3, true).unwrap();
+        assert_eq!(chosen.base, 0);
+    }
+
+    /// AC4 at the viewer's rebuild-gate: the stage snapshot reports a pose
+    /// rebuild only when a creature's animation-state kind flips. `Play →
+    /// Paused → Play` hands the same stage back (the clock stopped, so no tick
+    /// moved the machine) and must not rebuild; `Play → Off → Play` recreates
+    /// the machine, which reseeds a finished special back to Special, and that
+    /// re-entry must be reported so the clip is swapped back (issue #70).
+    #[test]
+    fn the_stage_snapshot_rebuilds_only_on_a_state_kind_flip() {
+        let mut anim = CreatureAnim::default();
+        // World load: the state-4 creature enters Special — reported once.
+        assert_eq!(
+            anim.observe_stages(&[(7, true)]),
+            [7].into_iter().collect::<HashSet<_>>(),
+            "entering the special is a rebuild"
+        );
+        // Play → Paused → Play: the clock did not advance, the caller feeds the
+        // same stage again; a resume must not pay a second rebuild.
+        assert!(
+            anim.observe_stages(&[(7, true)]).is_empty(),
+            "resuming an unchanged special is not a change"
+        );
+        // The sequence finishes into idle — reported once, then quiet.
+        assert_eq!(
+            anim.observe_stages(&[(7, false)]),
+            [7].into_iter().collect::<HashSet<_>>(),
+            "the Special → Idle edge is one rebuild"
+        );
+        assert!(
+            anim.observe_stages(&[(7, false)]).is_empty(),
+            "idle does not advance, so it is not a change"
+        );
+        // Play → Off → Play: `reset_animation` recreates the simulation, which
+        // reseeds the creature to `Special { frame: 0 }`; the first observation
+        // after the reset is a change so the special clip is chosen again.
+        assert_eq!(
+            anim.observe_stages(&[(7, true)]),
+            [7].into_iter().collect::<HashSet<_>>(),
+            "the replay after Off re-enters the special and rebuilds once"
+        );
     }
 
     #[test]
@@ -2143,6 +1498,8 @@ mod tests {
             depth_bottom: None,
         };
         let scene = kn_game::Scene {
+            creature_pieces: Vec::new(),
+            creature_origins: std::collections::HashMap::new(),
             pieces: vec![
                 piece(100, PieceGroup::Objects),    // order 0 → z 0
                 piece(500, PieceGroup::Objects),    // order 1 → z 0.01
@@ -2150,7 +1507,7 @@ mod tests {
                 piece(50, PieceGroup::Terrain),     // order 3 → excluded
             ],
         };
-        let map = build_scene_depth(&scene, &TextureCache::default());
+        let map = build_depth_map(&scene, &TextureCache::default());
         // Object bottoms are the only boundaries; between them the z interpolates.
         assert_eq!(map.z_for_bottom(100), 0.0);
         assert_eq!(map.z_for_bottom(500), 0.01);
@@ -2427,18 +1784,20 @@ mod tests {
     }
 
     #[test]
-    fn reset_returns_creatures_home_and_resyncs_the_tracker() {
+    fn reset_returns_creatures_home_and_resyncs_the_epoch() {
         let Some((dir, map_ref)) = game_and_first_map() else {
             return;
         };
         let game = Game::open(&dir).unwrap();
 
-        let mut sim = SimulationResource::default();
+        let mut sim = CreatureSim::default();
         sim.sim = game.simulation(map_ref, SIM_SEED).ok();
         sim.initial_pixels = sim.sim.as_ref().unwrap().initial_pixels();
-        sim.labels_spawned = true;
         let root = Entity::PLACEHOLDER;
-        sim.label_root = Some(root);
+        let labels = CreatureLabels {
+            label_root: Some(root),
+            labels_spawned: true,
+        };
         let initial = home(sim.sim.as_ref().unwrap());
 
         // Уводим существ: без движения проверка сброса ничего не доказала бы
@@ -2453,16 +1812,12 @@ mod tests {
             "за 200 тиков хотя бы один персонаж должен был сойти с места"
         );
 
-        let mut tracker = SimTickTracker {
-            epoch: 0,
-            sim_ticks: 0,
-        };
-        // The old tracker lags behind the clock: a reset must pin its epoch to the
-        // current tick, otherwise the fresh simulation replays the backlog in one jump
-        reset_simulation(&game, map_ref, 517, &mut sim, &mut tracker);
-        assert_eq!(tracker.epoch, 517, "the tracker is pinned to the clock");
+        // The old epoch lags behind the clock: a reset must pin it to the current
+        // tick, otherwise the fresh simulation replays the backlog in one jump
+        reset_creature_sim(&game, map_ref, SIM_SEED, 517, &mut sim);
+        assert_eq!(sim.epoch, 517, "the epoch is pinned to the clock");
         assert_eq!(
-            tracker.sim_ticks, 0,
+            sim.sim_ticks, 0,
             "a reset simulation starts its own timeline at zero"
         );
         assert_eq!(
@@ -2470,8 +1825,8 @@ mod tests {
             initial,
             "существа вернулись домой"
         );
-        assert!(sim.labels_spawned, "метки не пересоздаются");
-        assert_eq!(sim.label_root, Some(root), "корень меток сохранён");
+        assert!(labels.labels_spawned, "метки не пересоздаются");
+        assert_eq!(labels.label_root, Some(root), "корень меток сохранён");
 
         // ГСЧ свежий: сброшенная симуляция повторяет только что созданную один в один
         let mut reference = game.simulation(map_ref, SIM_SEED).unwrap();
@@ -2498,7 +1853,7 @@ mod tests {
         };
         let game = Game::open(&dir).unwrap();
 
-        let mut sim = SimulationResource::default();
+        let mut sim = CreatureSim::default();
         sim.sim = game.simulation(map_ref, SIM_SEED).ok();
         sim.initial_pixels = sim.sim.as_ref().unwrap().initial_pixels();
         let initial = home(sim.sim.as_ref().unwrap());
@@ -2523,10 +1878,6 @@ mod tests {
             .insert_resource(Rebuild { map: false })
             .insert_resource(clock)
             .insert_resource(sim)
-            .insert_resource(SimTickTracker {
-                epoch: 0,
-                sim_ticks: 0,
-            })
             .add_observer(reset_positions)
             .add_systems(Update, fire_reset);
         app.world_mut().spawn(ResetPositions);
@@ -2534,16 +1885,15 @@ mod tests {
         app.update();
         app.update();
 
-        let sim = app.world().resource::<SimulationResource>();
+        let sim = app.world().resource::<CreatureSim>();
         assert_eq!(
             home(sim.sim.as_ref().unwrap()),
             initial,
             "кнопка вернула существ домой"
         );
         assert_eq!(
-            app.world().resource::<SimTickTracker>().epoch,
-            300,
-            "the tracker is pinned to the clock without a jump"
+            sim.epoch, 300,
+            "the epoch is pinned to the clock without a jump"
         );
         let viewer = app.world().resource::<Viewer>();
         assert_eq!(viewer.overlays, overlays, "оверлеи сохранены");
@@ -2564,7 +1914,7 @@ mod tests {
     /// stepping reached at tick `n`, so the backward `Step` (which replays) shows
     /// the same creature positions a forward run would (review #68, no reverse tick).
     #[test]
-    fn replay_simulation_matches_forward_stepping() {
+    fn rewinding_the_clock_replays_to_the_positions_a_forward_run_reached() {
         let Some((dir, map_ref)) = game_and_first_map() else {
             return;
         };
@@ -2576,9 +1926,45 @@ mod tests {
         let expected: Vec<(usize, (i32, i32))> =
             reference.states().iter().map(|s| (s.id, s.pixel)).collect();
 
-        let replayed = replay_simulation(&game, map_ref, 150).expect("replay builds");
-        let got: Vec<(usize, (i32, i32))> =
-            replayed.states().iter().map(|s| (s.id, s.pixel)).collect();
+        // The subsystem ran ahead to 200; the clock steps back to 150. There is no
+        // reverse tick, so it rebuilds and replays — and must land on what the
+        // forward run showed at 150, which is what a rewinded frame shows.
+        let sim = CreatureSim {
+            sim: game.simulation(map_ref, SIM_SEED).ok(),
+            ..Default::default()
+        };
+        let motion = CreatureMotion {
+            map: Some(map_ref),
+            seed: SIM_SEED,
+            ..Default::default()
+        };
+        let mut clock = Clock::new(TICK_MS as f32);
+        clock.ticks = 200;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(GameResource(game))
+            .insert_resource(clock)
+            .insert_resource(motion)
+            .insert_resource(sim)
+            .add_systems(Update, advance_creature_sim);
+        app.update();
+        *app.world_mut().resource_mut::<Clock>() = Clock::new(TICK_MS as f32);
+        app.world_mut().resource_mut::<Clock>().ticks = 150;
+        app.update();
+
+        let sim = app.world().resource::<CreatureSim>();
+        assert_eq!(
+            sim.sim_ticks, 150,
+            "the simulation sits on the selected tick"
+        );
+        let got: Vec<(usize, (i32, i32))> = sim
+            .sim
+            .as_ref()
+            .unwrap()
+            .states()
+            .iter()
+            .map(|s| (s.id, s.pixel))
+            .collect();
         assert_eq!(
             got, expected,
             "перемотка к тику 150 совпадает с прямым прогоном"
@@ -2601,21 +1987,25 @@ mod tests {
                 overlays: DEFAULT_OVERLAYS,
                 playback: PlayState::Paused,
             })
-            .insert_resource(SimulationResource {
+            .insert_resource(CreatureSim {
                 sim: simulation,
                 initial_pixels,
                 ..Default::default()
             })
-            .insert_resource(SimTickTracker::default())
+            .insert_resource(CreatureMotion {
+                map: Some(map_ref),
+                seed: SIM_SEED,
+                ..Default::default()
+            })
             .insert_resource(Clock::new(TICK_MS as f32))
-            .add_systems(Update, advance_simulation);
+            .add_systems(Update, advance_creature_sim);
         app.world_mut().resource_mut::<Clock>().ticks = clock_ticks;
         app
     }
 
     fn time_of(app: &App) -> GameTime {
         app.world()
-            .resource::<SimulationResource>()
+            .resource::<CreatureSim>()
             .sim
             .as_ref()
             .unwrap()
@@ -2677,13 +2067,13 @@ mod tests {
 
         let before = time_of(&app);
         let homes = {
-            let sim = app.world().resource::<SimulationResource>();
+            let sim = app.world().resource::<CreatureSim>();
             home(sim.sim.as_ref().unwrap())
         };
         app.update();
         app.update();
         assert_eq!(time_of(&app), before, "an idle frame advances no game time");
-        let sim = app.world().resource::<SimulationResource>();
+        let sim = app.world().resource::<CreatureSim>();
         assert_eq!(
             home(sim.sim.as_ref().unwrap()),
             homes,
@@ -2699,67 +2089,24 @@ mod tests {
         );
     }
 
-    /// Reset recreates game time together with the simulation, and a backward
-    /// `Step` rewinds to the reset and stops there: the epoch is the zero point
-    /// (review #68), so no clock position puts a day behind a fresh simulation.
-    #[test]
-    fn reset_recreates_game_time_and_a_backward_step_stops_at_the_epoch() {
-        let Some((dir, map_ref)) = game_and_first_map() else {
-            return;
-        };
-        let game = Game::open(&dir).unwrap();
-        let mut app = time_app(game, map_ref, 200);
-        app.update();
-        assert_eq!(time_of(&app).cycle_tick, 200);
-        assert_eq!(app.world().resource::<SimTickTracker>().sim_ticks, 200);
-
-        app.add_observer(reset_positions);
-        let button = app.world_mut().spawn(ResetPositions).id();
-        app.world_mut().resource_mut::<Clock>().ticks = 260;
-        app.world_mut().trigger(Activate { entity: button });
-        let time = time_of(&app);
-        assert_eq!((time.day, time.cycle_tick), (0, 0), "a reset is time zero");
-        assert_eq!(app.world().resource::<SimTickTracker>().epoch, 260);
-
-        // Ahead of the epoch again: the catch-up runs exactly what the clock gained.
-        app.world_mut().resource_mut::<Clock>().ticks = 300;
-        app.update();
-        assert_eq!(time_of(&app).cycle_tick, 40, "40 ticks since the reset");
-
-        // Backward inside the epoch: replay to the epoch-relative target.
-        app.world_mut().resource_mut::<Clock>().ticks = 280;
-        app.update();
-        assert_eq!(time_of(&app).cycle_tick, 20);
-
-        // And backward past the reset: the target saturates at the epoch, so time
-        // stops at the fresh simulation instead of un-running a day that never was.
-        for clock_ticks in [260, 255, 200] {
-            app.world_mut().resource_mut::<Clock>().ticks = clock_ticks;
-            app.update();
-            let time = time_of(&app);
-            assert_eq!(
-                (time.day, time.cycle_tick),
-                (0, 0),
-                "clock {clock_ticks} is behind the reset at 260"
-            );
-        }
-    }
-
     /// After a map change the tracker is pinned to the clock, so the fresh
     /// simulation does not replay the ticks the previous map had already run — the
     /// catch-up burst that used to fast-forward every creature in one frame
-    /// (review #68). A forward run from a behind tracker still advances normally.
+    /// (review #68). A forward run from a behind epoch still advances normally.
     #[test]
-    fn map_change_pins_the_tracker_so_history_is_not_replayed() {
+    fn map_change_pins_the_epoch_so_history_is_not_replayed() {
         let Some((dir, map_ref)) = game_and_first_map() else {
             return;
         };
         let game = Game::open(&dir).unwrap();
         let sim = game.simulation(map_ref, SIM_SEED).ok();
         let initial = sim.as_ref().unwrap().initial_pixels();
-        let sim_resource = SimulationResource {
+        let sim_resource = CreatureSim {
             sim,
             initial_pixels: initial.clone(),
+            // The clock has been running for 900 ticks when this map is opened:
+            // the epoch is pinned there, so the fresh simulation stays at tick 0.
+            epoch: 900,
             ..Default::default()
         };
         let by_id: HashMap<usize, (i32, i32)> = initial.into_iter().collect();
@@ -2775,17 +2122,14 @@ mod tests {
             })
             .insert_resource(sim_resource)
             .insert_resource(Clock::new(TICK_MS as f32))
-            .insert_resource(SimTickTracker {
-                epoch: 900,
-                sim_ticks: 0,
-            })
-            .add_systems(Update, advance_simulation);
+            .init_resource::<CreatureMotion>()
+            .add_systems(Update, advance_creature_sim);
         app.world_mut().resource_mut::<Clock>().ticks = 900;
         app.update();
 
         let states = app
             .world()
-            .resource::<SimulationResource>()
+            .resource::<CreatureSim>()
             .sim
             .as_ref()
             .unwrap()
@@ -2823,10 +2167,10 @@ mod tests {
             .0
             .simulation(map_ref, SIM_SEED)
             .unwrap();
-        app.world_mut().resource_mut::<SimulationResource>().sim = Some(fresh);
+        app.world_mut().resource_mut::<CreatureSim>().sim = Some(fresh);
         let clock_ticks = app.world().resource::<Clock>().ticks;
-        app.world_mut().resource_mut::<SimTickTracker>().epoch = clock_ticks;
-        app.world_mut().resource_mut::<SimTickTracker>().sim_ticks = 0;
+        app.world_mut().resource_mut::<CreatureSim>().epoch = clock_ticks;
+        app.world_mut().resource_mut::<CreatureSim>().sim_ticks = 0;
         app.update();
 
         let time = time_of(&app);
@@ -2845,7 +2189,7 @@ mod tests {
     }
 
     /// A backward `Step` rewinds the clock below the simulation's own timeline;
-    /// `advance_simulation` sees `target < sim_ticks`, replays the map from tick 0 to
+    /// `advance_creature_sim` sees `target < sim_ticks`, replays the map from tick 0 to
     /// the rewound target, and pins `sim_ticks` there — so creatures show the same
     /// positions a forward run would. Pinning it back to 0 would let the catch-up loop
     /// tick the fresh simulation a second `target` times and overshoot (review #68).
@@ -2863,8 +2207,15 @@ mod tests {
             reference.states().iter().map(|s| (s.id, s.pixel)).collect();
 
         let game = Game::open(&dir).unwrap();
-        let sim_resource = SimulationResource {
+        // A forward run reached tick 200; a backward Step rewinds the clock to 150.
+        let sim_resource = CreatureSim {
             sim: game.simulation(map_ref, SIM_SEED).ok(),
+            sim_ticks: 200,
+            ..Default::default()
+        };
+        let motion = CreatureMotion {
+            map: Some(map_ref),
+            seed: SIM_SEED,
             ..Default::default()
         };
 
@@ -2878,19 +2229,15 @@ mod tests {
                 playback: PlayState::Paused,
             })
             .insert_resource(sim_resource)
+            .insert_resource(motion)
             .insert_resource(Clock::new(TICK_MS as f32))
-            // A forward run reached tick 200; a backward Step rewinds the clock to 150.
-            .insert_resource(SimTickTracker {
-                epoch: 0,
-                sim_ticks: 200,
-            })
-            .add_systems(Update, advance_simulation);
+            .add_systems(Update, advance_creature_sim);
         app.world_mut().resource_mut::<Clock>().ticks = 150;
         app.update();
 
         let got: Vec<(usize, (i32, i32))> = app
             .world()
-            .resource::<SimulationResource>()
+            .resource::<CreatureSim>()
             .sim
             .as_ref()
             .unwrap()
@@ -2915,9 +2262,11 @@ mod tests {
             return;
         };
         let game = Game::open(&dir).unwrap();
-        let mut sim_resource = SimulationResource::default();
+        let mut sim_resource = CreatureSim::default();
         sim_resource.sim = game.simulation(map_ref, SIM_SEED).ok();
         sim_resource.initial_pixels = sim_resource.sim.as_ref().unwrap().initial_pixels();
+        // A reset at clock tick 400 left a fresh simulation at its own tick 0.
+        sim_resource.epoch = 400;
         let initial = sim_resource.initial_pixels.clone();
         let by_id: HashMap<usize, (i32, i32)> = initial.into_iter().collect();
 
@@ -2932,19 +2281,15 @@ mod tests {
             })
             .insert_resource(sim_resource)
             .insert_resource(Clock::new(TICK_MS as f32))
-            // A reset at clock tick 400 left a fresh simulation at its own tick 0.
-            .insert_resource(SimTickTracker {
-                epoch: 400,
-                sim_ticks: 0,
-            })
-            .add_systems(Update, advance_simulation);
+            .init_resource::<CreatureMotion>()
+            .add_systems(Update, advance_creature_sim);
         // A backward Step rewinds the clock below the reset epoch.
         app.world_mut().resource_mut::<Clock>().ticks = 395;
         app.update();
 
         let states = app
             .world()
-            .resource::<SimulationResource>()
+            .resource::<CreatureSim>()
             .sim
             .as_ref()
             .unwrap()
@@ -3005,7 +2350,7 @@ mod tests {
     }
 
     /// A simulation that cannot be built reports why instead of being dropped through
-    /// `.ok()`: `reset_simulation` records the reason on the resource and leaves the
+    /// `.ok()`: `reset_creature_sim` records the reason on the resource and leaves the
     /// simulation empty, while still pinning the epoch so a later backward Step has a
     /// zero point (review #68).
     #[test]
@@ -3019,12 +2364,11 @@ mod tests {
             source: MapSource::Game,
             number: u32::MAX,
         };
-        let mut sim = SimulationResource::default();
-        let mut tracker = SimTickTracker {
-            epoch: 123,
-            sim_ticks: 45,
+        let mut sim = CreatureSim {
+            epoch: 45,
+            ..Default::default()
         };
-        reset_simulation(&game, bogus, 123, &mut sim, &mut tracker);
+        reset_creature_sim(&game, bogus, SIM_SEED, 123, &mut sim);
         assert!(sim.sim.is_none(), "no simulation was built");
         let reason = sim
             .error
@@ -3033,8 +2377,79 @@ mod tests {
             reason.contains("simulation for"),
             "the reason names the map that failed: {reason}"
         );
-        assert_eq!(tracker.epoch, 123, "the epoch is pinned even on failure");
-        assert_eq!(tracker.sim_ticks, 0, "the timeline restarts at the reset");
+        assert_eq!(sim.epoch, 123, "the epoch is pinned even on failure");
+        assert_eq!(sim.sim_ticks, 0, "the timeline restarts at the reset");
+    }
+
+    /// Rebuilding a map hands its creatures to the shared subsystem and mirrors
+    /// the Characters overlay into the subsystem's visibility resource: the map a
+    /// rebuild asks for is the selected one, and a map opened with characters off
+    /// shows no creature for the first frame (issue #70 AC5, review #68).
+    #[test]
+    fn rebuild_asks_the_subsystem_and_mirrors_the_characters_overlay() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        for (characters_on, expected) in [(true, true), (false, false)] {
+            let state = Viewer {
+                maps: vec![map_ref],
+                selected: 0,
+                overlays: [false, false, false, characters_on],
+                playback: PlayState::Paused,
+            };
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins)
+                .insert_resource(GameResource(Game::open(&dir).unwrap()))
+                .insert_resource(state)
+                .insert_resource(Rebuild { map: true })
+                .init_resource::<TextureCache>()
+                .insert_resource(Assets::<Image>::default())
+                .init_resource::<ActiveRoot>()
+                .init_resource::<Stats>()
+                .init_resource::<PendingFrame>()
+                .init_resource::<CreatureLabels>()
+                .init_resource::<CreatureMotion>()
+                // Opposite of what the overlay says: a rebuild must overwrite it.
+                .insert_resource(CreatureNodesVisible(!characters_on))
+                .add_systems(Update, rebuild_scene);
+            app.update();
+
+            let motion = app.world().resource::<CreatureMotion>();
+            assert_eq!(motion.map, Some(map_ref), "the selected map is requested");
+            assert!(motion.rebuild, "the subsystem is asked to build it");
+            assert_eq!(
+                app.world().resource::<CreatureNodesVisible>().0,
+                expected,
+                "creatures are born visible exactly when the overlay is on"
+            );
+        }
+    }
+
+    /// The panel's own wording of what the subsystem found: every finding shows,
+    /// a clean map adds nothing, and a map whose animation data did not decode
+    /// says so (review #68 — a creature walking on its rest pose is a defect).
+    #[test]
+    fn the_panel_words_the_creature_findings() {
+        assert_eq!(creature_report(&CreatureAnimReport::default()), "");
+        let report = CreatureAnimReport {
+            total: 5,
+            without_walk: 2,
+            partial_walk: 1,
+            ..Default::default()
+        };
+        let shown = creature_report(&report);
+        for want in ["5 creatures", "2 without walk", "1 partial walk"] {
+            assert!(shown.contains(want), "{shown} must mention {want:?}");
+        }
+        let broken = CreatureAnimReport {
+            error: Some("no animation data".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            creature_report(&broken),
+            " · creatures: no animation data",
+            "a map that did not decode says why instead of showing fewer creatures"
+        );
     }
 
     /// A map built with the Characters overlay off must show neither creatures
@@ -3047,7 +2462,7 @@ mod tests {
             return;
         };
         let game = Game::open(&dir).unwrap();
-        let sim_resource = SimulationResource {
+        let sim_resource = CreatureSim {
             sim: game.simulation(map_ref, SIM_SEED).ok(),
             ..Default::default()
         };
@@ -3057,22 +2472,32 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .insert_resource(sim_resource)
             .init_resource::<CreatureSpawns>()
-            .init_resource::<SceneDepth>()
+            .init_resource::<CreatureDepth>()
+            .init_resource::<CreatureLabels>()
+            // What `rebuild_scene` derives from the Characters overlay.
+            .insert_resource(CreatureNodesVisible(false))
             .insert_resource(viewer([false, false, false, false]))
             .add_systems(
                 Update,
                 (
                     spawn_creature_labels,
-                    spawn_creatures,
+                    spawn_creature_nodes,
                     sync_creature_visibility,
                 )
                     .chain(),
             );
         app.update();
 
-        let sim = app.world().resource::<SimulationResource>();
-        let creature_root = sim.creature_root.expect("the creature root spawned");
-        let label_root = sim.label_root.expect("the label root spawned");
+        let creature_root = app
+            .world()
+            .resource::<CreatureSim>()
+            .creature_root
+            .expect("the creature root spawned");
+        let label_root = app
+            .world()
+            .resource::<CreatureLabels>()
+            .label_root
+            .expect("the label root spawned");
         assert_eq!(
             *app.world().get::<Visibility>(creature_root).unwrap(),
             Visibility::Hidden,
@@ -3107,8 +2532,8 @@ mod tests {
     fn creature_node_and_label_queries_are_disjoint() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .init_resource::<SimulationResource>()
-            .init_resource::<SceneDepth>()
+            .init_resource::<CreatureSim>()
+            .init_resource::<CreatureDepth>()
             .init_resource::<CreatureSpawns>()
             .insert_resource(Clock::new(TICK_MS as f32))
             .add_systems(Update, sync_creature_nodes);
@@ -3155,13 +2580,17 @@ mod tests {
         let game = Game::open(&dir).unwrap();
         let mut cache = TextureCache::default();
         let mut images = Assets::<Image>::default();
-        let mut anim_problems = Vec::new();
-        let anim = build_creature_anim(&game, map_ref, &mut cache, &mut images, &mut anim_problems);
-        for problem in &anim_problems {
-            println!("walk diagnostics: {problem}");
-        }
         let scene = game.scene(map_ref, &SceneOptions::ALL).unwrap();
-        let mut sim_resource = SimulationResource::default();
+        let (anim, report) = build_creature_anim(
+            &game,
+            map_ref,
+            None,
+            &scene.creature_pieces,
+            &mut cache,
+            &mut images,
+        );
+        println!("walk diagnostics: {report:?}");
+        let mut sim_resource = CreatureSim::default();
         sim_resource.sim = game.simulation(map_ref, SIM_SEED).ok();
         sim_resource.initial_pixels = sim_resource.sim.as_ref().unwrap().initial_pixels();
         let spawns = build_creature_spawns(&scene, &cache, &anim, &sim_resource.initial_pixels);
@@ -3169,13 +2598,16 @@ mod tests {
             !spawns.plans.is_empty(),
             "карта обязана дать существ со сценой"
         );
-        let depth = build_scene_depth(&scene, &cache);
+        let depth = build_depth_map(&scene, &cache);
 
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
             bevy::transform::TransformPlugin,
             AnimPlugin::new(TICK_MS as f32),
+            // The very subsystem the viewer window runs — the test is about it
+            // keeping the image continuous, not about a hand-assembled copy of it.
+            CreatureAnimationPlugin,
         ))
         .insert_resource(GameResource(game))
         .insert_resource(Viewer {
@@ -3185,29 +2617,18 @@ mod tests {
             playback: PlayState::Paused,
         })
         .insert_resource(images)
+        // The subsystem's prepare system validates against these even when no
+        // rebuild is pending, exactly as a window that owns them provides them.
+        .init_resource::<TextureCache>()
         .insert_resource(sim_resource)
-        .insert_resource(SimTickTracker::default())
-        .insert_resource(SceneDepth { map: depth })
+        .insert_resource(CreatureDepth { map: depth })
+        .insert_resource(CreatureMotion {
+            map: Some(map_ref),
+            seed: SIM_SEED,
+            ..Default::default()
+        })
         .insert_resource(anim)
-        .insert_resource(spawns)
-        .add_systems(
-            Update,
-            (
-                advance_simulation,
-                spawn_creatures,
-                sync_creature_animation.in_set(CreatureSet::Swap),
-                sync_creature_nodes.in_set(CreatureSet::Nodes),
-            )
-                .chain()
-                .after(AnimSet::Clock),
-        )
-        .configure_sets(
-            Update,
-            (
-                AnimSet::Sprites.after(CreatureSet::Swap),
-                CreatureSet::Nodes.after(AnimSet::Sprites),
-            ),
-        );
+        .insert_resource(spawns);
         // The clock moves only through this test: real-time advance would tick
         // the animation independently of the simulation stepping below.
         app.world_mut()
@@ -3223,7 +2644,7 @@ mod tests {
             app.update();
             let world = app.world();
             let states: HashMap<usize, CreatureState> = world
-                .resource::<SimulationResource>()
+                .resource::<CreatureSim>()
                 .sim
                 .as_ref()
                 .unwrap()
@@ -3412,12 +2833,19 @@ mod tests {
         let game = Game::open(&dir).unwrap();
         let mut cache = TextureCache::default();
         let mut images = Assets::<Image>::default();
-        let anim = build_creature_anim(&game, map_ref, &mut cache, &mut images, &mut Vec::new());
         let scene = game.scene(map_ref, &SceneOptions::ALL).unwrap();
+        let (anim, _report) = build_creature_anim(
+            &game,
+            map_ref,
+            None,
+            &scene.creature_pieces,
+            &mut cache,
+            &mut images,
+        );
         let simulation = game.simulation(map_ref, SIM_SEED).ok();
         let initial = home(simulation.as_ref().unwrap());
         let initial_by_id: HashMap<usize, (i32, i32)> = initial.iter().copied().collect();
-        let sim_resource = SimulationResource {
+        let sim_resource = CreatureSim {
             initial_pixels: simulation.as_ref().unwrap().initial_pixels(),
             sim: simulation,
             ..Default::default()
@@ -3426,7 +2854,7 @@ mod tests {
         assert!(!spawns.plans.is_empty(), "the map must give creatures");
         let plan_count = spawns.plans.len();
         let plan_ids: HashSet<usize> = spawns.plans.iter().map(|plan| plan.id as usize).collect();
-        let depth = build_scene_depth(&scene, &cache);
+        let depth = build_depth_map(&scene, &cache);
         let depth_map = depth.clone();
 
         let mut app = App::new();
@@ -3434,6 +2862,8 @@ mod tests {
             MinimalPlugins,
             bevy::transform::TransformPlugin,
             AnimPlugin::new(TICK_MS as f32),
+            // The pipeline the button must reset is the shared subsystem's.
+            CreatureAnimationPlugin,
         ))
         .insert_resource(GameResource(game))
         .insert_resource(Viewer {
@@ -3443,31 +2873,30 @@ mod tests {
             playback: PlayState::Paused,
         })
         .insert_resource(images)
+        .init_resource::<TextureCache>()
         .insert_resource(sim_resource)
-        .insert_resource(SimTickTracker::default())
-        .insert_resource(SceneDepth { map: depth })
+        .insert_resource(CreatureDepth { map: depth })
+        .insert_resource(CreatureMotion {
+            map: Some(map_ref),
+            seed: SIM_SEED,
+            ..Default::default()
+        })
         .insert_resource(anim)
         .insert_resource(spawns)
+        .init_resource::<CreatureLabels>()
         .add_systems(
             Update,
             (
-                advance_simulation,
-                spawn_creature_labels,
-                spawn_creatures,
-                sync_creature_animation.in_set(CreatureSet::Swap),
-                sync_creature_nodes.in_set(CreatureSet::Nodes),
-            )
-                .chain()
-                .after(AnimSet::Clock),
-        )
-        .add_observer(reset_positions)
-        .configure_sets(
-            Update,
-            (
-                AnimSet::Sprites.after(CreatureSet::Swap),
-                CreatureSet::Nodes.after(AnimSet::Sprites),
+                spawn_creature_labels.after(CreatureSet::Spawn),
+                // The viewer's own pass over the finished frame, exactly as the
+                // window runs it: ids above the body images.
+                sync_creature_labels
+                    .after(CreatureSet::Swap)
+                    .after(AnimSet::Sprites)
+                    .after(CreatureSet::Nodes),
             ),
-        );
+        )
+        .add_observer(reset_positions);
         let button = app.world_mut().spawn(ResetPositions).id();
         app.world_mut()
             .resource_mut::<Clock>()
@@ -3479,7 +2908,7 @@ mod tests {
         for tick in 0..200u64 {
             app.world_mut().resource_mut::<Clock>().ticks = tick;
             app.update();
-            let sim = app.world().resource::<SimulationResource>();
+            let sim = app.world().resource::<CreatureSim>();
             let states = sim.sim.as_ref().unwrap().states();
             left_home |= states
                 .iter()
@@ -3487,8 +2916,9 @@ mod tests {
         }
         assert!(left_home, "200 ticks must move at least one creature");
         let (root_before, label_root_before) = {
-            let sim = app.world().resource::<SimulationResource>();
-            (sim.creature_root, sim.label_root)
+            let sim = app.world().resource::<CreatureSim>();
+            let labels = app.world().resource::<CreatureLabels>();
+            (sim.creature_root, labels.label_root)
         };
 
         // The button, pressed once: the observer rebuilds the simulation and a
@@ -3508,13 +2938,14 @@ mod tests {
             .world_mut()
             .query::<(&CreatureSprite, &GlobalTransform)>();
         let world = app.world();
-        let sim = world.resource::<SimulationResource>();
+        let sim = world.resource::<CreatureSim>();
         assert_eq!(
             sim.creature_root, root_before,
             "the nodes are not respawned"
         );
         assert_eq!(
-            sim.label_root, label_root_before,
+            world.resource::<CreatureLabels>().label_root,
+            label_root_before,
             "the labels are not respawned"
         );
         let states = sim.sim.as_ref().unwrap().states();
@@ -3658,7 +3089,12 @@ mod tests {
         const TICKS: u64 = 30_000; // 30 minutes at the 60 ms tick
         let game = Game::open(&dir).unwrap();
         let started = std::time::Instant::now();
-        let replayed = replay_simulation(&game, map_ref, TICKS).expect("replay builds");
+        // What a backward Step costs: the subsystem rebuilds the map's simulation
+        // and replays it to the selected tick (`advance_creature_sim`).
+        let mut replayed = game.simulation(map_ref, SIM_SEED).expect("replay builds");
+        for _ in 0..TICKS {
+            replayed.tick();
+        }
         let elapsed = started.elapsed();
         println!(
             "replay: {TICKS} ticks in {} ms ({} ns/tick)",
@@ -3711,7 +3147,7 @@ mod tests {
                 "map {} textures: {problems:?}",
                 map_ref.number
             );
-            let map = build_scene_depth(&scene, &cache);
+            let map = build_depth_map(&scene, &cache);
             // Sample every whole bottom the stacks can reach: a drop only
             // needs one pixel to hide in.
             let previous = map.z_for_bottom(0);

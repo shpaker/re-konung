@@ -3537,6 +3537,7 @@ name = "kn-render"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "k1-data",
  "kn-game",
  "thiserror 2.0.21",
 ]
