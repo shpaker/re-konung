@@ -531,8 +531,10 @@ fn checked_cell(x: i64, y: i64) -> Option<(i16, i16)> {
 
 /// Whether `from` is one of the eight neighbours of `to` — the original's
 /// direction lookup `FUN_0041165c`: standing on `to` itself is NOT adjacency,
-/// so a stranger on the workplace is sent to a free neighbour.
-fn is_adjacent(from: (i16, i16), to: (i16, i16)) -> bool {
+/// so a stranger on the workplace is sent to a free neighbour. Public for
+/// the simulation's goal-reach counters, which classify a completed order by
+/// the target the rule aimed at (docs/k1/creatures.md, "Goal reach").
+pub fn is_adjacent(from: (i16, i16), to: (i16, i16)) -> bool {
     (0..8).any(|index| neighbour(to, index) == Some(from))
 }
 
