@@ -70,14 +70,16 @@ An issue title starts with one of four prefixes, which say what kind of work it 
 Every change reaches `main` through a PR only. One PR covers one area of responsibility: project
 scaffolding, disc unpacking, graphics, maps, the Tiled extension, documentation of one topic. A
 change that touches several areas is split into several PRs; dependent PRs are stacked (the base of
-the next one is the branch of the previous).
+the next one is the branch of the previous). When a lower PR is squash-merged its branch is deleted
+and its commits collapse into a single `main` commit, so rebase the dependent branch onto the updated
+`main` (or the next surviving base), repoint the dependent PR's base there, and force-push it.
 
 Branch names are short and meaningful: `feat/k1-maps`, `fix/rle-shadow`, `docs/sources`.
 
-Merges into `main` are merge commits only: squash and rebase are disabled in the repository. GitHub
-writes the merge subject from the PR title with its number — `feat: parse k1 map files (#29)` — and
-leaves the body empty. Commits inside the branch do not reach the `main` history separately, so the
-type a release is computed from has to be set in the PR title ([docs/releases.md](docs/releases.md)).
+Merges into `main` are squash commits only: merge and rebase are disabled in the repository and
+`main` requires a linear history. GitHub writes the squash subject from the PR title with its number —
+`feat: parse k1 map files (#29)` — and the branch's commits do not reach the `main` history at all, so
+the type a release is computed from has to be set in the PR title ([docs/releases.md](docs/releases.md)).
 
 ## Commits
 
@@ -86,7 +88,7 @@ type a release is computed from has to be set in the PR title ([docs/releases.md
 
 ## Pull request description
 
-The title is English, in Conventional Commits: `feat: parse k1 map files`. It becomes the merge
+The title is English, in Conventional Commits: `feat: parse k1 map files`. It becomes the squash
 commit subject in `main` and a release note entry.
 
 The description has seven English sections, all mandatory, in this order. An empty section is a
