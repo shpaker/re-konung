@@ -15,23 +15,26 @@ trim = true
 [git]
 conventional_commits = true
 filter_unconventional = true
+# Positive selection: a commit counts only when a parser below matches it, so the
+# ordinary commits inside a PR branch never reach a release on their own.
+filter_commits = true
 tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
-# Порядок групп задают комментарии; служебные типы в релиз не попадают.
-# Релиз собирается по заголовкам PR: мерж-коммит получает заголовок PR (настройка
-# репозитория merge_commit_title=PR_TITLE), а коммиты внутри ветки пропускаются, иначе
-# один PR попадал бы и в текст релиза, и в расчёт версии дважды.
-# Мержи до 2026-11-01 выглядели как «Merge pull request #N from <ветка>», а их заголовок PR
-# лежал в теле — препроцессор переносит его в первую строку, чтобы и эта история считалась по PR.
+# Each PR lands on main as exactly one commit whose subject GitHub ends with the PR
+# number, "(#N)" (squash_merge_commit_title=PR_TITLE). Requiring that suffix in every
+# type parser admits a PR once and no more; a stray branch commit without "(#N)" falls
+# through to the catch-all skip. Merges before 2026-11-01 read "Merge pull request #N
+# from <branch>" with the PR title in the body, so the preprocessor first lifts that
+# title onto the first line and these same parsers still count the old history.
 commit_preprocessors = [
     { pattern = '(?s)^Merge pull request #(?<num>[0-9]+) from [^\n]*\n\n(?<title>.*)$', replace = "${title} (#${num})" },
 ]
 commit_parsers = [
-    { field = "merge_commit", pattern = "false", skip = true },
-    { message = "^feat", group = "<!-- 0 -->Новое" },
-    { message = "^fix", group = "<!-- 1 -->Исправления" },
-    { message = "^perf", group = "<!-- 2 -->Производительность" },
-    { message = "^refactor", group = "<!-- 3 -->Рефакторинг" },
+    { message = "^feat(\\(.*\\))?!?: .+ \\(#[0-9]+\\)$", group = "<!-- 0 -->Новое" },
+    { message = "^fix(\\(.*\\))?!?: .+ \\(#[0-9]+\\)$", group = "<!-- 1 -->Исправления" },
+    { message = "^perf(\\(.*\\))?!?: .+ \\(#[0-9]+\\)$", group = "<!-- 2 -->Производительность" },
+    { message = "^refactor(\\(.*\\))?!?: .+ \\(#[0-9]+\\)$", group = "<!-- 3 -->Рефакторинг" },
     { message = "^(chore|ci|docs|test|build|style|revert)", skip = true },
+    { message = ".*", skip = true },
 ]
 
 [bump]
