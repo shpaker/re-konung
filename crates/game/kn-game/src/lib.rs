@@ -72,6 +72,7 @@ pub struct Piece {
     pub animation: Option<Animation>,
     pub group: PieceGroup,
     pub creature_id: Option<usize>,
+    pub depth_bottom: Option<i32>,
 }
 
 impl Piece {
@@ -622,6 +623,7 @@ fn piece(from: k1_game::scene::DrawPiece) -> Piece {
         animation: from.animation.map(animation),
         group: from.group,
         creature_id: from.creature_id,
+        depth_bottom: from.depth_bottom,
     }
 }
 
@@ -812,6 +814,7 @@ mod tests {
             animation: None,
             group: PieceGroup::Terrain,
             creature_id: None,
+            depth_bottom: None,
         }
     }
 
@@ -940,6 +943,7 @@ mod tests {
                 }),
                 group: PieceGroup::Characters,
                 creature_id: None,
+                depth_bottom: None,
             }],
         };
         assert_eq!(scene.texture_ids(), [TextureId(gear), TextureId(body)]);

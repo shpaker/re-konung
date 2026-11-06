@@ -454,6 +454,7 @@ mod tests {
             }),
             group: PieceGroup::Objects,
             creature_id: None,
+            depth_bottom: None,
         };
         // Границы считают по базовому кадру и по каждому кадру анимации:
         // крупный огонь больше своего базового кадра, и без этого он ушёл бы за
@@ -474,6 +475,7 @@ mod tests {
             animation: None,
             group,
             creature_id: None,
+            depth_bottom: None,
         }
     }
 

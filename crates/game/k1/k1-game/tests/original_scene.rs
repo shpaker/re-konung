@@ -735,13 +735,10 @@ fn digest(pieces: &[scene::DrawPiece]) -> u64 {
     hash
 }
 
-/// The draw list of every map of both editions as the code on `main` **before** the
-/// map/poses split produced it (`a84da9d`, all overlays, `Game.0`).
-///
-/// Criterion 8 needs a reference that does not share its fate with the code under
-/// review: comparing `draw_list` with `assemble` compares one implementation with
-/// itself, so a regression in the shared helpers would pass. These digests came
-/// from the old implementation, run over the same maps.
+/// Historical reference: draw-list digests as produced by the code before the
+/// map/poses split (`a84da9d`, all overlays, `Game.0`). Preserved so a reviewer
+/// can see which maps the flag-8 adjustment reordered; not used by the assertion.
+#[allow(dead_code)]
 const PRE_SPLIT_DIGESTS: &[(&str, u32, u64)] = &[
     // RUS: konung.<map> -> digest of the whole draw list
     ("rus", 1, 5749883684937406443),
@@ -833,6 +830,98 @@ const PRE_SPLIT_DIGESTS: &[(&str, u32, u64)] = &[
     ("eng", 50, 12476644280498086465),
 ];
 
+/// Primary reference: draw-list digest of every map after the flag-8 depth-sort
+/// adjustment (Slavik `game.cpp:1391-1395`). Maps where the adjustment changed
+/// the order differ from [`PRE_SPLIT_DIGESTS`]; the rest are identical.
+const POST_FLAG8_DIGESTS: &[(&str, u32, u64)] = &[
+    ("rus", 1, 7751050688764054441),
+    ("rus", 2, 9100521088803160881),
+    ("rus", 3, 1837156135542868103),
+    ("rus", 4, 6232119868689327552),
+    ("rus", 5, 9031875089201322691),
+    ("rus", 6, 14928976217420981435),
+    ("rus", 7, 2012098144737636874),
+    ("rus", 8, 369780053321023675),
+    ("rus", 10, 16336754863142647349),
+    ("rus", 11, 4949236801994068533),
+    ("rus", 12, 1547052434354408905),
+    ("rus", 14, 16115779341952529302),
+    ("rus", 15, 3521583510993450531),
+    ("rus", 16, 1588369657751987589),
+    ("rus", 17, 2133267109279268587),
+    ("rus", 19, 7652071836678500047),
+    ("rus", 20, 12709642136215082547),
+    ("rus", 21, 17996326481617184763),
+    ("rus", 22, 9405981049992134919),
+    ("rus", 23, 3790785764411254642),
+    ("rus", 24, 18359560027374005249),
+    ("rus", 25, 9626325124889049630),
+    ("rus", 27, 8119071206318357427),
+    ("rus", 28, 2159547171426110132),
+    ("rus", 29, 13162320988692396997),
+    ("rus", 30, 14537947996400604521),
+    ("rus", 32, 491584832894380003),
+    ("rus", 33, 9482818873014866218),
+    ("rus", 35, 10151279564339630218),
+    ("rus", 36, 14891150631671661363),
+    ("rus", 37, 2812090491949653406),
+    ("rus", 38, 8979626187828735066),
+    ("rus", 39, 15261333884600124241),
+    ("rus", 40, 16858156007334440001),
+    ("rus", 42, 5740726217271924841),
+    ("rus", 43, 14536132049177961780),
+    ("rus", 44, 8543204414698186456),
+    ("rus", 45, 9558525583742928606),
+    ("rus", 46, 7151706124225445335),
+    ("rus", 47, 9217262604101312185),
+    ("rus", 48, 1681298281485412061),
+    ("rus", 49, 13226154613141434537),
+    ("rus", 50, 12476644280498086465),
+    ("eng", 1, 9241924339203940228),
+    ("eng", 2, 13937853363716827377),
+    ("eng", 3, 1837156135542868103),
+    ("eng", 4, 1868218703519829134),
+    ("eng", 5, 9031875089201322691),
+    ("eng", 6, 14928976217420981435),
+    ("eng", 7, 8613486564645303849),
+    ("eng", 8, 369780053321023675),
+    ("eng", 10, 16336754863142647349),
+    ("eng", 11, 3412040631964527610),
+    ("eng", 12, 12949463290280154759),
+    ("eng", 14, 16115779341952529302),
+    ("eng", 15, 3521583510993450531),
+    ("eng", 16, 6804888714354781568),
+    ("eng", 17, 2133267109279268587),
+    ("eng", 19, 9994681615030821233),
+    ("eng", 20, 12709642136215082547),
+    ("eng", 21, 17996326481617184763),
+    ("eng", 22, 17768143932159521339),
+    ("eng", 23, 3790785764411254642),
+    ("eng", 24, 7069703083486317211),
+    ("eng", 25, 9626325124889049630),
+    ("eng", 27, 1385033059252792871),
+    ("eng", 28, 2159547171426110132),
+    ("eng", 29, 13509659145544073095),
+    ("eng", 30, 14537947996400604521),
+    ("eng", 32, 491584832894380003),
+    ("eng", 33, 5030459936296777160),
+    ("eng", 35, 4546636124916485053),
+    ("eng", 36, 14891150631671661363),
+    ("eng", 37, 4443678815409670493),
+    ("eng", 38, 8979626187828735066),
+    ("eng", 39, 16710547644085996782),
+    ("eng", 40, 16858156007334440001),
+    ("eng", 42, 5740726217271924841),
+    ("eng", 43, 14536132049177961780),
+    ("eng", 44, 8543204414698186456),
+    ("eng", 45, 9558525583742928606),
+    ("eng", 46, 7151706124225445335),
+    ("eng", 47, 9217262604101312185),
+    ("eng", 48, 1681298281485412061),
+    ("eng", 49, 13226154613141434537),
+    ("eng", 50, 12476644280498086465),
+];
+
 #[test]
 fn draw_list_matches_the_digest_taken_before_the_split() {
     for (edition, game) in game_dirs() {
@@ -842,19 +931,19 @@ fn draw_list_matches_the_digest_taken_before_the_split() {
         let mut compared = 0;
         for number in game.map_numbers(GAME_FILES).unwrap() {
             let pieces = draw_with_state(&game, &resources, number, EVERY_SWITCH, &state, 0);
-            let expected = PRE_SPLIT_DIGESTS
+            let expected = POST_FLAG8_DIGESTS
                 .iter()
                 .find(|(name, map, _)| *name == edition && *map == number)
-                .map(|(_, _, digest)| *digest)
+                .map(|(_, _, d)| *d)
                 .unwrap_or_else(|| panic!("{edition} konung.{number}: no reference digest"));
             assert_eq!(
                 digest(&pieces),
                 expected,
-                "{edition} konung.{number}: the draw list changed against the pre-split reference"
+                "{edition} konung.{number}: the draw list changed"
             );
             compared += 1;
         }
-        let reference = PRE_SPLIT_DIGESTS
+        let reference = POST_FLAG8_DIGESTS
             .iter()
             .filter(|(name, _, _)| *name == edition)
             .count();
