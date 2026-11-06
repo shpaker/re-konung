@@ -2799,11 +2799,15 @@ mod tests {
         }
     }
 
-    /// The day recreates with the map: game time is derived from the fresh
-    /// simulation's own tick, so a map change cannot carry a running day across —
-    /// there is no second accumulator on the tracker or in the viewer to leak it.
+    /// The viewer's own contract: switching to another map installs a fresh
+    /// simulation and its day begins with it — game time is derived from that
+    /// simulation's own tick, so there is no second accumulator on the tracker or
+    /// in the viewer to carry a running day across. This is a tool convention for
+    /// the viewer's independent scenes, not a game rule: a game-side map
+    /// transition in the Player keeps the session's day (docs/k1/time-of-day.md,
+    /// "The day travels through a game transition").
     #[test]
-    fn a_map_change_recreates_the_day_with_the_simulation() {
+    fn switching_to_another_map_recreates_the_day_with_the_new_simulation() {
         let Some((dir, map_ref)) = game_and_first_map() else {
             return;
         };

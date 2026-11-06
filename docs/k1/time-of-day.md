@@ -424,11 +424,19 @@ Deliberate, recorded next to the facts they bend:
   to do with the world. Our day is 21600 ticks of the simulation's own tick — the counter
   `Simulation::tick` advances, not a second clock; 21.6 minutes at the 60 ms tick. A modern
   game speed, when it comes, will change how fast that tick advances and never the cycle.
-- **The day is not re-zeroed by a map load.** The original's counter is zeroed when a map
-  record is activated — every activation we can see the code for — while our time is one
-  continuous function of the session's tick and a map change does not rewind it. A per-map
-  restart of the hour is an artefact of the original's activation store; a world whose day
-  jumps at every door is not what #87 asks for.
+- **The day travels through a game transition; a viewer map switch is not one.** The
+  original's counter is zeroed when a map record is activated — every activation we can
+  see the code for — running two different things together that we split. A game-side
+  transition, the player walking between maps in the Player, keeps the session's day:
+  time is one continuous function of the session's tick and a transition does not rewind
+  it; the travel ticket must carry the day across, because a world whose day jumps at
+  every door is not what #87 asks for. The viewer switching to another map is not a
+  transition: each map there is an independent scene with a simulation of its own, and
+  that scene's day begins with it — the viewer test
+  `switching_to_another_map_recreates_the_day_with_the_new_simulation` holds this tool
+  contract, not a game rule. A per-map restart of the hour is an artefact of the
+  original's activation store, and neither surface copies it as a rule: the Player
+  travels, the viewer scenes are separate by construction.
 - **A clock face the original may not have.** The original's interface shows no confirmed hour,
   so the HH:MM the viewer shows is our display convention over the tick, and it stays a label:
   no rule reads it.
@@ -470,3 +478,10 @@ Deliberate, recorded next to the facts they bend:
   channels), and the camera presets — as places to stand the camera, never as boundaries.
 - **#97 — not implemented.** It takes the switches-and-flags table: both user switches,
   both computed flags, and the constant-light bypass of the day/night gate.
+- **Neither #96 nor #97 owns the day.** Both read it from the running simulation —
+  `Simulation::game_time()` — and change only how it is drawn or which part of the
+  lighting computation runs. What the day does at a map change is none of their business:
+  the viewer's fresh day per independent scene and the Player's travelling day are the
+  surfaces' own contracts (above), and the lighting must follow whichever day the
+  simulation reports, never re-derive, re-zero or cache it — otherwise the viewer's
+  fresh-day convention would leak into the game as a rule.
