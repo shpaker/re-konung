@@ -23,9 +23,9 @@ pub use creature_animation::{
     Clip, CreatureAnim, CreatureAnimReport, CreatureAnimationPlugin, CreatureDepth, CreatureMotion,
     CreatureNodesVisible, CreatureSequences, CreatureSet, CreatureSim, CreatureSpawns,
     CreatureSprite, LayerSequences, StepKey, advance_creature_sim, build_creature_anim,
-    build_creature_spawns, build_depth_map, prepare_creatures, reset_creature_positions,
-    reset_creature_sim, select_clip, spawn_creature_nodes, sync_creature_animation,
-    sync_creature_nodes,
+    build_creature_spawns, build_depth_map, prepare_creatures, reset_creature_animations,
+    reset_creature_positions, reset_creature_sim, select_clip, spawn_creature_nodes,
+    sync_creature_animation, sync_creature_nodes,
 };
 pub use creatures::{
     CreatureData, CreatureLayer, CreatureNode, CreatureRoot, CreatureShadow, CreatureSlot,

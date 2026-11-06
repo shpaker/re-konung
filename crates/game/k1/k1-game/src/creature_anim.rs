@@ -194,6 +194,30 @@ impl Machine {
         true
     }
 
+    /// Restart every state-4 creature's special from frame 0 — the viewer's
+    /// "Reset animation" (review of #101, P2-#3). Unlike [`Machine::enter_world`]
+    /// this is not a reseed: it rewinds only the animation stage while the caller
+    /// leaves the world and clock in place. Each entry is restarted exactly as
+    /// [`Machine::restart_special`] does, so a mid-special (same kind) costs no
+    /// pose rebuild while an idle re-entry costs one, keeping the AC6 count
+    /// honest. Creatures the file did not give a state-4 sequence are untouched.
+    /// Returns how many were restarted.
+    pub fn restart_all_specials(&mut self) -> usize {
+        let mut restarted = 0;
+        for entry in &mut self.entries {
+            if entry.recorded_state != SPECIAL_STATE || entry.special_frames == 0 {
+                continue;
+            }
+            let previous = entry.stage;
+            entry.stage = Stage::Special { frame: 0 };
+            if previous.is_special() != entry.stage.is_special() {
+                self.pose_rebuilds += 1;
+            }
+            restarted += 1;
+        }
+        restarted
+    }
+
     /// The stage of one creature; `None` when the machine has never seeded it.
     pub fn stage(&self, id: usize) -> Option<Stage> {
         self.index
@@ -415,6 +439,62 @@ mod tests {
         // caller asks, but it does not count as a fresh Special on restart.
         assert!(machine.restart_special(2), "restart of an idle record");
         assert!(!machine.restart_special(3), "unknown id");
+    }
+
+    #[test]
+    fn restart_all_specials_rewinds_state_four_and_skips_the_rest() {
+        let mut machine = Machine::new();
+        machine.enter_world([
+            seed(1, SPECIAL_STATE, 5),
+            seed(2, 0, 5),
+            seed(3, SPECIAL_STATE, 0),
+        ]);
+        machine.tick(); // id 1: Special 0 → 1; ids 2, 3 are Idle (2 not state-4, 3 no sequence)
+        assert_eq!(machine.stage(1), Some(Stage::Special { frame: 1 }));
+        let before = machine.pose_rebuilds(); // 1: only id 1 opened in Special at load
+
+        let restarted = machine.restart_all_specials();
+        assert_eq!(
+            restarted, 1,
+            "only the state-4 creature with a sequence restarts"
+        );
+        assert_eq!(machine.stage(1), Some(Stage::Special { frame: 0 }));
+        assert_eq!(
+            machine.stage(2),
+            Some(Stage::Idle),
+            "a non-state-4 record stays idle"
+        );
+        assert_eq!(
+            machine.stage(3),
+            Some(Stage::Idle),
+            "a state-4 with no sequence stays idle"
+        );
+        assert_eq!(
+            machine.pose_rebuilds(),
+            before,
+            "a same-kind rewind within a running Special costs no pose rebuild"
+        );
+    }
+
+    #[test]
+    fn restart_all_specials_from_idle_costs_one_rebuild_per_creature() {
+        let mut machine = Machine::new();
+        machine.enter_world([seed(1, SPECIAL_STATE, 2), seed(2, SPECIAL_STATE, 2)]);
+        machine.tick();
+        machine.tick(); // both specials land in Idle: counter is now 2 (load) + 2 (Special→Idle)
+        assert_eq!(machine.stage(1), Some(Stage::Idle));
+        assert_eq!(machine.stage(2), Some(Stage::Idle));
+        let before = machine.pose_rebuilds();
+
+        let restarted = machine.restart_all_specials();
+        assert_eq!(restarted, 2, "both state-4 creatures re-enter from idle");
+        assert_eq!(machine.stage(1), Some(Stage::Special { frame: 0 }));
+        assert_eq!(machine.stage(2), Some(Stage::Special { frame: 0 }));
+        assert_eq!(
+            machine.pose_rebuilds(),
+            before + 2,
+            "each idle → Special is one rebuild (issue #70 AC6)"
+        );
     }
 
     #[test]

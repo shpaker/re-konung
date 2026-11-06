@@ -35,7 +35,7 @@ use kn_render::{
     CreatureNodesVisible, CreatureRoot, CreatureSet, CreatureShadow, CreatureSim, CreatureSprite,
     GameResource, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup,
     ScenePiece, Sequence, TextureCache, clear_scene, load_scene, ortho_scale,
-    reset_creature_positions, reset_creature_sim,
+    reset_creature_animations, reset_creature_positions,
 };
 use kn_ui::{dark_theme, pointer_over_ui, sync_checked};
 
@@ -733,34 +733,25 @@ fn reset_positions(
     reset_creature_positions(&game.0, map_ref, SIM_SEED, clock.ticks, &mut sim);
 }
 
-/// Кнопка "Reset animation" (issue #70 AC4): the viewer's `Play → Off → Play`
-/// path. Zeroes the clock, puts `Viewer::playback` into `Off` and rebuilds the
-/// simulation so the fresh state machine reseeds every state-4 creature to
-/// `Special { frame: 0 }`. Nothing writes map data — the fresh simulation is
-/// what `Game::simulation` produces from the file. A later `Play` on the
-/// checkbox flips the state back to `Playing` and the special plays again.
-#[allow(clippy::too_many_arguments)]
+/// Кнопка "Reset animation" (обзор #101, P2-#3): заново запускает анимации с
+/// нулевого кадра, не трогая ни позиции существ, ни игровые часы. Отличается от
+/// полного сброса (`Play → Off → Play`, issue #70 AC4): тот пересобирает
+/// симуляцию и возвращает всех в клетки загрузки, а эта кнопка лишь отматывает
+/// машину анимации — спец state-4 начинается с кадра 0, а координаты и
+/// накопленное время симуляции остаются. Карта, камера, часы и пауза не
+/// трогаются.
 fn reset_animation(
     activate: On<Activate>,
     markers: Query<&ResetAnimation>,
-    game: Res<GameResource>,
-    viewer: Res<Viewer>,
-    mut viewer_state: ResMut<Viewer>,
-    mut clock: ResMut<Clock>,
     mut sim: ResMut<CreatureSim>,
 ) {
     if markers.get(activate.entity).is_err() {
         return;
     }
-    let Some(&map_ref) = viewer.maps.get(viewer.selected) else {
-        return;
-    };
-    // `goto(Off)` zeroes the clock and its sub-tick remainder, so the fresh
-    // simulation starts on tick 0 (the machine's frame 0), matching what the
-    // file records. The simulation's epoch follows the clock.
-    clock.goto(PlayState::Off);
-    viewer_state.playback = PlayState::Off;
-    reset_creature_sim(&game.0, map_ref, SIM_SEED, clock.ticks, &mut sim);
+    // Only the machine rewinds: positions and the simulation clock are kept, and
+    // the animator re-anchors on the same clip through the special-frame
+    // regression the subsystem's `observe_specials` reports (review of #101, P2-#3).
+    reset_creature_animations(&mut sim);
 }
 
 const LABEL_OFFSET_Y: f32 = 50.0;
@@ -1123,7 +1114,7 @@ mod tests {
     use kn_render::{
         Animator, Clip, CreatureAnim, CreatureDepth, CreatureSpawns, LayerSequences, Sequence,
         advance_creature_sim, build_creature_anim, build_creature_spawns, build_depth_map,
-        select_clip, spawn_creature_nodes, sync_creature_nodes,
+        reset_creature_sim, select_clip, spawn_creature_nodes, sync_creature_nodes,
     };
 
     fn state(

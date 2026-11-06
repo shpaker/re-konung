@@ -762,6 +762,21 @@ pub fn reset_creature_sim(
     sim.sim_ticks = 0;
 }
 
+/// The frontend's "Reset animation" button: every state-4 special restarts from
+/// frame 0 while the walk world and the game clock stay exactly where they are
+/// (review of #101, P2-#3). Where [`reset_creature_sim`] reseeds the whole
+/// simulation — snapping creatures back to their load cells and the clock back
+/// to zero, which is the `Play → Off → Play` full reset — this one only rewinds
+/// the animation machine via [`Simulation::restart_all_specials`], so a creature
+/// keeps its position and the simulation keeps its accumulated time. The
+/// already-spawned nodes stay; the animator re-anchors on the same clip through
+/// the special-frame regression [`CreatureAnim::observe_specials`] reports.
+pub fn reset_creature_animations(sim: &mut CreatureSim) {
+    if let Some(simulation) = sim.sim.as_mut() {
+        simulation.restart_all_specials();
+    }
+}
+
 /// The frontend's "Reset positions" button: creatures return to the map's load
 /// cells and the walk world restarts, but the creature animation machine keeps
 /// playing — a mid-special stays mid-special, and an idle creature stays idle

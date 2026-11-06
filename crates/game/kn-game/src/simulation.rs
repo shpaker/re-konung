@@ -206,17 +206,18 @@ impl Simulation {
     ///
     /// "Reset positions" restarts the walk world (routes, walk states, RNG,
     /// cooldown) back to the file's load cells but must NOT restart an in-flight
-    /// state-4 special: the machine's per-creature stage is the animation, and a
-    /// positions reset is not an animation reset (review of #101, P2-#3). The
-    /// fresh simulation is built from the same `map_ref` and `seed`, so its
-    /// roster and the machine's creature ids line up; only the world-side state is
-    /// carried over, while `roster`, `jobs` and `creature_anim` stay as they were.
+    /// state-4 special (the machine's per-creature stage is the animation) and
+    /// must NOT rewind the simulation's own clock — `tick` is the game-time
+    /// source (#95), so it is deliberately left untouched: only the world-side
+    /// movement state is carried over, while `roster`, `jobs`, `creature_anim`
+    /// and `tick` stay as they were (review of #101, P2-#3). The fresh
+    /// simulation is built from the same `map_ref` and `seed`, so its roster and
+    /// the machine's creature ids line up.
     pub fn adopt_positions_from(&mut self, fresh: Simulation) {
         let Simulation {
             world,
             ids,
             rng,
-            tick,
             order_failures,
             cooldown,
             spawn_failures,
@@ -225,7 +226,6 @@ impl Simulation {
         self.world = world;
         self.ids = ids;
         self.rng = rng;
-        self.tick = tick;
         self.order_failures = order_failures;
         self.cooldown = cooldown;
         self.spawn_failures = spawn_failures;
@@ -302,6 +302,13 @@ impl Simulation {
     /// sequence exhaustion, only by this call.
     pub fn restart_creature_special(&mut self, creature_id: usize) -> bool {
         self.creature_anim.restart_special(creature_id)
+    }
+
+    /// Restart every state-4 creature's special from frame 0 — the viewer's
+    /// "Reset animation" (review of #101, P2-#3): only the animation machine
+    /// rewinds, the walk world and the game clock stay exactly where they are.
+    pub fn restart_all_specials(&mut self) {
+        self.creature_anim.restart_all_specials();
     }
 
     /// Counted pose rebuilds: one per creature whose animation-stage kind
