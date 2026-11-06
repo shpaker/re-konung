@@ -21,16 +21,13 @@ use kn_game::{Game, MapRef, MapSource};
 /// `Game.N` (docs/k1/creatures.md, "Our measurement").
 const ION_MAP: u32 = 37;
 
-fn game_root() -> PathBuf {
+/// The shipped ENG game data, or `None` when `original/` is absent. The three
+/// data-backed tests in this file skip on `None` the way the rest of the
+/// suite does; returning here rather than panicking is what keeps CI green —
+/// it checks out without the copyrighted, gitignored data (`docs/k1/editions.md`).
+fn game_root() -> Option<PathBuf> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../original/k1/eng/game");
-    if root.is_dir() {
-        root
-    } else {
-        panic!(
-            "skipping: no original/k1/eng/game (docs/k1/editions.md) — this headless \
-             test asserts the pose composition of a real creature"
-        );
-    }
+    root.is_dir().then_some(root)
 }
 
 /// AC2: after the special the creature's idle pose has the same direction as
@@ -39,7 +36,10 @@ fn game_root() -> PathBuf {
 /// composition (body and shadow) must survive the swap unchanged.
 #[test]
 fn the_idle_pose_after_the_special_matches_the_pose_built_from_the_record_in_state_six() {
-    let root = game_root();
+    let Some(root) = game_root() else {
+        eprintln!("skipping: no original/k1/eng/game (docs/k1/editions.md)");
+        return;
+    };
     let game = Game::open(&root).unwrap();
     let map_ref = MapRef {
         source: MapSource::Game,
@@ -85,7 +85,11 @@ fn the_idle_pose_after_the_special_matches_the_pose_built_from_the_record_in_sta
 /// and the same direction, so the transition into idle is continuous.
 #[test]
 fn a_state_four_record_and_its_state_six_pair_compose_the_same_layers() {
-    let dir = GameDir::new(game_root());
+    let Some(root) = game_root() else {
+        eprintln!("skipping: no original/k1/eng/game (docs/k1/editions.md)");
+        return;
+    };
+    let dir = GameDir::new(root);
     let resources = Resources::load(&dir).unwrap();
     let hero = dir.state_numbers(GAME_FILES).unwrap()[0] as usize;
     let data = dir.state_bytes(hero as u32, GAME_FILES).unwrap();
@@ -318,7 +322,10 @@ fn counted_run_shows_one_rebuild_per_state_change_and_none_per_frame() {
 /// machine's answer for the whole tick range.
 #[test]
 fn a_real_map_creature_matches_the_tick_derivation_through_the_boundary() {
-    let root = game_root();
+    let Some(root) = game_root() else {
+        eprintln!("skipping: no original/k1/eng/game (docs/k1/editions.md)");
+        return;
+    };
     let game = Game::open(&root).unwrap();
     let map_ref = MapRef {
         source: MapSource::Game,
