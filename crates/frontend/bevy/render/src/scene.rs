@@ -457,6 +457,7 @@ mod tests {
             depth_bottom: None,
             light_mask_index: None,
             self_lit: false,
+            fine_light_value: 0,
         };
         // Границы считают по базовому кадру и по каждому кадру анимации:
         // крупный огонь больше своего базового кадра, и без этого он ушёл бы за
@@ -480,6 +481,7 @@ mod tests {
             depth_bottom: None,
             light_mask_index: None,
             self_lit: false,
+            fine_light_value: 0,
         }
     }
 

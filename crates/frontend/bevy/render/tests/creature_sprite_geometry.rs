@@ -40,6 +40,7 @@ fn body() -> Piece {
         creature_id: Some(CREATURE),
         light_mask_index: None,
         self_lit: false,
+        fine_light_value: 0,
     }
 }
 
@@ -56,6 +57,7 @@ fn shadow() -> Piece {
         creature_id: Some(CREATURE),
         light_mask_index: None,
         self_lit: false,
+        fine_light_value: 0,
     }
 }
 

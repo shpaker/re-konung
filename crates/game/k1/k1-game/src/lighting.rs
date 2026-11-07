@@ -93,14 +93,28 @@ pub fn channels(cycle_tick: u64, night: NightPalette) -> [f32; 3] {
 /// Source: Slavik `gfx.cpp:56-84` described in our own words. Each channel behaves
 /// independently:
 ///
-/// - Negative blend: multiply-darken, partially cancelled by tile-light brightness.
-///   If `light >= 0.01`, first `base += (1.0 - base) * light` (light adds toward white),
-///   then `base *= 1.0 + clamp(blend + light, -1.0, 0.0)` (multiply darkens).
-/// - Non-negative blend: blend toward white — `base += (1.0 - base) * blend`.
-/// - Blue channel never gets the light term — only the blend operation.
+/// - `lightning` is the mask brightness sampled from the light mask texture
+///   (`texture2D(tex3, ...).r`), in `0..1`.
+/// - `light_color` is the RGB tile-light colour (`cLight` in the original) that
+///   adds toward white when the mask is bright.
+/// - `blend` is the ambient blend (`cBlend`), negative for darken, positive for
+///   lighten toward white.
+///
+/// Negative blend: multiply-darken, partially cancelled by tile-light brightness.
+/// If `lightning >= 0.01`, first `base += (1.0 - base) * light_color` (light adds
+/// toward white), then `base *= 1.0 + clamp(blend + lightning, -1.0, 0.0)`
+/// (multiply darkens).
+/// Non-negative blend: blend toward white — `base += (1.0 - base) * blend`.
+/// Blue channel never gets the light term — only the blend operation.
 ///
 /// Alpha is never touched here; the caller sets alpha on the sprite itself.
-pub fn apply_channel(base: f32, blend: f32, light: f32, is_blue: bool) -> f32 {
+pub fn apply_channel(
+    base: f32,
+    blend: f32,
+    lightning: f32,
+    light_color: f32,
+    is_blue: bool,
+) -> f32 {
     if is_blue {
         // Blue never cancels darken with the tile-light source.
         if blend < 0.0 {
@@ -109,9 +123,9 @@ pub fn apply_channel(base: f32, blend: f32, light: f32, is_blue: bool) -> f32 {
             base + (1.0 - base) * blend
         }
     } else if blend < 0.0 {
-        if light >= 0.01 {
-            let lit = base + (1.0 - base) * light;
-            lit * (1.0 + (blend + light).clamp(-1.0, 0.0))
+        if lightning >= 0.01 {
+            let lit = base + (1.0 - base) * light_color;
+            lit * (1.0 + (blend + lightning).clamp(-1.0, 0.0))
         } else {
             base * (1.0 + blend.max(-1.0))
         }
@@ -146,17 +160,17 @@ pub enum Surface {
 ///   (game.cpp:1563-1580).
 /// - Dynamic (characters/dynamic objects): fades where `LightMap2(tile) == 0`
 ///   (game.cpp:1089-1100, game.cpp:1611-1626); the fine cell's 0/≠0 distinction
-///   decides whether the creature stands in a lit patch.
+///   decides whether the creature stands in a lit patch. This applies regardless
+///   of the ground-light window: a creature in an unlit cell is darkened even
+///   outside windows 7–12 (e.g. tick 5400..8099).
 ///
 /// `fine_light_value` is the `u8` from [`k1_data::map::Lights::fine`]; only its
-/// zero-ness matters. Only characters in ground-light window (windows 7–12) are
-/// affected — the original calls `DrawGame()` → `SetFade()` on every pass inside that
-/// window; outside it the fade flag stays false for all surfaces.
+/// zero-ness matters.
 pub fn fades(surface: Surface, ground_window: bool, fine_light_value: u8) -> bool {
     match surface {
         Surface::Terrain | Surface::Decoration => ground_window,
         Surface::StaticObject { self_lit } => !self_lit,
-        Surface::Dynamic => ground_window && fine_light_value == 0,
+        Surface::Dynamic => fine_light_value == 0,
     }
 }
 
@@ -249,29 +263,51 @@ mod tests {
 
     #[test]
     fn apply_channel_negative_blend_no_light() {
-        // Negative blend, zero light: classic multiply-darken.
-        // base=0.6, blend=-0.7, light=0.0 → 0.6 * (1 + clamp(-0.7, -1, 0)) = 0.6 * 0.3 = 0.18
-        let result = apply_channel(0.6, -0.7, 0.0, false);
+        // Negative blend, zero lightning/light_color: classic multiply-darken.
+        // base=0.6, blend=-0.7, lightning=0.0, light_color=0.0 → 0.6 * (1 + clamp(-0.7, -1, 0)) = 0.6 * 0.3 = 0.18
+        let result = apply_channel(0.6, -0.7, 0.0, 0.0, false);
         let expected = 0.18;
         assert!((result - expected).abs() < 1e-6, "{result} ~= {expected}");
     }
 
     #[test]
     fn apply_channel_negative_blend_with_bright_light() {
-        // Light adds toward white first, then multiply cancels.
-        // base=0.6, blend=-0.7, light=0.1 → lit = 0.6 + 0.4*0.1 = 0.64;
+        // Lightning adds toward white first (using light_color), then multiply cancels with blend+lightning.
+        // base=0.6, blend=-0.7, lightning=0.1, light_color=0.1 → lit = 0.6 + 0.4*0.1 = 0.64;
         //   clamped part = clamp(-0.7+0.1, -1, 0) = -0.6;
         //   result = 0.64 * (1 + (-0.6)) = 0.64 * 0.4 = 0.256
-        let result = apply_channel(0.6, -0.7, 0.1, false);
+        let result = apply_channel(0.6, -0.7, 0.1, 0.1, false);
         let expected = 0.64 * 0.4;
         assert!((result - expected).abs() < 1e-6, "{result} ~= {expected}");
     }
 
     #[test]
+    fn apply_channel_lightning_and_light_color_differ() {
+        // Regression: lightning (mask brightness) and light_color (RGB source) are separate.
+        // High lightning with low light_color → strong multiply cancel but weak white-add.
+        // base=0.6, blend=-0.7, lightning=0.5, light_color=0.05
+        //   lit = 0.6 + 0.4*0.05 = 0.62
+        //   clamp = clamp(-0.7+0.5, -1, 0) = -0.2
+        //   result = 0.62 * 0.8 = 0.496
+        let result = apply_channel(0.6, -0.7, 0.5, 0.05, false);
+        let expected = 0.62 * 0.8;
+        assert!((result - expected).abs() < 1e-6, "{result} ~= {expected}");
+
+        // Low lightning with high light_color → no white-add because lightning < 0.01.
+        //   result = 0.6 * (1 + clamp(-0.7, -1, 0)) = 0.18
+        let result2 = apply_channel(0.6, -0.7, 0.005, 0.5, false);
+        let expected2 = 0.18;
+        assert!(
+            (result2 - expected2).abs() < 1e-6,
+            "{result2} ~= {expected2}"
+        );
+    }
+
+    #[test]
     fn apply_channel_light_below_threshold_does_not_add() {
-        // light = 0.009 → below 0.01, so light term is skipped entirely.
+        // lightning = 0.009 → below 0.01, so light term is skipped entirely regardless of light_color.
         // Should equal plain multiply-darken: 0.6 * (1 + clamp(-0.7, -1, 0)) = 0.18
-        let result = apply_channel(0.6, -0.7, 0.009, false);
+        let result = apply_channel(0.6, -0.7, 0.009, 0.5, false);
         let expected = 0.18;
         assert!((result - expected).abs() < 1e-6);
     }
@@ -279,10 +315,10 @@ mod tests {
     #[test]
     fn apply_channel_blue_no_light_cancellation() {
         // Blue channel never cancels darken with tile-light source.
-        // Non-blue does: light adds toward white first, then multiply darkens.
-        // base=0.5, blend=-0.5, light=0.3
-        let base_not_blue = apply_channel(0.5, -0.5, 0.3, false);
-        let base_blue = apply_channel(0.5, -0.5, 0.3, true);
+        // Non-blue does: lightning adds toward white (via light_color) first, then multiply darkens.
+        // base=0.5, blend=-0.5, lightning=0.3, light_color=0.3
+        let base_not_blue = apply_channel(0.5, -0.5, 0.3, 0.3, false);
+        let base_blue = apply_channel(0.5, -0.5, 0.3, 0.3, true);
         // They differ because non-blue gets the light additive step.
         assert_ne!(base_not_blue, base_blue);
         // Expected: blue ignores light entirely → 0.5 * (1 + clamp(-0.5, -1, 0)) = 0.25
@@ -293,8 +329,8 @@ mod tests {
     fn apply_channel_blue_ignores_light_positive_blend() {
         // Positive blend: both channels do the same thing (blend toward white).
         assert_eq!(
-            apply_channel(0.5, 0.3, 0.2, true),
-            apply_channel(0.5, 0.3, 0.2, false)
+            apply_channel(0.5, 0.3, 0.2, 0.2, true),
+            apply_channel(0.5, 0.3, 0.2, 0.2, false)
         );
     }
 
@@ -303,28 +339,27 @@ mod tests {
         // In ground window: fine == 0 → fades; fine != 0 → no fade.
         assert!(fades(Surface::Dynamic, true, 0)); // not in lit cell → fades
         assert!(!fades(Surface::Dynamic, true, 5)); // in lit cell → no fade
-        // Outside ground window: regardless of fine, ambient is not applied
-        // because we won't call fades with ground_window=false unless a surface
-        // type explicitly decides otherwise (none do for Dynamic here).
-        // The caller checks ground_window before passing Fine values to fades.
-        assert!(!fades(Surface::Dynamic, false, 0)); // ground off → no fade
+        // Outside ground window: dynamic still fades where fine == 0.
+        // Characters stand in unlit patches even when the ground-light window is closed.
+        assert!(fades(Surface::Dynamic, false, 0)); // ground off, dark cell → fades
+        assert!(!fades(Surface::Dynamic, false, 5)); // ground off, lit cell → no fade
     }
 
     #[test]
     fn apply_channel_positive_blend() {
         // Blend toward white: base += (1 - base) * blend.
         // base=0.4, blend=0.3 → 0.4 + 0.6*0.3 = 0.58
-        let result = apply_channel(0.4, 0.3, 0.0, false);
+        let result = apply_channel(0.4, 0.3, 0.0, 0.0, false);
         let expected = 0.4 + 0.6 * 0.3;
         assert!((result - expected).abs() < 1e-6);
     }
 
     #[test]
     fn apply_channel_clamp_prevents_overbrighten() {
-        // blend + light > 0 → clamped to 0, so no extra brightening beyond light add.
-        // base=0.6, blend=-0.3, light=0.5 → lit = 0.6+0.4*0.5 = 0.8;
+        // blend + lightning > 0 → clamped to 0, so no extra brightening beyond light_color add.
+        // base=0.6, blend=-0.3, lightning=0.5, light_color=0.5 → lit = 0.6+0.4*0.5 = 0.8;
         //   clamp(-0.3+0.5, -1, 0) = 0.0; result = 0.8 * 1.0 = 0.8
-        let result = apply_channel(0.6, -0.3, 0.5, false);
+        let result = apply_channel(0.6, -0.3, 0.5, 0.5, false);
         let expected = 0.8;
         assert!((result - expected).abs() < 1e-6);
     }

@@ -576,15 +576,18 @@ fn map_plus_poses_gives_the_same_draw_list() {
                     let entities = input.entities.as_ref().unwrap();
                     let poses = characters::placed(entities, &state)
                         .into_iter()
-                        .filter_map(|(character, x, y)| {
-                            let (px, py) = game_state::character_position(x, y);
-                            scene::pose_in(
+                        .filter_map(|(character, cx, cy)| {
+                            let (px, py) = game_state::character_position(cx, cy);
+                            scene::pose_in_with_lights(
                                 character,
                                 px,
                                 py,
                                 &state,
                                 &graphics,
                                 &scene::PoseKind::of_record(character),
+                                lights.as_ref(),
+                                cx,
+                                cy,
                             )
                             .ok()
                             .flatten()

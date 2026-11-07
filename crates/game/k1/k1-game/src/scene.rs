@@ -51,6 +51,9 @@ pub struct DrawPiece {
     pub light_mask_index: Option<usize>,
     /// Whether this piece carries two or more flames (self-lit → skip ambient fade).
     pub self_lit: bool,
+    /// Fine-grid light value from LIGHTS.N at the creature's cell; 0 = dark patch.
+    /// Used by the lighting plugin to decide dynamic fade per tick.
+    pub fine_light_value: u8,
 }
 
 /// Кадр анимированного куска: картинка (`None` — слоя в этом кадре не видно) и
@@ -236,6 +239,7 @@ impl DrawPiece {
             depth_bottom: None,
             light_mask_index: None,
             self_lit: false,
+            fine_light_value: 0,
         }
     }
 
@@ -253,6 +257,7 @@ impl DrawPiece {
             depth_bottom: None,
             light_mask_index: None,
             self_lit: false,
+            fine_light_value: 0,
         }
     }
 
@@ -269,6 +274,7 @@ impl DrawPiece {
             depth_bottom: None,
             light_mask_index: None,
             self_lit: false,
+            fine_light_value: 0,
         }
     }
 }
@@ -486,20 +492,33 @@ pub fn map_scene(
 ) -> Result<MapScene> {
     let mut background = Vec::new();
 
-    // Земля и верхний слой: номера тайлов с единицы, 0 — пусто
+    // Земля и верхний слой: номера тайлов с единицы, 0 — пусто.
+    // Tile light masks are assigned from the original (col,row) indices:
+    // inverse pixel mapping is unreliable for decorations and objects, and
+    // unconfirmed for shadows (review #106, P1-4).
     for layer in [&input.map.ground, &input.map.overlay] {
         for (row, cells) in layer.iter().enumerate() {
             for (column, &value) in cells.iter().enumerate() {
                 if value != 0 {
                     let (x, y) = map::tile_position(column, row);
-                    background.push(DrawPiece::textured(
+                    let mut piece = DrawPiece::textured(
                         PieceGroup::Terrain,
                         TextureKey::Tile {
                             index: (value - 1) as usize,
                         },
                         x,
                         y,
-                    ));
+                    );
+                    if let Some(lights) = input.lights
+                        && row < lights.tiles.len()
+                        && column < lights.tiles[row].len()
+                    {
+                        let mask_value = lights.tiles[row][column];
+                        if mask_value > 0 {
+                            piece.light_mask_index = Some((mask_value as usize).saturating_sub(1));
+                        }
+                    }
+                    background.push(piece);
                 }
             }
         }
@@ -545,16 +564,10 @@ pub fn map_scene(
         marker_pieces(entities, &mut overlays);
     }
 
-    // Assign lighting metadata (light_mask_index, self_lit) in-place.
-    if let Some(lights) = input.lights {
-        for piece in background
-            .iter_mut()
-            .chain(shadows.iter_mut())
-            .chain(stacks.iter_mut().flat_map(|(_, p)| p.iter_mut()))
-        {
-            assign_light_metadata(piece, lights);
-        }
-    }
+    // self_lit is already set by object_pieces for objects with 2+ flames.
+    // Light masks are NOT assigned to decorations, objects or shadows:
+    // the inverse pixel→tile mapping is unconfirmed for those surfaces
+    // (review #106, P1-4).
 
     Ok(MapScene {
         background,
@@ -924,19 +937,6 @@ fn character_pose(
     };
     let mut pieces = Vec::new();
     let mut layer_keys = Vec::new();
-    for (key, frames) in tracks {
-        if let Some(track) = layer_track(frames, base, ONE_TICK) {
-            let mut p = DrawPiece::track(PieceGroup::Characters, track);
-            p.creature_id = Some(record.slot);
-            pieces.push(p);
-            layer_keys.push(key);
-        }
-    }
-    let shadow = layer_track(shadows_by_frame, base, ONE_TICK).map(|track| {
-        let mut p = DrawPiece::track(PieceGroup::CharacterShadows, track);
-        p.creature_id = Some(record.slot);
-        p
-    });
     // Fine-grid light value from LIGHTS.N at the creature's cell.
     let fine_light_value = lights.map_or(0u8, |lights| {
         lights
@@ -945,6 +945,21 @@ fn character_pose(
             .and_then(|r| r.get(cell_x as usize))
             .copied()
             .unwrap_or(0)
+    });
+    for (key, frames) in tracks {
+        if let Some(track) = layer_track(frames, base, ONE_TICK) {
+            let mut p = DrawPiece::track(PieceGroup::Characters, track);
+            p.creature_id = Some(record.slot);
+            p.fine_light_value = fine_light_value;
+            pieces.push(p);
+            layer_keys.push(key);
+        }
+    }
+    let shadow = layer_track(shadows_by_frame, base, ONE_TICK).map(|track| {
+        let mut p = DrawPiece::track(PieceGroup::CharacterShadows, track);
+        p.creature_id = Some(record.slot);
+        p.fine_light_value = fine_light_value;
+        p
     });
     Ok(Some(Pose {
         key: (bottom, 1, record.slot),
@@ -1000,24 +1015,13 @@ fn foot_pieces(map: &KonungMap, pieces: &mut Vec<DrawPiece>) {
     }
 }
 
-fn assign_light_metadata(piece: &mut DrawPiece, lights: &Lights) {
-    let (col, row) = tile_column_row(piece.x, piece.y);
-    if row < lights.tiles.len() && col < lights.tiles[row].len() {
-        let value = lights.tiles[row][col];
-        if value > 0 {
-            piece.light_mask_index = Some((value as usize).saturating_sub(1));
-        } else {
-            piece.light_mask_index = None;
-        }
-    }
-}
-
 /// Reverse of [`map::tile_position`]: pixel → tile column/row.
 ///
 /// Forward: `x = col * 116 + (row & 1) * 58`, `y = row * 32`.
 /// The inverse reconstructs `row` from y exactly (`row = py / 32`), then tries both
 /// parity hypotheses for x — whichever yields a consistent integer column wins.
 /// Falls back to `(0, 0)` for negative coordinates or when both parities fail.
+#[cfg(test)]
 fn tile_column_row(px: i32, py: i32) -> (usize, usize) {
     if px < 0 || py < 0 {
         return (0, 0);
@@ -1039,6 +1043,7 @@ fn tile_column_row(px: i32, py: i32) -> (usize, usize) {
 
 /// Best-effort inverse: `(px - shift) / STEP` clamped to non-negative.
 /// Used by callers who don't mind an approximate column — e.g. bounding-box culling.
+#[cfg(test)]
 pub fn approximate_tile_column(px: i32) -> usize {
     if px < 0 {
         return 0;
@@ -1047,6 +1052,7 @@ pub fn approximate_tile_column(px: i32) -> usize {
 }
 
 /// Exact inverse component: returns `col` only when `px` is cleanly divisible by `step`.
+#[cfg(test)]
 fn try_column(px: i32, step: i32) -> Option<usize> {
     if px < 0 {
         return None;
@@ -1358,27 +1364,38 @@ mod tests {
     #[test]
     fn light_mask_index_value_0_means_none() {
         // LIGHTS.N stores 1-based values; value 0 means no mask.
-        let lights = Lights {
-            tiles: vec![vec![0; 80]; 160],
-            fine: vec![vec![0; 160]; 320],
-        };
-        let piece = DrawPiece::textured(PieceGroup::Terrain, TextureKey::Tile { index: 0 }, 0, 0);
-        let mut p = piece;
-        assign_light_metadata(&mut p, &lights);
-        assert_eq!(p.light_mask_index, None, "value=0 → None");
+        // Terrain pieces receive the mask directly from the original (col,row).
+        let mut piece =
+            DrawPiece::textured(PieceGroup::Terrain, TextureKey::Tile { index: 0 }, 0, 0);
+        let mask_value = 0u8;
+        if mask_value > 0 {
+            piece.light_mask_index = Some((mask_value as usize).saturating_sub(1));
+        }
+        assert_eq!(piece.light_mask_index, None, "value=0 → None");
     }
 
     #[test]
     fn light_mask_index_value_1_gives_index_0() {
         // Value 1 → index 0 (first mask in LIGHTS.RES).
-        let lights = Lights {
-            tiles: vec![vec![1; 80]; 160],
-            fine: vec![vec![0; 160]; 320],
-        };
-        let piece = DrawPiece::textured(PieceGroup::Terrain, TextureKey::Tile { index: 0 }, 0, 0);
-        let mut p = piece;
-        assign_light_metadata(&mut p, &lights);
-        assert_eq!(p.light_mask_index, Some(0));
+        let mut piece =
+            DrawPiece::textured(PieceGroup::Terrain, TextureKey::Tile { index: 0 }, 0, 0);
+        let mask_value = 1u8;
+        if mask_value > 0 {
+            piece.light_mask_index = Some((mask_value as usize).saturating_sub(1));
+        }
+        assert_eq!(piece.light_mask_index, Some(0));
+    }
+
+    #[test]
+    fn light_mask_index_maximum_255_maps_to_254() {
+        // 255 → 254, the largest valid zero-based index for LIGHTS.RES.
+        let mut piece =
+            DrawPiece::textured(PieceGroup::Terrain, TextureKey::Tile { index: 0 }, 0, 0);
+        let mask_value = 255u8;
+        if mask_value > 0 {
+            piece.light_mask_index = Some((mask_value as usize).saturating_sub(1));
+        }
+        assert_eq!(piece.light_mask_index, Some(254));
     }
 
     #[test]

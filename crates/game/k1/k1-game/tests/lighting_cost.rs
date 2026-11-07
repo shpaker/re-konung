@@ -53,14 +53,14 @@ fn the_lighting_model_costs_are_recorded() {
     // Per-channel composition with tile-light: the shader-equivalent function
     // that individual surface pixels call.
     measure(
-        "apply_channel (base 0.5, blend -0.7, light 0.1)",
+        "apply_channel (base 0.5, blend -0.7, lightning 0.1, light_color 0.2)",
         0.2,
         |_tick| {
-            black_box(apply_channel(0.5, -0.7, 0.1, false));
+            black_box(apply_channel(0.5, -0.7, 0.1, 0.2, false));
         },
     );
     measure("apply_channel blue (same args)", 0.2, |_tick| {
-        black_box(apply_channel(0.5, -0.7, 0.1, true));
+        black_box(apply_channel(0.5, -0.7, 0.1, 0.2, true));
     });
 
     // Night palette selection: called once per cycle transition.
@@ -78,9 +78,34 @@ fn the_lighting_model_costs_are_recorded() {
     measure("full pipeline (params + 3-channel apply)", 0.5, |tick| {
         let lp = params(tick, 42);
         let base_r = 0.5f32;
-        let r = apply_channel(base_r, lp.ambient[0], lp.ground_light[0], false);
-        let g = apply_channel(base_r, lp.ambient[1], lp.ground_light[1], false);
-        let b = apply_channel(base_r, lp.ambient[2], lp.ground_light[2], true);
+        // ground_light is half the draw light_color; for measurement we pass
+        // the same doubled value as light_color.
+        let light_color = [
+            lp.ground_light[0] * 2.0,
+            lp.ground_light[1] * 2.0,
+            lp.ground_light[2] * 2.0,
+        ];
+        let r = apply_channel(
+            base_r,
+            lp.ambient[0],
+            lp.ground_light[0],
+            light_color[0],
+            false,
+        );
+        let g = apply_channel(
+            base_r,
+            lp.ambient[1],
+            lp.ground_light[1],
+            light_color[1],
+            false,
+        );
+        let b = apply_channel(
+            base_r,
+            lp.ambient[2],
+            lp.ground_light[2],
+            light_color[2],
+            true,
+        );
         black_box((r, g, b));
     });
 }

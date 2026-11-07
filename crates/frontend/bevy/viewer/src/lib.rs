@@ -1498,6 +1498,7 @@ mod tests {
             depth_bottom: None,
             light_mask_index: None,
             self_lit: false,
+            fine_light_value: 0,
         };
         let scene = kn_game::Scene {
             creature_pieces: Vec::new(),

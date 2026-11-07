@@ -78,6 +78,9 @@ pub struct Piece {
     pub light_mask_index: Option<usize>,
     /// Whether this piece carries two or more flames (self-lit → skip ambient fade).
     pub self_lit: bool,
+    /// Fine-grid light value from LIGHTS.N at the creature's cell; 0 = dark patch.
+    /// Used by the lighting plugin to decide dynamic fade per tick.
+    pub fine_light_value: u8,
 }
 
 impl Piece {
@@ -762,6 +765,7 @@ fn piece(from: k1_game::scene::DrawPiece) -> Piece {
         depth_bottom: from.depth_bottom,
         light_mask_index: from.light_mask_index,
         self_lit: from.self_lit,
+        fine_light_value: from.fine_light_value,
     }
 }
 
@@ -1044,6 +1048,7 @@ mod tests {
             depth_bottom: None,
             light_mask_index: None,
             self_lit: false,
+            fine_light_value: 0,
         }
     }
 
@@ -1181,6 +1186,7 @@ mod tests {
                 depth_bottom: None,
                 light_mask_index: None,
                 self_lit: false,
+                fine_light_value: 0,
             }],
         };
         assert_eq!(scene.texture_ids(), [TextureId(gear), TextureId(body)]);

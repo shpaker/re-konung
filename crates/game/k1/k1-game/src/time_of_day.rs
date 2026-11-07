@@ -176,9 +176,16 @@ pub fn ambient_value_with(cycle_tick: u64, night: NightPalette) -> (f32, f32, f3
             (-u, -50.0 - u / 3.0, -70.0)
         }
         7 => (-60.0, -70.0, -70.0),
-        // Window 9/10: the night palette. Index 8 is all-ramp. The plateau
-        // differs by palette; green also has a down-ramp on its exit (index 10).
-        8 if t(8) < 41.0 => (-60.0, -70.0 + half(t(8)), -70.0),
+        // Window 9/10: the night palette. Index 8 is all-ramp for Green only;
+        // Deep stays flat throughout. The plateau differs by palette; green also
+        // has a down-ramp on its exit (index 10).
+        8 if t(8) < 41.0 => {
+            if matches!(night, NightPalette::Green) {
+                (-60.0, -70.0 + half(t(8)), -70.0)
+            } else {
+                (-60.0, -70.0, -70.0)
+            }
+        }
         8 | 9 => {
             if matches!(night, NightPalette::Green) {
                 (-60.0, -50.0, -70.0)
@@ -482,26 +489,64 @@ mod tests {
         }
     }
 
-    /// Window 9 is thirty ticks long and its ramp condition is `t <= 40`, so
-    /// the whole window is the ramp: it leaves the previous plateau rising and
-    /// the window ends mid-climb — there is no run of ticks at a settled
-    /// triple. The flat `(-60, -70, -70)` belongs to window 10, not here, even
-    /// though the ramp's first two ticks carry the same value on their way out
-    /// of window 8.
+    /// Window 9 (index 8) is thirty ticks long. For Green it is all ramp;
+    /// for Deep it stays flat at `(-60, -70, -70)` because the ramp only lifts
+    /// the green channel toward `-50`.
     #[test]
-    fn window_9_is_all_ramp_and_reaches_no_plateau() {
+    fn window_9_is_flat_for_deep_and_ramp_for_green() {
+        // Deep: flat throughout.
         for tick in 11880..11910 {
-            let t = (tick - 11880) as f32;
             assert_eq!(window_index(tick), 8, "at {tick}");
             assert_eq!(
-                ambient_value(tick),
-                (-60.0, -70.0 + half(t), -70.0),
-                "at {tick}: still on the ramp"
+                ambient_value_with(tick, NightPalette::Deep),
+                (-60.0, -70.0, -70.0),
+                "at {tick}: Deep must stay flat"
             );
         }
-        // The climb peaks at the window's last tick fourteen units above the
-        // triple it left with, and turns back down there — it settles nowhere.
-        assert_eq!(ambient_value(11909), (-60.0, -56.0, -70.0));
+        // Green: ramp from -70 to -50.
+        for tick in 11880..11910 {
+            let t = (tick - 11880) as f32;
+            assert_eq!(
+                ambient_value_with(tick, NightPalette::Green),
+                (-60.0, -70.0 + half(t), -70.0),
+                "at {tick}: Green must ramp"
+            );
+        }
+        assert_eq!(
+            ambient_value_with(11909, NightPalette::Green),
+            (-60.0, -56.0, -70.0)
+        );
+    }
+
+    /// Regression: the window-8 ramp must not affect Deep. Boundary ticks
+    /// checked with concrete expected values for both palettes.
+    #[test]
+    fn window_8_regression_deep_vs_green() {
+        // Deep stays flat at every tick in the window.
+        for tick in [11880, 11890, 11909, 11910] {
+            assert_eq!(
+                ambient_value_with(tick, NightPalette::Deep),
+                (-60.0, -70.0, -70.0),
+                "Deep at {tick}"
+            );
+        }
+        // Green ramps inside the window, then plateaus.
+        assert_eq!(
+            ambient_value_with(11880, NightPalette::Green),
+            (-60.0, -70.0, -70.0)
+        );
+        assert_eq!(
+            ambient_value_with(11890, NightPalette::Green),
+            (-60.0, -65.0, -70.0)
+        );
+        assert_eq!(
+            ambient_value_with(11909, NightPalette::Green),
+            (-60.0, -56.0, -70.0)
+        );
+        assert_eq!(
+            ambient_value_with(11910, NightPalette::Green),
+            (-60.0, -50.0, -70.0)
+        );
     }
 
     #[test]
