@@ -45,8 +45,8 @@ jobs:
   # Smoke-build of dev-runtime profile on Windows: validates the new profile,
   # reduced bevy features and .cargo/config.toml (rust-lld). Static linking
   # only — dynamic_linking builds bevy_dylib.dll (full recompile of every Bevy
-  # crate as cdylib, ~10× slower) and needs GPU window resolution that CI
-  # cannot provide reliably.
+  # crate as cdylib, ~10× slower) and launches a window requiring GPU context
+  # that headless CI cannot provide.
   build-windows:
     runs-on: windows-latest
     steps:
