@@ -41,3 +41,15 @@ jobs:
       - run: cargo fmt --manifest-path crates/Cargo.toml --all --check
       - run: cargo clippy --manifest-path crates/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path crates/Cargo.toml
+
+  # Smoke-build of dev-runtime profile on Windows: validates the new profile,
+  # reduced bevy features and .cargo/config.toml (rust-lld). Static linking
+  # only — dynamic_linking builds bevy_dylib.dll (full recompile of every Bevy
+  # crate as cdylib, ~10× slower) and needs GPU window resolution that CI
+  # cannot provide reliably.
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Smoke-build dev-runtime (static)
+        run: cargo build --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-viewer -p kn-player

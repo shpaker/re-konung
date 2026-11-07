@@ -929,9 +929,10 @@ Three levers, each measured:
   copied next to it. Own code must stay at opt-level ≤ 1 — true for `dev-runtime`. The
   feature is opt-in per recipe: drop `--features …/dynamic` to link statically.
 
-`just check-maps` stays on `release`: it is headless parsing, CPU-bound in own code, and an
-order of magnitude slower in `dev-runtime` (measured 77 s for all 50 RUS maps in dev-runtime;
-the release figure is the ~5 s of «Запуск» above).
+`just check-maps` intentionally remains on `release`: it is headless parsing, fully CPU-bound
+in own code (no Bevy rendering), and runs an order of magnitude slower in `dev-runtime`
+(measured 77 s for all 50 RUS maps; ~5 s in release). This exception is the only place where
+the release profile is still needed locally — every viewer/player recipe switched to dev-runtime.
 
 Bevy features are declared once in `[workspace.dependencies]` with `default-features = false`
 and only what both apps use: 2D sprites, Feathers UI, text with the embedded default font,
