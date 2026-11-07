@@ -1496,6 +1496,8 @@ mod tests {
             group,
             creature_id: None,
             depth_bottom: None,
+            light_mask_index: None,
+            self_lit: false,
         };
         let scene = kn_game::Scene {
             creature_pieces: Vec::new(),

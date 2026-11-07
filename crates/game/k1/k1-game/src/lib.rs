@@ -7,6 +7,7 @@
 
 pub mod creature_anim;
 pub mod creatures;
+pub mod lighting;
 pub mod placement;
 pub mod resources;
 pub mod rules;

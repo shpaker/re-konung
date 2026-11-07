@@ -74,6 +74,10 @@ pub struct Piece {
     pub group: PieceGroup,
     pub creature_id: Option<usize>,
     pub depth_bottom: Option<i32>,
+    /// Index into LIGHTS.N tiles (1-based value minus 1); None = no tile light.
+    pub light_mask_index: Option<usize>,
+    /// Whether this piece carries two or more flames (self-lit → skip ambient fade).
+    pub self_lit: bool,
 }
 
 impl Piece {
@@ -756,6 +760,8 @@ fn piece(from: k1_game::scene::DrawPiece) -> Piece {
         group: from.group,
         creature_id: from.creature_id,
         depth_bottom: from.depth_bottom,
+        light_mask_index: from.light_mask_index,
+        self_lit: from.self_lit,
     }
 }
 
@@ -1036,6 +1042,8 @@ mod tests {
             group: PieceGroup::Terrain,
             creature_id: None,
             depth_bottom: None,
+            light_mask_index: None,
+            self_lit: false,
         }
     }
 
@@ -1171,6 +1179,8 @@ mod tests {
                 group: PieceGroup::Characters,
                 creature_id: None,
                 depth_bottom: None,
+                light_mask_index: None,
+                self_lit: false,
             }],
         };
         assert_eq!(scene.texture_ids(), [TextureId(gear), TextureId(body)]);
