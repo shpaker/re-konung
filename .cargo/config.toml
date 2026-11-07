@@ -1,0 +1,6 @@
+# LLD via the bundled rust-lld (rustc >= 1.70, no external tools): fast relink of
+# dev-runtime and test binaries on Windows. Applies to every local Windows build.
+# Remove this file to fall back to MSVC link.exe.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+rustflags = ["-C", "linker-flavor=lld-link"]

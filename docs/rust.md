@@ -893,6 +893,63 @@ sets a creature's world position. `CreaturePiece` and `update_shadow_depth` are 
 
 Число кусков в панель собирается линейным обходом спрайтов, а не суммой по девяти узлам групп: обход дешевле изменения видимости, который его окружает (0.5 мкс против 150 мкс на переключение), и только он не считает видимыми спрайты, скрытые кадром анимации без картинки.
 
+## Build profiles
+
+Three profiles (`crates/Cargo.toml`) with separate jobs; the local development loop never builds `release`.
+
+| Profile | Runs | Own code | Dependencies |
+|---|---|---|---|
+| `dev` | `just cargo-test`, `just cargo-lint`, prek hooks (pre-commit clippy, pre-push) | opt-level 0, full debug info | opt-level 0 |
+| `dev-runtime` | `just viewer`, `just game` | opt-level 1, `debug = "line-tables-only"` | opt-level 3, build scripts and proc macros too (`build-override`) |
+| `release` | `just viewer-release`, `just game-release`, `just check-maps`, manual benchmarks, release artifacts | opt-level 3 | opt-level 3 |
+
+`dev-runtime` exists because Bevy is only usable at dependency opt-level 3, while the edit-rebuild loop needs own code to compile fast. It was measured on this machine (Windows, rustc 1.99, warm cache, one-line edit; the first measurement of a case is dropped when the first run carries a one-off cost):
+
+| Warm loop | `release` (before) | `dev-runtime` static | + rust-lld | + bevy_dylib |
+|---|---|---|---|---|
+| edit in `kn-render` → viewer binary | 7.6 s | 6.8 s | 5.9 s | **2.2 s** |
+| edit in the viewer binary → relink | 4.2 s | 7.5 s | 4.5 s | **1.0 s** |
+| no-op | 0.3 s | 0.3 s | 0.4 s | 0.4 s |
+
+Three levers, each measured:
+
+- **rust-lld** (`.cargo/config.toml`, `[target.x86_64-pc-windows-msvc] linker = "rust-lld"`,
+  `-C linker-flavor=lld-link`). Bundled with the toolchain (rustc ≥ 1.70), nothing to install;
+  CI is ubuntu-latest and the section does not touch it. Applies to every local Windows
+  build, including dev test binaries. Adding rustflags rebuilds every cached unit once
+  (~2.5 min per profile); delete the file to fall back to `link.exe`.
+- **`debug = "line-tables-only"`** for `dev-runtime`: PDB writing is the Windows link cost,
+  backtraces keep file and line. Not measured against `debug = 2` separately — with the two
+  levers below the relink is 1 s anyway.
+- **`bevy/dynamic_linking`** behind the `dynamic` feature of `kn-fe-viewer`/`kn-fe-player`,
+  passed by the `viewer`/`game` recipes. Bevy moves into `bevy_dylib.dll` (137 MB in
+  `crates/target/dev-runtime/deps`), the app binary links in ~1 s. Both windows verified on
+  Windows/Vulkan. Caveats: the exe only starts through `cargo run`/`just` (the DLL is found
+  via the `deps` directory on the PATH cargo sets); launching it directly needs the DLL
+  copied next to it. Own code must stay at opt-level ≤ 1 — true for `dev-runtime`. The
+  feature is opt-in per recipe: drop `--features …/dynamic` to link statically.
+
+`just check-maps` intentionally remains on `release`: it is headless parsing, fully CPU-bound
+in own code (no Bevy rendering), and runs an order of magnitude slower in `dev-runtime`
+(measured 77 s for all 50 RUS maps; ~5 s in release). This exception is the only place where
+the release profile is still needed locally — every viewer/player recipe switched to dev-runtime.
+
+Bevy features are declared once in `[workspace.dependencies]` with `default-features = false`
+and only what both apps use: 2D sprites, Feathers UI, text with the embedded default font,
+picking, winit. The default 3D/PBR/glTF/audio/gizmos/anti-alias/post-process chain is off
+(no code references to it — grep over `crates/`); what remains of `bevy_gizmos`, `bevy_gilrs`,
+`bevy_scene`, `bevy_animation`, `bevy_state` comes in through `bevy_feathers` implications.
+Both windows verified after the cut; the regression found during the audit was the missing
+`bevy_ui_render`/`ui_bevy_render` (the Feathers panel panics with `DrawFunctions<TransparentUi>
+must be added` without them). The feature set lives in one place now, and cargo unifies it
+across all five Bevy crates, so an addition in one crate cannot silently re-enable defaults
+for the others.
+
+sccache is optional, not part of the setup: `RUSTC_WRAPPER=sccache` (after installing it
+separately) shares compiled dependencies between the agent worktrees, each of which keeps its
+own `crates/target` (the cache is per machine, the target directories stay separate). Without
+it a fresh worktree pays one cold dependency build per profile (≈2.5–3 min each here).
+
 ## Запуск
 
 ```bash
@@ -900,6 +957,8 @@ just viewer 17                        # карта 17; без номера — �
 just viewer 4 tutorial                # карта обучения (есть только в ENG)
 just check-maps [tutorial]            # то же без окна, GPU и рендерера — используют CI и агенты
 just game                             # заготовка re-konung на стартовой карте новой игры
+just viewer-release [N] [source]      # то же окно в release: бенчмарки и диагностика
+just game-release                     # то же в release
 ```
 
 Каталог игры — `original/k1/<издание>/game` (как распаковать — [k1/editions.md](k1/editions.md)); по умолчанию RUS, переопределяется переменной:
@@ -911,14 +970,16 @@ GAME_DIR=original/k1/eng/game just viewer 17
 Рецепты — обёртка над cargo-командами, их можно расписать и вручную:
 
 ```bash
-cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- \
+cargo run --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-viewer \
+    --features kn-fe-viewer/dynamic -- \
     --game-dir original/k1/rus/game [--map N] [--source tutorial]
 
 cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- \
     --game-dir original/k1/rus/game check --map 1
 … check --all [--format json]
 
-cargo run --release --manifest-path crates/Cargo.toml -p kn-player -- \
+cargo run --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-player \
+    --features kn-fe-player/dynamic -- \
     --game-dir original/k1/rus/game
 ```
 

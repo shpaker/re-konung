@@ -1,3 +1,56 @@
 [workspace]
 members = ["game/k1/k1-data", "game/k1/k1-game", "game/kn-game", "frontend/bevy/input", "frontend/bevy/render", "frontend/bevy/ui", "frontend/bevy/viewer", "frontend/bevy/player", "apps/viewer", "apps/player"]
 resolver = "3"
+
+# One Bevy feature set for the whole workspace: everything the 2D sprite scene,
+# the Feathers panel, text, picking and the window need; the default 3D/PBR/
+# glTF/audio/gizmos/gilrs chain is off (both apps are 2D-only, no asset loading
+# except the embedded default font). Audited in docs/rust.md, "Build profiles".
+[workspace.dependencies]
+bevy = { version = "0.20", default-features = false, features = [
+    "std",
+    "multi_threaded",
+    "async_executor",
+    "default_app",
+    "default_platform",
+    "bevy_asset",
+    "bevy_log",
+    "bevy_winit",
+    "bevy_window",
+    "custom_cursor",
+    "bevy_color",
+    "bevy_image",
+    "bevy_mesh",
+    "bevy_shader",
+    "bevy_render",
+    "bevy_camera",
+    "bevy_core_pipeline",
+    "bevy_sprite",
+    "bevy_text",
+    "default_font",
+    "2d",
+    "sprite_picking",
+    "picking",
+    "ui_picking",
+    "bevy_ui",
+    "bevy_ui_render",
+    "ui",
+    "ui_api",
+    "ui_bevy_render",
+    "bevy_ui_widgets",
+] }
+
+# Local run profile for the Viewer and the Player (`just viewer`, `just game`).
+# Bevy is only usable at dependency opt-level 3, so dependencies are optimized
+# once and cached; own code stays at opt-level 1 for a fast edit-rebuild loop.
+# `dev` (tests, clippy, hooks) and `release` (CI, benchmarks) are untouched.
+[profile.dev-runtime]
+inherits = "dev"
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev-runtime.package."*"]
+opt-level = 3
+
+[profile.dev-runtime.build-override]
+opt-level = 3

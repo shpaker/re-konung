@@ -10,4 +10,7 @@ kn-game = { path = "../../../game/kn-game" }
 kn-render = { path = "../render" }
 kn-input = { path = "../input" }
 kn-ui = { path = "../ui" }
-bevy = { version = "0.20", features = ["bevy_feathers"] }
+bevy = { workspace = true, features = ["bevy_feathers"] }
+
+[features]
+dynamic = ["bevy/dynamic_linking"]

@@ -6,4 +6,4 @@ publish = false
 description = "Input mechanisms for the «Князь» frontends: keyboard direction, mouse drag, wheel accumulation. No camera types, no UI, no game rules"
 
 [dependencies]
-bevy = "0.20"
+bevy = { workspace = true }

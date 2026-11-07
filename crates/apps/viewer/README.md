@@ -19,10 +19,10 @@ re-konung-viewer --game-dir <каталог игры> check --all [--format text
 Из репозитория без установки:
 
 ```bash
-just viewer                            # окно
-just check-maps                        # то же без окна, GPU и рендерера
-cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- \
-    --game-dir original/k1/rus/game
+just viewer                            # окно (dev-runtime + dynamic, быстрая пересборка)
+just check-maps                        # то же без окна, GPU и рендерера (release)
+cargo run --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-viewer \
+    --features kn-fe-viewer/dynamic -- --game-dir original/k1/rus/game
 ```
 
 ## Устройство

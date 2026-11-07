@@ -36,15 +36,25 @@ cargo-lint:
 game_dir := env_var_or_default("GAME_DIR", "original/k1/rus/game")
 
 # Просмотрщик карт: just viewer [N] [source] — карта N (без N — первая), источник game|tutorial
+# dev-runtime + dynamic: Bevy in bevy_dylib.dll, binary link ~1 s (docs/rust.md, "Build profiles")
 viewer map="" source="game":
+    cargo run --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-viewer --features kn-fe-viewer/dynamic -- --game-dir "{{game_dir}}" --source "{{source}}" {{ if map == "" { "" } else { "--map " + map } }}
+
+# То же в release: бенчмарки и диагностика, обычный локальный цикл — just viewer
+viewer-release map="" source="game":
     cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- --game-dir "{{game_dir}}" --source "{{source}}" {{ if map == "" { "" } else { "--map " + map } }}
 
-# Headless-диагностика без окна и GPU: just check-maps [source] — все карты источника
+# Headless-диагностика без окна и GPU: just check-maps [source] — все карты источника.
+# Release: the parser is CPU-bound; checking every map in dev-runtime is ten times slower
 check-maps source="game":
     cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- --game-dir "{{game_dir}}" --source "{{source}}" check --all
 
 # Игра: just game — заготовка re-konung на стартовой карте новой игры
 game:
+    cargo run --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-player --features kn-fe-player/dynamic -- --game-dir "{{game_dir}}"
+
+# То же в release: бенчмарки и диагностика, обычный локальный цикл — just game
+game-release:
     cargo run --release --manifest-path crates/Cargo.toml -p kn-player -- --game-dir "{{game_dir}}"
 
 # Расширение Tiled «konung» — в папку расширений Tiled; запущенный Tiled подхватит его сам
