@@ -15,7 +15,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use k1_game::lighting::{apply_channel, params};
-use k1_game::time_of_day::{CYCLE_TICKS, NightPalette};
+use k1_game::time_of_day::CYCLE_TICKS;
 
 /// Whole cycles per measurement: 21600 ticks each, enough to hide the timer's
 /// own granularity and cheap in release.
@@ -45,65 +45,77 @@ fn report(label: &str, total: Duration, floor: f64) {
 #[test]
 #[ignore = "cost measurement: release only, and only when run explicitly"]
 fn the_lighting_model_costs_are_recorded() {
+    let seed = black_box(42u64);
+
     // Parameters: the entry-point called once per frame by the render layer.
     measure("params (full LightingParams)", 0.2, |tick| {
-        black_box(params(tick, 42));
+        black_box(params(black_box(tick), seed));
     });
 
     // Per-channel composition with tile-light: the shader-equivalent function
-    // that individual surface pixels call.
+    // that individual surface pixels call. Inputs are black-boxed so the
+    // compiler cannot fold constants.
     measure(
         "apply_channel (base 0.5, blend -0.7, lightning 0.1, light_color 0.2)",
         0.2,
         |_tick| {
-            black_box(apply_channel(0.5, -0.7, 0.1, 0.2, false));
+            black_box(apply_channel(
+                black_box(0.5f32),
+                black_box(-0.7f32),
+                black_box(0.1f32),
+                black_box(0.2f32),
+                black_box(false),
+            ));
         },
     );
     measure("apply_channel blue (same args)", 0.2, |_tick| {
-        black_box(apply_channel(0.5, -0.7, 0.1, 0.2, true));
+        black_box(apply_channel(
+            black_box(0.5f32),
+            black_box(-0.7f32),
+            black_box(0.1f32),
+            black_box(0.2f32),
+            black_box(true),
+        ));
     });
 
     // Night palette selection: called once per cycle transition.
-    measure("night_palette (day index → enum)", 0.2, |_tick| {
-        let _day = _tick / CYCLE_TICKS;
-        black_box(NightPalette::Deep); // simplified: always Deep for this pass
+    // Actually invokes the mixing function; inputs are black-boxed.
+    measure("night_palette (day index, seed → enum)", 0.2, |_tick| {
+        let day = black_box(_tick / CYCLE_TICKS);
+        black_box(k1_game::lighting::night_palette(day, seed));
     });
 
     // Light color variation: re-rolled every 16 ticks.
     measure("light_color (per-tile)", 0.2, |tick| {
-        black_box(k1_game::lighting::light_color(tick, 42));
+        black_box(k1_game::lighting::light_color(black_box(tick), seed));
     });
 
     // Combined full pipeline: params + channel application.
+    // lightning comes from the tile mask (ground_light), light_color from
+    // the draw pass colour — they are independent in the shader.
     measure("full pipeline (params + 3-channel apply)", 0.5, |tick| {
-        let lp = params(tick, 42);
-        let base_r = 0.5f32;
-        // ground_light is half the draw light_color; for measurement we pass
-        // the same doubled value as light_color.
-        let light_color = [
-            lp.ground_light[0] * 2.0,
-            lp.ground_light[1] * 2.0,
-            lp.ground_light[2] * 2.0,
-        ];
+        let lp = params(black_box(tick), seed);
+        let base_r = black_box(0.5f32);
+        let draw_color = k1_game::lighting::light_color(tick, seed);
         let r = apply_channel(
             base_r,
             lp.ambient[0],
             lp.ground_light[0],
-            light_color[0],
+            draw_color[0],
             false,
         );
         let g = apply_channel(
             base_r,
             lp.ambient[1],
             lp.ground_light[1],
-            light_color[1],
+            draw_color[1],
             false,
         );
         let b = apply_channel(
             base_r,
             lp.ambient[2],
             lp.ground_light[2],
-            light_color[2],
+            draw_color[2],
             true,
         );
         black_box((r, g, b));
