@@ -66,6 +66,7 @@ pub fn viewer_config(cli: &Cli) -> Result<ViewerConfig, ViewerError> {
         selected: selected.unwrap_or(0),
         lighting_tick: cli.light_tick,
         screenshot: cli.screenshot.clone(),
+        benchmark: cli.benchmark,
     })
 }
 
@@ -401,6 +402,7 @@ mod tests {
             source: crate::cli::SourceArg::Game,
             light_tick: None,
             screenshot: None,
+            benchmark: None,
             command: None,
         };
         assert!(matches!(

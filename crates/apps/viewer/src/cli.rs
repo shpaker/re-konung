@@ -30,6 +30,16 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub screenshot: Option<PathBuf>,
 
+    /// Run N measured frames after the warm-up, print one `BENCH …` line to
+    /// stdout and exit; a benchmark run never captures a screenshot
+    #[arg(
+        long,
+        global = true,
+        value_parser = clap::value_parser!(u32).range(1..),
+        conflicts_with = "screenshot"
+    )]
+    pub benchmark: Option<u32>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -212,6 +222,31 @@ mod tests {
                 assert_eq!(format, Format::Json);
                 assert!(all);
             }
+            other => panic!("expected check, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn benchmark_flag_parses_and_stays_separate_from_capture() {
+        let parsed = cli(&["--game-dir", "g", "--map", "17", "--benchmark", "600"]);
+        assert_eq!(parsed.benchmark, Some(600));
+        // A benchmark run must not capture: the pair is a CLI error up front
+        let both = Cli::try_parse_from([
+            "re-konung-viewer",
+            "--game-dir",
+            "g",
+            "--benchmark",
+            "600",
+            "--screenshot",
+            "out/x.png",
+        ]);
+        assert!(both.is_err(), "--benchmark conflicts with --screenshot");
+        // Zero frames measure nothing: rejected at the CLI, not at runtime
+        let zero = Cli::try_parse_from(["re-konung-viewer", "--game-dir", "g", "--benchmark", "0"]);
+        assert!(zero.is_err(), "--benchmark 0 is not a run");
+        // The subcommands stay reachable with the flag present
+        match cli(&["--game-dir", "g", "--benchmark", "10", "check", "--all"]).command {
+            Some(Command::Check { all, .. }) => assert!(all),
             other => panic!("expected check, got {other:?}"),
         }
     }

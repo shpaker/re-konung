@@ -539,6 +539,103 @@ fn capture(
     *frames += 1;
 }
 
+/// Benchmark request from `--benchmark N`: after the same settle window the
+/// screenshot uses, collect N per-frame times and print the `BENCH …` line.
+/// A benchmark run never captures — the CLI rejects `--benchmark` together
+/// with `--screenshot` up front.
+#[derive(Resource)]
+struct BenchmarkRequest {
+    frames: u32,
+}
+
+/// Benchmark phases — settle the pipelines and the camera, measure, exit.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum BenchmarkPhase {
+    #[default]
+    Settle,
+    Measure,
+    Done,
+}
+
+/// Drives `--benchmark N` — reuses the screenshot path's settle window, then
+/// samples the frame time for N frames and prints one machine-readable line:
+/// `BENCH map=17 frames=600 avg_ms=.. p95_ms=.. p99_ms=.. sprites=..
+/// light_materials=..`, followed by `AppExit::Success`. No screenshot is
+/// taken.
+///
+/// The samples are read from the `DiagnosticsStore` value
+/// [`FrameTimeDiagnosticsPlugin`] writes each Update — the same wall-clock
+/// frame time the diagnostics panel shows, not a second measurement. Where
+/// the scheduler places this system against the plugin's own system decides
+/// whether a sample is the current frame's delta or the previous frame's;
+/// either way it is N consecutive deltas of settled frames. The percentiles
+/// are nearest-rank over the N samples.
+#[allow(clippy::too_many_arguments)]
+fn benchmark(
+    request: Res<BenchmarkRequest>,
+    stats: Res<Stats>,
+    viewer: Res<Viewer>,
+    pool: Option<Res<LightingMaterials>>,
+    diagnostics: Res<DiagnosticsStore>,
+    pieces: Query<(), With<ScenePiece>>,
+    mut commands: Commands,
+    mut phase: Local<BenchmarkPhase>,
+    mut frames: Local<u32>,
+    mut samples: Local<Vec<f64>>,
+) {
+    match *phase {
+        BenchmarkPhase::Settle => {
+            if *frames >= SETTLE_FRAMES {
+                samples.clear();
+                *frames = 0;
+                *phase = BenchmarkPhase::Measure;
+            }
+        }
+        BenchmarkPhase::Measure => {
+            if let Some(value) = diagnostics
+                .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
+                .and_then(|frame_time| frame_time.value())
+            {
+                samples.push(value);
+            }
+            if samples.len() >= request.frames as usize {
+                let mut sorted = samples.clone();
+                sorted.sort_by(f64::total_cmp);
+                // Nearest-rank: the smallest value covering the fraction of
+                // the sorted samples.
+                let percentile = |fraction: f64| {
+                    let rank = ((sorted.len() as f64) * fraction).ceil() as usize;
+                    sorted[rank.clamp(1, sorted.len()) - 1]
+                };
+                let average = samples.iter().sum::<f64>() / samples.len() as f64;
+                let map = stats
+                    .map
+                    .or_else(|| viewer.maps.get(viewer.selected).copied())
+                    .map_or_else(
+                        || "?".to_owned(),
+                        |map| match map.source {
+                            MapSource::Game => map.number.to_string(),
+                            MapSource::Tutorial => format!("t{}", map.number),
+                        },
+                    );
+                println!(
+                    "BENCH map={map} frames={} avg_ms={average:.2} p95_ms={:.2} p99_ms={:.2} \
+                     sprites={} light_materials={}",
+                    samples.len(),
+                    percentile(0.95),
+                    percentile(0.99),
+                    pieces.iter().count(),
+                    pool.as_ref().map_or(0, |pool| pool.len()),
+                );
+                commands.write_message(AppExit::Success);
+                *phase = BenchmarkPhase::Done;
+            }
+        }
+        BenchmarkPhase::Done => {}
+    }
+    *frames += 1;
+}
+
 /// Per-creature id labels the viewer draws above the creatures. The creature
 /// nodes themselves belong to the shared subsystem: `kn_render` spawns and
 /// animates them, the viewer only puts its diagnostics on top (issue #70).
@@ -605,6 +702,9 @@ pub struct ViewerConfig {
     pub lighting_tick: Option<u64>,
     /// Capture a screenshot to this path and exit.
     pub screenshot: Option<PathBuf>,
+    /// Run this many measured frames after the settle window, print one
+    /// `BENCH …` line to stdout and exit (`--benchmark`).
+    pub benchmark: Option<u32>,
 }
 
 /// The viewer window: runs until the user closes it.
@@ -619,6 +719,7 @@ pub fn run_viewer(config: ViewerConfig) {
             terrain_pieces: 0,
         })
         .unwrap_or_default();
+    let benchmark_request = config.benchmark.map(|frames| BenchmarkRequest { frames });
     // LIGHTS.RES is read before the game moves into its resource
     let setup = LightingSetup {
         tick: config.lighting_tick,
@@ -715,14 +816,20 @@ pub fn run_viewer(config: ViewerConfig) {
     .add_systems(Startup, setup_lighting)
     .add_systems(
         Update,
-        capture
-            .run_if(resource_exists::<CaptureRequest>)
-            .run_if(resource_exists::<LightingMaterials>)
-            .after(CameraApply),
+        (
+            capture
+                .run_if(resource_exists::<CaptureRequest>)
+                .run_if(resource_exists::<LightingMaterials>)
+                .after(CameraApply),
+            benchmark.run_if(resource_exists::<BenchmarkRequest>),
+        ),
     );
     app.insert_resource(setup);
     if capture_request.path.is_some() {
         app.insert_resource(capture_request);
+    }
+    if let Some(request) = benchmark_request {
+        app.insert_resource(request);
     }
     app.run();
 }

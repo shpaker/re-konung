@@ -49,6 +49,7 @@ fn cli(game_dir: PathBuf) -> Cli {
         source: SourceArg::Game,
         light_tick: None,
         screenshot: None,
+        benchmark: None,
         command: None,
     }
 }
