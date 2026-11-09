@@ -15,7 +15,7 @@ use kn_game::{Game, Piece, PieceGroup, Scene, TextureId};
 
 use crate::animation::{Animator, Frame, Sequence};
 use crate::camera::{PendingFrame, frame_scene};
-use crate::lighting::TerrainLightMaterials;
+use crate::lighting::{LightingMaterials, SurfaceLighting, piece_surface_lighting};
 use crate::textures::{TextureCache, TextureEntry};
 
 /// Шаг z между соседними кусками сцены.
@@ -149,14 +149,15 @@ pub fn piece_sequence(
 /// соседство в дереве: куски одной группы идут вперемежку с чужими (персонажи с
 /// объектами), и каждый остаётся на своём месте.
 ///
-/// `lighting` — пул материалов ночной подсветки ([`TerrainLightMaterials`]):
-/// куску земли выдаётся материал по его маске из LIGHTS.N. `None` — обычный
-/// спрайтовый материал, как до подсветки.
+/// `lighting` — пул материалов подсветки ([`LightingMaterials`]): кусок получает
+/// материал по правилам поверхностей ([`surface_lighting`]) — земля по маске из
+/// LIGHTS.N, декорации и объекты без маски, огни и тени без материала. `None` —
+/// обычный спрайтовый материал, как до подсветки.
 pub fn spawn_scene(
     commands: &mut Commands,
     scene: &Scene,
     cache: &TextureCache,
-    lighting: Option<&TerrainLightMaterials>,
+    lighting: Option<&LightingMaterials>,
 ) -> Entity {
     let root = commands
         .spawn((MapRoot, Transform::IDENTITY, Visibility::Visible))
@@ -192,10 +193,20 @@ pub fn spawn_scene(
                 piece_visibility(base),
                 piece_transform(piece.x, piece.y, piece.w, piece.h, size, order),
             ));
-            if let Some(materials) = lighting
-                && group == PieceGroup::Terrain
-            {
-                entity.insert(SpriteMaterial(materials.handle(piece.light_mask_index)));
+            if let Some(materials) = lighting {
+                match piece_surface_lighting(piece) {
+                    SurfaceLighting::TerrainMasked(index) => {
+                        entity.insert(SpriteMaterial(materials.terrain(Some(index))));
+                    }
+                    SurfaceLighting::TerrainPlain => {
+                        entity.insert(SpriteMaterial(materials.terrain(None)));
+                    }
+                    SurfaceLighting::Ambient => {
+                        entity.insert(SpriteMaterial(materials.ambient()));
+                    }
+                    // Flames, self-lit pieces, shadows and overlays draw unlit.
+                    SurfaceLighting::None => {}
+                }
             }
             if let (Some(sequence), Some(animation)) = (sequence, piece.animation.as_ref()) {
                 entity.insert(Animator::with_base(
@@ -351,7 +362,7 @@ pub struct SceneLoad {
 ///
 /// Does NOT remove the previous scene — the caller keeps the old root and
 /// clears it only after this returns `Ok` (the current `rebuild_scene` semantics).
-/// `lighting` — пул материалов подсветки земли; `None` — без ночной подсветки.
+/// `lighting` — пул материалов подсветки; `None` — без подсветки.
 #[allow(clippy::too_many_arguments)]
 pub fn load_scene(
     game: &Game,
@@ -359,7 +370,7 @@ pub fn load_scene(
     shown: impl Fn(&Piece) -> bool,
     cache: &mut TextureCache,
     images: &mut Assets<Image>,
-    lighting: Option<&TerrainLightMaterials>,
+    lighting: Option<&LightingMaterials>,
     commands: &mut Commands,
     pending: &mut PendingFrame,
 ) -> kn_game::Result<SceneLoad> {

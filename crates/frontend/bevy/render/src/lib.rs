@@ -34,7 +34,9 @@ pub use creatures::{
     despawn_creature, spawn_creature, update_creature_depth,
 };
 pub use lighting::{
-    TerrainLightMaterial, TerrainLightMaterialPlugin, TerrainLightMaterials, light_mask_image,
+    FineLightGrid, KonungLightMaterial, KonungLightingPlugin, LightingMaterials, LightingState,
+    SurfaceLighting, light_mask_image, piece_surface_lighting, surface_lighting,
+    update_creature_lighting, update_lighting_uniforms,
 };
 pub use scene::{
     MapRoot, SceneGroup, SceneLoad, ScenePiece, Z_STEP, clear_scene, load_scene, piece_center,

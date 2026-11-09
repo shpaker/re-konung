@@ -6,7 +6,7 @@
 //! app crate.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -31,6 +31,8 @@ use bevy::{
     ui_widgets::{Activate, ValueChange},
 };
 use k1_data::lights_res;
+use k1_data::map;
+use k1_data::repo::{GAME_FILES, GameDir, TUTORIAL_FILES};
 use k1_game::lighting;
 use kn_game::simulation::Simulation;
 use kn_game::{
@@ -41,10 +43,10 @@ use kn_render::{
     AnimPlugin, AnimSet, Animator, CameraApply, CameraBounds, CameraInput, CameraState, Clock,
     CreatureAnim, CreatureAnimReport, CreatureAnimationPlugin, CreatureMotion, CreatureNode,
     CreatureNodesVisible, CreatureRoot, CreatureSet, CreatureShadow, CreatureSim, CreatureSprite,
-    GameResource, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup,
-    ScenePiece, Sequence, TerrainLightMaterial, TerrainLightMaterialPlugin, TerrainLightMaterials,
-    TextureCache, clear_scene, load_scene, ortho_scale, piece_center, piece_size,
-    reset_creature_animations, reset_creature_positions,
+    FineLightGrid, GameResource, KonungLightMaterial, KonungLightingPlugin, LightingMaterials,
+    LightingState, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup,
+    ScenePiece, Sequence, TextureCache, clear_scene, load_scene, ortho_scale, piece_center,
+    piece_size, reset_creature_animations, reset_creature_positions,
 };
 use kn_ui::{dark_theme, pointer_over_ui, sync_checked};
 
@@ -169,118 +171,151 @@ pub struct Stats {
 /// exact spawn of the first build (same seed, same map → same initial state).
 const SIM_SEED: u64 = 42;
 
-/// Spike: the CLI-driven night lighting and its screenshot capture. The
-/// lighting plugin and its time contract replace all of this — until then the
-/// flags below keep the spike runnable and reproducible.
-///
-/// Inputs the [`setup_lighting`] startup system turns into a
-/// [`TerrainLightMaterials`] pool: the tick picks the uniforms, the masks are
-/// the raw LIGHTS.RES tile brightness bytes with their pixel size.
+/// The lighting inputs of the opened game: the LIGHTS.RES tile masks the pool
+/// is built from at startup, and optionally the tick the lighting is pinned to
+/// (`--light-tick`) instead of following the simulation tick each frame.
 #[derive(Resource)]
-struct SpikeLighting {
-    tick: u64,
-    masks: Option<Vec<(Vec<u8>, u32, u32)>>,
+struct LightingSetup {
+    tick: Option<u64>,
+    masks: Vec<(Vec<u8>, u32, u32)>,
 }
 
-/// Spike: where the capture camera aims — the first lit terrain piece of the
-/// current map, in world coordinates.
-#[derive(Resource, Default)]
-struct SpikeTarget(Option<Vec2>);
-
-/// Spike: capture paths and counters for the exit report.
-#[derive(Resource, Default)]
-struct SpikeCapture {
-    material_path: Option<PathBuf>,
-    overlay_path: Option<PathBuf>,
-    terrain_pieces: usize,
+/// The LIGHTS.RES tile masks of the opened game: raw brightness bytes with
+/// their pixel size, ready for [`LightingMaterials::new`]. A game without a
+/// readable LIGHTS.RES gets an empty pool — the scene still lights, the tiles
+/// just carry no tile mask.
+fn lights_res_masks(game: &Game) -> Vec<(Vec<u8>, u32, u32)> {
+    let Some(path) = k1_game::resources::find_named(game.root(), "lights.res") else {
+        return Vec::new();
+    };
+    let Ok(res) = lights_res::parse(&std::fs::read(path).unwrap_or_default()) else {
+        return Vec::new();
+    };
+    res.tiles
+        .into_iter()
+        .map(|mask| {
+            (
+                mask,
+                lights_res::TILE_MASK_WIDTH as u32,
+                lights_res::TILE_MASK_HEIGHT as u32,
+            )
+        })
+        .collect()
 }
 
-/// Spike: the LIGHTS.RES tile masks of the opened game. `None` — LIGHTS.RES
-/// did not read, the pool then holds only the no-mask material.
-fn spike_masks(game: &Game) -> Option<Vec<(Vec<u8>, u32, u32)>> {
-    let path = k1_game::resources::find_named(game.root(), "lights.res")?;
-    let res = lights_res::parse(&std::fs::read(path).ok()?).ok()?;
-    Some(
-        res.tiles
-            .into_iter()
-            .map(|mask| {
-                (
-                    mask,
-                    lights_res::TILE_MASK_WIDTH as u32,
-                    lights_res::TILE_MASK_HEIGHT as u32,
-                )
-            })
-            .collect(),
-    )
+/// The map's LIGHTS.N fine grid — the tile-light index per fine cell, what the
+/// creature lighting reads to tell a lit patch from a dark one. `None` when
+/// the map has no LIGHTS.N: every cell counts as dark, exactly as on a map
+/// without lights.
+fn map_fine_lights(game: &Game, map_ref: MapRef) -> Option<Vec<Vec<u8>>> {
+    let files = match map_ref.source {
+        MapSource::Game => GAME_FILES,
+        MapSource::Tutorial => TUTORIAL_FILES,
+    };
+    let bytes = GameDir::new(game.root())
+        .lights_bytes(map_ref.number, files)
+        .ok()??;
+    map::parse_lights(&bytes).ok().map(|lights| lights.fine)
 }
 
-/// Spike: builds the material pool from the CLI flags. The uniforms come ready
-/// from `k1_game::lighting::params` — the same numbers the original passed to
-/// its shader: the ground ambient inside the ground-light window, the ground
-/// tile-light colour.
+/// The k1 reading of `k1_game::lighting::params` into the render contract:
+/// terrain and decorations get the ground ambient only inside the ground-light
+/// window (outside it a zero blend is the shader's no-op), objects and
+/// characters the plain ambient always, plus the ground tile-light colour.
+fn lighting_state(params: lighting::LightingParams) -> LightingState {
+    LightingState {
+        terrain_blend: params.ground_ambient.map_or(Vec3::ZERO, Vec3::from),
+        ambient_blend: Vec3::from(params.ambient),
+        light_color: Vec3::from(params.ground_light),
+    }
+}
+
+/// Writes the lighting state for the simulation's current tick — or for the
+/// tick pinned by `--light-tick`, which holds a night scene up for screenshots
+/// and inspection. Writes only on change: a rewritten state re-extracts the
+/// uniforms for the GPU, and the day cycle shifts a few times a minute.
+fn update_lighting_state(
+    setup: Option<Res<LightingSetup>>,
+    sim: Res<CreatureSim>,
+    mut state: ResMut<LightingState>,
+) {
+    let tick = match setup.and_then(|setup| setup.tick) {
+        Some(tick) => tick,
+        None => {
+            let Some(ref simulation) = sim.sim else {
+                return;
+            };
+            simulation.tick_number()
+        }
+    };
+    let next = lighting_state(lighting::params(tick, SIM_SEED));
+    if *state != next {
+        *state = next;
+    }
+}
+
+/// Builds the material pool from the game's LIGHTS.RES at startup: lighting is
+/// part of the scene, not an option — the uniforms arrive every frame through
+/// [`update_lighting_state`].
 fn setup_lighting(
-    setup: Res<SpikeLighting>,
+    setup: Res<LightingSetup>,
     mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<TerrainLightMaterial>>,
+    mut materials: ResMut<Assets<KonungLightMaterial>>,
     mut commands: Commands,
 ) {
-    // spike: replaced by the time contract in the lighting plugin
-    let params = lighting::params(setup.tick, SIM_SEED);
-    let blend = params.ground_ambient.unwrap_or(params.ambient);
-    let pool = TerrainLightMaterials::new(
-        &mut images,
-        &mut materials,
-        Vec3::from(blend),
-        Vec3::from(params.ground_light),
-        setup.masks.as_deref().unwrap_or(&[]),
-    );
+    let pool = LightingMaterials::new(&mut images, &mut materials, &setup.masks);
     info!(
-        "spike: lighting tick {} · blend {:?} · light_color {:?} · {} materials",
-        setup.tick,
-        blend,
-        params.ground_light,
+        "lighting: {} materials ({} tile masks from LIGHTS.RES)",
         pool.len(),
+        setup.masks.len(),
     );
     commands.insert_resource(pool);
 }
 
-/// Spike: capture phases — settle the pipelines, save the night shot, show the
-/// lights overlay, save it, report and exit.
+/// Where the capture camera aims — the first lit terrain piece of the current
+/// map, in world coordinates.
+#[derive(Resource, Default)]
+struct CaptureTarget(Option<Vec2>);
+
+/// Capture path and counters for the exit report, set by `--screenshot`.
+#[derive(Resource, Default)]
+struct CaptureRequest {
+    path: Option<PathBuf>,
+    terrain_pieces: usize,
+}
+
+/// Capture phases — settle the pipelines, save the shot, report and exit.
 #[derive(Clone, Copy, Default, PartialEq)]
 enum CapturePhase {
     #[default]
     Settle,
-    NightShot,
-    OverlayOn,
-    OverlayShot,
+    Shot,
     Done,
 }
 
 /// How many frames the pipelines get to specialize the light material before
-/// the first screenshot.
+/// the screenshot.
 const SETTLE_FRAMES: u32 = 40;
 /// Camera zoom step while capturing: 1:1, a 114-px tile spans 114 screen px.
 const CAPTURE_ZOOM: usize = 3;
-/// Frames to wait for the overlay sprites to show after the visibility flips.
-const OVERLAY_FRAMES: u32 = 10;
 
-/// Spike: drives the capture — aims the camera at the lit tile, takes the two
-/// screenshots, logs the run's measurements and exits.
+/// Drives the `--screenshot` capture — aims the camera at the first lit tile,
+/// settles the pipelines, saves the shot, logs the run's measurements and
+/// exits. The lighting on the shot is the session's: pinned by `--light-tick`
+/// or the simulation's current tick.
 ///
 /// Runs after [`CameraApply`]: the zoom it picks must reach the projection
-/// before the shot, and the map must already be built. The lights overlay is
-/// enabled in state (its checkbox stays unchecked — the spike does not touch
-/// the widgets).
+/// before the shot, and the map must already be built.
 #[allow(clippy::too_many_arguments)]
-fn spike_capture(
+fn capture(
     mut commands: Commands,
-    capture: Res<SpikeCapture>,
-    target: Res<SpikeTarget>,
-    pool: Res<TerrainLightMaterials>,
-    mut viewer: ResMut<Viewer>,
-    mut state: ResMut<CameraState>,
+    request: Res<CaptureRequest>,
+    target: Res<CaptureTarget>,
+    pool: Res<LightingMaterials>,
+    state: Res<LightingState>,
+    mut zoom: ResMut<CameraState>,
     mut camera: Single<&mut Transform, With<MapCamera>>,
-    lit: Query<(), With<SpriteMaterial<TerrainLightMaterial>>>,
+    lit: Query<(), With<SpriteMaterial<KonungLightMaterial>>>,
     capturing: Query<(), With<Capturing>>,
     time: Res<Time>,
     mut phase: Local<CapturePhase>,
@@ -295,44 +330,27 @@ fn spike_capture(
             if let Some(center) = target.0 {
                 camera.translation = Vec3::new(center.x, center.y, 0.0);
             }
-            state.zoom = CAPTURE_ZOOM;
+            zoom.zoom = CAPTURE_ZOOM;
             if *frames >= SETTLE_FRAMES {
                 *frames = 0;
-                *phase = CapturePhase::NightShot;
-                if let Some(path) = capture.material_path.clone() {
+                *phase = CapturePhase::Shot;
+                if let Some(path) = request.path.clone() {
                     commands
                         .spawn(Screenshot::primary_window())
                         .observe(save_to_disk(path));
                 }
             }
         }
-        CapturePhase::NightShot => {
-            if capturing.is_empty() && *frames > 1 {
-                viewer.set(Overlay::Lights, true);
-                *frames = 0;
-                *phase = CapturePhase::OverlayOn;
-            }
-        }
-        CapturePhase::OverlayOn => {
-            if *frames >= OVERLAY_FRAMES {
-                *frames = 0;
-                *phase = CapturePhase::OverlayShot;
-                if let Some(path) = capture.overlay_path.clone() {
-                    commands
-                        .spawn(Screenshot::primary_window())
-                        .observe(save_to_disk(path));
-                }
-            }
-        }
-        CapturePhase::OverlayShot => {
+        CapturePhase::Shot => {
             if capturing.is_empty() && *frames > 1 {
                 let (seconds, count) = *frame_time;
                 info!(
-                    "spike: avg frame time {:.2} ms over {} frames · terrain pieces {} · \
-                     sprites with the light material {} · materials {}",
+                    "capture: avg frame time {:.2} ms over {} frames · terrain blend {:?} · \
+                     terrain pieces {} · sprites with the light material {} · materials {}",
                     seconds * 1000.0 / count.max(1) as f32,
                     count,
-                    capture.terrain_pieces,
+                    state.terrain_blend,
+                    request.terrain_pieces,
                     lit.iter().count(),
                     pool.len(),
                 );
@@ -406,11 +424,10 @@ pub struct ViewerConfig {
     pub game_dir: PathBuf,
     pub maps: Vec<MapRef>,
     pub selected: usize,
-    /// Spike: tick for the night lighting uniforms; the lighting plugin's time
-    /// contract replaces this.
+    /// Tick the lighting is pinned to (`--light-tick`); without it the lighting
+    /// follows the simulation tick every frame.
     pub lighting_tick: Option<u64>,
-    /// Spike: capture the night-material screenshot to this path, the lights
-    /// overlay shot next to it, and exit.
+    /// Capture a screenshot to this path and exit.
     pub screenshot: Option<PathBuf>,
 }
 
@@ -418,22 +435,19 @@ pub struct ViewerConfig {
 pub fn run_viewer(config: ViewerConfig) {
     let labels = map_labels(&config.maps);
     let selected = config.selected;
-    // Spike: the screenshot flag drives the capture; the overlay shot lands
-    // next to the requested path under its fixed spike name.
-    let capture = config.screenshot.as_ref().map(|path| SpikeCapture {
-        material_path: Some(path.clone()),
-        overlay_path: Some(
-            path.parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join("spike-lights-overlay.png"),
-        ),
-        terrain_pieces: 0,
-    });
-    // Spike: LIGHTS.RES is read before the game moves into its resource
-    let masks = config.lighting_tick.map(|tick| SpikeLighting {
-        tick,
-        masks: spike_masks(&config.game),
-    });
+    let capture_request = config
+        .screenshot
+        .as_ref()
+        .map(|path| CaptureRequest {
+            path: Some(path.clone()),
+            terrain_pieces: 0,
+        })
+        .unwrap_or_default();
+    // LIGHTS.RES is read before the game moves into its resource
+    let setup = LightingSetup {
+        tick: config.lighting_tick,
+        masks: lights_res_masks(&config.game),
+    };
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -456,8 +470,8 @@ pub fn run_viewer(config: ViewerConfig) {
         // Составные спрайты существ, их клипы и синхронизация кадров: та же
         // подсистема, что поднимает существ в проигрывателе (#70)
         CreatureAnimationPlugin,
-        // Ночная подсветка земли: материал с маской LIGHTS.RES (spike)
-        TerrainLightMaterialPlugin,
+        // Подсветка сцены: материалы с масками LIGHTS.RES и контракт времени
+        KonungLightingPlugin,
         FrameTimeDiagnosticsPlugin::default(),
     ))
     .insert_resource(dark_theme())
@@ -466,7 +480,7 @@ pub fn run_viewer(config: ViewerConfig) {
     .init_resource::<ActiveRoot>()
     .init_resource::<Stats>()
     .init_resource::<CreatureLabels>()
-    .init_resource::<SpikeTarget>()
+    .init_resource::<CaptureTarget>()
     .insert_resource(Rebuild { map: true })
     .insert_resource(Viewer {
         maps: config.maps.clone(),
@@ -513,27 +527,22 @@ pub fn run_viewer(config: ViewerConfig) {
             .after(AnimSet::Sprites)
             .after(CreatureSet::Nodes),
     )
-    // Spike: the lighting pool and the capture controller, only with the
-    // CLI flags set. The capture also requires the pool, so `--screenshot`
-    // without `--light-tick` just opens the viewer as usual. The controller
-    // runs after the camera write-out so the zoom it picks reaches the
-    // projection on the next frame's apply.
-    .add_systems(
-        Startup,
-        setup_lighting.run_if(resource_exists::<SpikeLighting>),
-    )
+    // The lighting pool at startup, the per-frame state after the clock and
+    // the capture controller, only with the CLI flag set. The controller runs
+    // after the camera write-out so the zoom it picks reaches the projection
+    // on the next frame's apply.
+    .add_systems(Startup, setup_lighting)
+    .add_systems(Update, update_lighting_state)
     .add_systems(
         Update,
-        spike_capture
-            .run_if(resource_exists::<SpikeCapture>)
-            .run_if(resource_exists::<TerrainLightMaterials>)
+        capture
+            .run_if(resource_exists::<CaptureRequest>)
+            .run_if(resource_exists::<LightingMaterials>)
             .after(CameraApply),
     );
-    if let Some(setup) = masks {
-        app.insert_resource(setup);
-    }
-    if let Some(capture) = capture {
-        app.insert_resource(capture);
+    app.insert_resource(setup);
+    if capture_request.path.is_some() {
+        app.insert_resource(capture_request);
     }
     app.run();
 }
@@ -774,7 +783,7 @@ fn rebuild_scene(
     game: Res<GameResource>,
     mut cache: ResMut<TextureCache>,
     mut images: ResMut<Assets<Image>>,
-    lighting: Option<Res<TerrainLightMaterials>>,
+    lighting: Option<Res<LightingMaterials>>,
     mut commands: Commands,
     mut active: ResMut<ActiveRoot>,
     mut stats: ResMut<Stats>,
@@ -782,8 +791,8 @@ fn rebuild_scene(
     mut labels: ResMut<CreatureLabels>,
     mut motion: ResMut<CreatureMotion>,
     mut visible: ResMut<CreatureNodesVisible>,
-    target: Option<ResMut<SpikeTarget>>,
-    capture: Option<ResMut<SpikeCapture>>,
+    target: Option<ResMut<CaptureTarget>>,
+    capture: Option<ResMut<CaptureRequest>>,
 ) {
     if !rebuild.map {
         return;
@@ -817,10 +826,13 @@ fn rebuild_scene(
             return;
         }
     };
-    // spike: aim the capture camera at the first lit terrain tile and count
-    // the terrain pieces for the exit report
+    // The fine grid of the map just loaded: what the creature lighting reads.
+    // Maps without LIGHTS.N insert `None` — every cell dark.
+    commands.insert_resource(FineLightGrid(map_fine_lights(&game.0, map_ref)));
+    // aim the capture camera at the first lit terrain tile and count the
+    // terrain pieces for the exit report
     if let (Some(mut capture), Some(mut target)) = (capture, target)
-        && capture.material_path.is_some()
+        && capture.path.is_some()
     {
         capture.terrain_pieces = scene
             .pieces
@@ -3434,6 +3446,257 @@ mod tests {
             judged += 1;
         }
         assert!(judged > 0, "the edition must give maps to judge");
+    }
+
+    // --- Scene lighting -------------------------------------------------------
+
+    /// The k1 mapping into the render contract: the ground window gates the
+    /// terrain blend, the plain ambient passes through always. Night at tick
+    /// 11000 sits inside the window; day at tick 900 outside it.
+    #[test]
+    fn the_lighting_state_follows_the_ground_window() {
+        let night = lighting::params(11000, SIM_SEED);
+        assert!(
+            night.ground_window,
+            "tick 11000 is inside the ground window"
+        );
+        let state = lighting_state(night);
+        assert_eq!(
+            state.terrain_blend,
+            Vec3::from(night.ground_ambient.expect("window open")),
+            "the terrain carries the ground ambient while the window is open"
+        );
+        assert_eq!(state.ambient_blend, Vec3::from(night.ambient));
+        assert_eq!(state.light_color, Vec3::from(night.ground_light));
+
+        let day = lighting::params(900, SIM_SEED);
+        assert!(!day.ground_window, "tick 900 is outside the ground window");
+        let state = lighting_state(day);
+        assert_eq!(
+            state.terrain_blend,
+            Vec3::ZERO,
+            "a closed window must leave the terrain at the shader's no-op"
+        );
+        assert_eq!(state.ambient_blend, Vec3::from(day.ambient));
+        assert_eq!(state.light_color, Vec3::from(day.ground_light));
+    }
+
+    /// The moving-creature lighting regression: a creature in a dark cell
+    /// carries the ambient material, stepping into a lit cell drops it —
+    /// the same entity, animator untouched, nothing respawned — and stepping
+    /// back out restores it.
+    ///
+    /// The lit patch is placed on a cell the creature provably walks through:
+    /// a dry run of the deterministic simulation (same seed) records its
+    /// cells, the grid lights exactly one of them, and the replayed app walks
+    /// the same route cell for cell.
+    #[test]
+    fn a_moving_creature_gains_and_loses_its_lighting_material_with_its_cell() {
+        use bevy::sprite_render::SpriteMaterial;
+        use kn_game::movement::grid::{FINE_HEIGHT, FINE_WIDTH};
+        use kn_render::KonungLightMaterial;
+        #[allow(unused_imports)]
+        use kn_render::update_creature_lighting;
+
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let scene = game.scene(map_ref, &SceneOptions::ALL).unwrap();
+
+        // The dry run: every creature's cell at every tick of the window.
+        let mut probe = game.simulation(map_ref, SIM_SEED).unwrap();
+        let mut per_tick: Vec<Vec<(usize, (u32, u32))>> = Vec::new();
+        for _ in 0..=90 {
+            per_tick.push(probe.states().iter().map(|s| (s.id, s.cell)).collect());
+            probe.tick();
+        }
+
+        // The real pipeline, exactly as the viewer window runs it.
+        let mut cache = TextureCache::default();
+        let mut images = Assets::<Image>::default();
+        let (anim, report) = build_creature_anim(
+            &game,
+            map_ref,
+            None,
+            &scene.creature_pieces,
+            &mut cache,
+            &mut images,
+        );
+        assert!(
+            report.error.is_none(),
+            "clips must build: {:?}",
+            report.error
+        );
+        let mut sim_resource = CreatureSim::default();
+        sim_resource.sim = game.simulation(map_ref, SIM_SEED).ok();
+        sim_resource.initial_pixels = sim_resource.sim.as_ref().unwrap().initial_pixels();
+        let spawns = build_creature_spawns(&scene, &cache, &anim, &sim_resource.initial_pixels);
+        assert!(!spawns.plans.is_empty(), "the map must give creatures");
+        let depth = build_depth_map(&scene, &cache);
+
+        let mut materials = Assets::<KonungLightMaterial>::default();
+        // No tile masks needed: only the plain ambient material is asserted.
+        let pool = LightingMaterials::new(&mut images, &mut materials, &[]);
+        let ambient = pool.ambient();
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::transform::TransformPlugin,
+            AnimPlugin::new(TICK_MS as f32),
+            CreatureAnimationPlugin,
+        ))
+        .insert_resource(GameResource(game))
+        .insert_resource(images)
+        .init_resource::<TextureCache>()
+        .insert_resource(sim_resource)
+        .insert_resource(CreatureDepth { map: depth })
+        .insert_resource(CreatureMotion {
+            map: Some(map_ref),
+            seed: SIM_SEED,
+            ..Default::default()
+        })
+        .insert_resource(anim)
+        .insert_resource(spawns)
+        .insert_resource(pool)
+        // The system under test, at the place the plugin runs it.
+        .add_systems(Update, update_creature_lighting.after(CreatureSet::Nodes));
+        app.world_mut()
+            .resource_mut::<Clock>()
+            .goto(PlayState::Paused);
+        app.update();
+        // Body sprite of every creature the pipeline spawned (layer 0, body).
+        let mut bodies: HashMap<usize, Entity> = HashMap::new();
+        let mut query = app.world_mut().query::<(Entity, &CreatureSprite)>();
+        for (entity, tag) in query.iter(app.world()) {
+            if !tag.is_shadow && tag.layer == 0 {
+                bodies.insert(tag.creature_id, entity);
+            }
+        }
+        let mut node_query = app.world_mut().query::<&CreatureNode>();
+        let node_count = node_query.iter(app.world()).count();
+        let mut sprite_query = app.world_mut().query::<&CreatureSprite>();
+        let sprite_count = sprite_query.iter(app.world()).count();
+        assert!(node_count > 0, "the map must give creature nodes");
+
+        // A creature with a body sprite that enters and leaves a cell within
+        // the window: on at `t`, dark before and after, not its home cell.
+        let cell_at = |id: usize, t: usize| {
+            per_tick[t]
+                .iter()
+                .find(|(other, _)| *other == id)
+                .map(|(_, cell)| *cell)
+        };
+        // A stay, not a single tick: a creature that arrives at `t` (cell
+        // changed) and departs at `leave` (cell changes again) stands on the
+        // cell for [arrive, leave), and the material must follow exactly that.
+        let mut picked = None;
+        'outer: for &id in bodies.keys() {
+            let home = cell_at(id, 0).expect("every creature has a cell");
+            for arrive in 2..per_tick.len() - 2 {
+                let on = cell_at(id, arrive).expect("in range");
+                if on == cell_at(id, arrive - 1).expect("in range") || on == home {
+                    continue;
+                }
+                for leave in arrive + 1..per_tick.len() {
+                    if cell_at(id, leave) != Some(on) {
+                        picked = Some((id, on, arrive, leave));
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        let Some((id, lit_cell, lit_tick, lit_leave)) = picked else {
+            panic!("ни одно существо не вошло и не вышло из клетки за 90 тиков");
+        };
+
+        // The whole grid dark except the cell the creature walks through.
+        let mut fine = vec![vec![0u8; FINE_WIDTH as usize]; FINE_HEIGHT as usize];
+        fine[lit_cell.1 as usize][lit_cell.0 as usize] = 7;
+        app.insert_resource(FineLightGrid(Some(fine)));
+
+        let body = bodies[&id];
+        let mut samples: Vec<(bool, bool)> = Vec::new();
+        for tick in 0..per_tick.len() as u64 {
+            app.world_mut().resource_mut::<Clock>().ticks = tick;
+            app.update();
+            let world = app.world();
+            let state = world
+                .resource::<CreatureSim>()
+                .sim
+                .as_ref()
+                .unwrap()
+                .states()
+                .into_iter()
+                .find(|state| state.id == id)
+                .expect("the creature keeps its state");
+            let tick = tick as usize;
+            if (lit_tick..lit_leave).contains(&tick) {
+                assert_eq!(
+                    state.cell, lit_cell,
+                    "the replay stands on the lit cell for the whole stay"
+                );
+            }
+            assert!(
+                world.get_entity(body).is_ok(),
+                "the body sprite is never despawned"
+            );
+            samples.push((
+                world
+                    .get::<SpriteMaterial<KonungLightMaterial>>(body)
+                    .is_some(),
+                world.get::<Animator>(body).is_some(),
+            ));
+        }
+        let world = app.world();
+
+        // Dark at home: the ambient material from the very first frame.
+        assert!(
+            samples[0].0,
+            "a creature in a dark cell must carry the ambient material"
+        );
+        assert_eq!(
+            world
+                .get::<SpriteMaterial<KonungLightMaterial>>(body)
+                .map(|material| &material.0),
+            Some(&ambient),
+            "the material is the pool's plain ambient one"
+        );
+        // On the lit cell: the material is gone — without a respawn.
+        assert!(
+            !samples[lit_tick].0,
+            "a creature on a lit cell must drop the material"
+        );
+        // Back on a dark cell: the material returns.
+        assert!(
+            samples[lit_leave].0,
+            "back in the dark the material is restored"
+        );
+        for (tick, (has_material, has_animator)) in samples.iter().enumerate() {
+            assert!(
+                *has_animator,
+                "tick {tick}: the animator must stay on the sprite"
+            );
+            let want_material = !(lit_tick..lit_leave).contains(&tick);
+            assert_eq!(
+                *has_material, want_material,
+                "tick {tick}: the material follows the stay on the cell"
+            );
+        }
+        // Nothing respawned: node and sprite counts are what spawn built.
+        let mut node_query = app.world_mut().query::<&CreatureNode>();
+        assert_eq!(
+            node_query.iter(app.world()).count(),
+            node_count,
+            "no creature node was respawned by the light changes"
+        );
+        let mut sprite_query = app.world_mut().query::<&CreatureSprite>();
+        assert_eq!(
+            sprite_query.iter(app.world()).count(),
+            sprite_count,
+            "no creature sprite was respawned by the light changes"
+        );
     }
 
     fn fire_reset(mut commands: Commands, buttons: Query<Entity, With<ResetPositions>>) {

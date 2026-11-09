@@ -21,13 +21,12 @@ pub struct Cli {
     #[arg(long, value_enum, default_value = "game", global = true)]
     pub source: SourceArg,
 
-    /// Тик освещения для ночной подсветки земли (spike: в будущем заменяется
-    /// контрактом времени в плагине освещения)
+    /// Тик, на котором закрепить освещение сцены (без него освещение следует
+    /// за тиком симуляции; ночь — например, 11000)
     #[arg(long, global = true)]
     pub light_tick: Option<u64>,
 
-    /// Снять скриншот ночной подсветки в файл (spike: рядом кладётся второй —
-    /// с оверлеем масок света) и выйти
+    /// Снять скриншот карты в файл и выйти
     #[arg(long, global = true)]
     pub screenshot: Option<PathBuf>,
 
@@ -136,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    fn spike_flags_parse_global() {
+    fn screenshot_flags_parse_global() {
         let parsed = cli(&[
             "--game-dir",
             "g",
@@ -145,12 +144,12 @@ mod tests {
             "--light-tick",
             "11000",
             "--screenshot",
-            "out/spike-night-material.png",
+            "out/plugin-night.png",
         ]);
         assert_eq!(parsed.light_tick, Some(11000));
         assert_eq!(
             parsed.screenshot,
-            Some(PathBuf::from("out/spike-night-material.png"))
+            Some(PathBuf::from("out/plugin-night.png"))
         );
         // The subcommands stay reachable with the flags present
         match cli(&["--game-dir", "g", "--light-tick", "5", "check", "--all"]).command {

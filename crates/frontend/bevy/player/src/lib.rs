@@ -11,11 +11,15 @@ use bevy::{
     picking::hover::Hovered,
     prelude::*,
 };
+use k1_data::repo::{GAME_FILES, GameDir};
+use k1_game::lighting;
 use kn_game::{Game, MapRef, Scene, SceneOptions, TICK_MS};
 use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
-    AnimPlugin, CameraInput, CameraState, CreatureAnimationPlugin, CreatureMotion, GameResource,
-    MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, TextureCache, load_scene, ortho_scale,
+    AnimPlugin, CameraInput, CameraState, CreatureAnimationPlugin, CreatureMotion, CreatureSim,
+    FineLightGrid, GameResource, KonungLightMaterial, KonungLightingPlugin, LightingMaterials,
+    LightingState, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, TextureCache, load_scene,
+    ortho_scale,
 };
 use kn_ui::pointer_over_ui;
 
@@ -52,12 +56,18 @@ pub fn run_player(config: PlayerConfig) {
             // picture of a creature is built in one place (issue #70).
             AnimPlugin::new(TICK_MS as f32),
             CreatureAnimationPlugin,
+            // The same scene lighting as the viewer: uniforms from the
+            // simulation tick, one writer in kn-render.
+            KonungLightingPlugin,
         ))
         .insert_resource(GameResource(config.game))
         .init_resource::<TextureCache>()
         .insert_resource(NewGame { hero: config.hero })
         .add_systems(Startup, load_start_map)
-        .add_systems(Update, camera_control.in_set(CameraInput))
+        .add_systems(
+            Update,
+            (camera_control.in_set(CameraInput), update_lighting_state),
+        )
         .run();
 }
 
@@ -99,11 +109,13 @@ pub fn request_start_creatures(
     Some((map_ref, scene))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn load_start_map(
     new_game: Res<NewGame>,
     game: Res<GameResource>,
     mut cache: ResMut<TextureCache>,
     mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<KonungLightMaterial>>,
     mut commands: Commands,
     mut pending: ResMut<PendingFrame>,
     mut motion: ResMut<CreatureMotion>,
@@ -112,16 +124,23 @@ fn load_start_map(
     else {
         return;
     };
-    match load_scene(
+    // The lighting of the start map: the pool from LIGHTS.RES and this map's
+    // fine grid, the same resources the viewer provides. Uniforms arrive every
+    // frame from the simulation tick through `update_lighting_state`.
+    let pool = LightingMaterials::new(&mut images, &mut materials, &lights_res_masks(&game.0));
+    commands.insert_resource(FineLightGrid(map_fine_lights(&game.0, map_ref)));
+    let loaded = load_scene(
         &game.0,
         &scene,
         |_| true,
         &mut cache,
         &mut images,
-        None,
+        Some(&pool),
         &mut commands,
         &mut pending,
-    ) {
+    );
+    commands.insert_resource(pool);
+    match loaded {
         Ok(loaded) => {
             for problem in &loaded.problems {
                 warn!("карта {}: {problem}", map_ref.number);
@@ -130,6 +149,69 @@ fn load_start_map(
         Err(error) => {
             error!("не загрузились текстуры: {error}");
         }
+    }
+}
+
+/// The LIGHTS.RES tile masks of the opened game: raw brightness bytes with
+/// their pixel size, ready for [`LightingMaterials::new`]. A game without a
+/// readable LIGHTS.RES gets an empty pool — the scene still lights, the tiles
+/// just carry no tile mask.
+fn lights_res_masks(game: &Game) -> Vec<(Vec<u8>, u32, u32)> {
+    let Some(path) = k1_game::resources::find_named(game.root(), "lights.res") else {
+        return Vec::new();
+    };
+    let Ok(res) = k1_data::lights_res::parse(&std::fs::read(path).unwrap_or_default()) else {
+        return Vec::new();
+    };
+    res.tiles
+        .into_iter()
+        .map(|mask| {
+            (
+                mask,
+                k1_data::lights_res::TILE_MASK_WIDTH as u32,
+                k1_data::lights_res::TILE_MASK_HEIGHT as u32,
+            )
+        })
+        .collect()
+}
+
+/// The map's LIGHTS.N fine grid — the tile-light index per fine cell, what the
+/// creature lighting reads to tell a lit patch from a dark one. `None` when
+/// the map has no LIGHTS.N: every cell counts as dark.
+fn map_fine_lights(game: &Game, map_ref: MapRef) -> Option<Vec<Vec<u8>>> {
+    let bytes = GameDir::new(game.root())
+        .lights_bytes(map_ref.number, GAME_FILES)
+        .ok()??;
+    k1_data::map::parse_lights(&bytes)
+        .ok()
+        .map(|lights| lights.fine)
+}
+
+/// The k1 reading of `k1_game::lighting::params` into the render contract —
+/// the same mapping the viewer applies: the ground ambient only inside the
+/// ground-light window, the plain ambient always, the ground tile-light colour.
+fn lighting_state(params: lighting::LightingParams) -> LightingState {
+    LightingState {
+        terrain_blend: params.ground_ambient.map_or(Vec3::ZERO, Vec3::from),
+        ambient_blend: Vec3::from(params.ambient),
+        light_color: Vec3::from(params.ground_light),
+    }
+}
+
+/// Writes the lighting state for the simulation's current tick. Without a
+/// simulation nothing is written: the contract keeps its safe zero default
+/// instead of lighting a frozen scene from an invented clock.
+fn update_lighting_state(sim: Option<Res<CreatureSim>>, mut state: ResMut<LightingState>) {
+    let Some(tick) = sim
+        .as_ref()
+        .and_then(|sim| sim.sim.as_ref())
+        .map(|simulation| simulation.tick_number())
+    else {
+        return;
+    };
+    let next = lighting_state(lighting::params(tick, START_SEED));
+    if *state != next {
+        *state = next;
     }
 }
 
