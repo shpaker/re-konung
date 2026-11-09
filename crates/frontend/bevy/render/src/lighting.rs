@@ -17,7 +17,7 @@
 //!   zero blend is a no-op in the shader;
 //! - static objects fade with the plain ambient always, except self-lit
 //!   pieces (`Flames.size() >= 2`) and flames, which never fade
-//!   (`SetFade(false)`, game.cpp:1563-1580, game.cpp:1604);
+//!   (`SetFade(false)`, game.cpp:1563-1580, game.cpp:1592-1593);
 //! - characters fade where their current cell's fine light value is 0, in and
 //!   out of the ground window alike (game.cpp:1611-1626); the material is
 //!   swapped on the creature's sprites as it moves ([`update_creature_lighting`]);
@@ -165,7 +165,7 @@ pub enum SurfaceLighting {
 /// tested without a world.
 ///
 /// `is_flame` is [`Piece::is_flame`] — an object's fire is drawn right after
-/// the object with `SetFade(false)` (game.cpp:1604), so it never carries a
+/// the object with `SetFade(false)` (game.cpp:1592-1593), so it never carries a
 /// material even though it sits in the Objects group.
 pub fn surface_lighting(
     group: PieceGroup,

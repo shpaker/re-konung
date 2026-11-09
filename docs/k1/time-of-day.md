@@ -270,6 +270,27 @@ ground pass
 [`game.cpp:979`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L979)).
 A per-draw random is a frame-rate dependency; we will not reproduce it (see below).
 
+Two more surfaces on the same screen never fade at all, and the fade-off reads are the
+clone's (**by Slavik**, pinned above). A character's shadow is drawn right after
+`SetFade(false)`
+([game.cpp:1300-1301](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L1300-L1301)),
+an object's shadow the same way
+([game.cpp:1348-1349](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L1348-L1349))
+— a shadow carries no fade state ever. An object's fire is drawn with `SetFade(false)`
+before `DrawFlame`
+([game.cpp:1592-1593](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L1592-L1593)),
+and which objects carry a fire is decided by the fade gate itself: an object whose flame
+list holds two or more entries is drawn without the ambient fade, a list of one or none
+fades with the ambient (`Flames.size() >= 2`, **by Slavik**
+[game.cpp:1563-1580](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L1563-L1580)).
+The data behind that gate is **confirmed** (read ourselves): over both editions
+`Objects.res` holds exactly 74 objects with flame lists of two or more entries, and not
+one inactive slot (`flame_id < 0`) among them — the length reading and the active-slot
+reading agree today. The test
+`objects_with_a_two_entry_flame_list_always_have_two_active_slots`
+(`k1-data/tests/original_graphics.rs`) pins that agreement, so a future data sample
+cannot flip the self-lit semantics unnoticed.
+
 ### The switches and the flags are not one control
 
 There are two user switches and two computed states, and the routine consults a third
@@ -442,9 +463,19 @@ Deliberate, recorded next to the facts they bend:
   no rule reads it.
 - **No per-draw random.** The light colour `16..23, 8..11, 0` is re-rolled every draw, so
   it is a function of frame rate. A flicker we keep must become a function of the tick.
-- **Deterministic night variants.** If the coin flip is implemented, it is drawn from the
-  simulation's seeded generator against the day index, not from an unseeded random, so a
-  replayed session shows the same night.
+  Implemented so: `light_color(tick, seed)` in `k1_game::lighting` draws the pair from the
+  same splitmix-style mix once per **block of 16 ticks** — `tick / 16` picks the block,
+  so every draw inside a block shows the same colour, and the colour steps 1 350 times a
+  cycle instead of every draw. The 16-tick block is our approximation, not a period
+  observed in the original.
+- **Deterministic night variants.** The coin flip is implemented as a pure function of
+  `(day, seed)`, not drawn from the simulation's seeded generator at a moment:
+  `night_palette(day, seed)` in `k1_game::lighting` mixes the pair through a
+  splitmix-style hash — multiply by the golden-ratio constant, then the splitmix64
+  finalizer of shifts and multiplies (`mix_day_seed`) — and reads `% 100 < 90`, the same
+  90-in-100 chance as the original's `rand()` flip. A replayed session, or a scrub to
+  another day and back, shows the same night; nothing depends on frame rate or on how
+  many real seconds a cycle took.
 
 ## What the next tickets take from this page
 
@@ -470,12 +501,28 @@ Deliberate, recorded next to the facts they bend:
   the model is `1802, 3593, 5402, 8100, 18900, 19020`, not the branch list — both encode
   the same original, one by comparison, one by arithmetic, and the branch spans of the
   interval table stay the contract for comparisons.
-- **#96 — not implemented.** It takes the interval table, the window table with its exact
-  ramp branches, the per-channel blend rules, the three surfaces treated differently, the
-  constant-light array, the branch-vs-value distinction above, the coin flip against the
-  day index (the model leaves it undrawn; #96 draws it from the seeded generator), the two
-  unresolved coefficients (the `0.33`/`1/3` pair and the rounding of the byte-packed
-  channels), and the camera presets — as places to stand the camera, never as boundaries.
+- **#96 — implemented, the rendered lighting.** What it took from this page: the interval
+  table, the window table with its exact ramp branches, the per-channel blend rules, the
+  three surfaces treated differently, the coin flip against the day index, and the camera
+  presets — as places to stand the camera, never as boundaries. The model is
+  `k1_game::lighting` (`crates/game/k1/k1-game/src/lighting.rs`): pure functions over the
+  tick — `params`, `apply_channel`, `night_palette`, `light_color`, `fades` — and the CPU
+  reference of the per-channel formula. The application is `KonungLightingPlugin` in
+  `kn-render` (`crates/frontend/bevy/render/src/lighting.rs`): a sprite material
+  (`KonungLightMaterial`, a Bevy `MaterialExtension2d`) whose WESL fragment
+  (`shaders/terrain_light_material.wesl`) reproduces the per-channel blend of the
+  `gfx.cpp:56-84` rules above, a pool of 21 materials (`LightingMaterials`: one per
+  LIGHTS.RES mask plus the two plain ones), the `LightingState` time contract the
+  frontend writes each frame, and `FineLightGrid` — the map's LIGHTS.N fine values the
+  creature lighting reads per cell. Both frontends derive `LightingState` from
+  `lighting::params(tick, seed)` — the tick of the running simulation, or the
+  `--light-tick` pin that holds a scene still for screenshots — and the viewer carries
+  the scrub: the cycle slider plus the four camera presets of
+  [this page](#camera-presets-ours) as one-click jumps. What stays out: the two user
+  switches and the constant-light bypass (#97), and the two unresolved coefficients — the
+  model reads window 7's red with the clone's `0.33` and carries the question at its
+  declaration site (`time_of_day.rs`, the `ambient_value` docs); the render takes the
+  model's numbers as they are.
 - **#97 — not implemented.** It takes the switches-and-flags table: both user switches,
   both computed flags, and the constant-light bypass of the day/night gate.
 - **Neither #96 nor #97 owns the day.** Both read it from the running simulation —

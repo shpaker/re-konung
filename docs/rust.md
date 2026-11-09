@@ -651,6 +651,96 @@ to keep in step with the windows documented in
 the simulation: game time is derived from `Simulation::tick` on demand
 (issue #95) and the simulation carries no accumulator of its own.
 
+### Lighting cost
+
+The rendered lighting (#96) has two halves measured separately: the pure
+model in `k1_game::lighting` on the CPU, and the material pipeline in the
+viewer's window.
+
+**CPU model.** Release build, AMD Ryzen 9 9950X, the spread of three runs.
+Measured by `k1-game/tests/lighting_cost.rs` under `#[ignore]` — no
+`original/` needed, the model is arithmetic over the tables of
+[k1/time-of-day.md](k1/time-of-day.md):
+
+```bash
+cargo test --release --manifest-path crates/Cargo.toml -p k1-game \
+    --test lighting_cost -- --ignored --nocapture
+```
+
+| Operation | Time |
+|---|---|
+| `params` — the full `LightingParams` of a tick, the render layer's per-frame entry point | 8.46 ns |
+| `apply_channel` — one channel of the per-channel blend, the shader-equivalent reference | 1.61–1.63 ns |
+| `night_palette` — the per-day coin, `(day, seed)` → variant | 1.34–1.35 ns |
+| `light_color` — the tile-light colour, re-rolled every 16 ticks | 1.64–1.65 ns |
+| full pipeline — `params` + the three-channel apply | 12.53–12.64 ns |
+
+A confirmation run of this session reproduced the table within a tenth of a
+nanosecond on both ends (`params` 8.42–8.45, full pipeline 12.52–12.55).
+The verdict follows the game-time table above: the whole pipeline costs about
+one `game_time` readout (12.9–14.8 ns) — two orders under the cheapest engine
+tick (1.28 µs on a calm map) and seven under the 60 ms budget. And this is a
+per-frame cost paid by the asker, not a per-pixel one: `apply_channel` runs
+on the GPU; the CPU number exists as the reference the WESL fragment is
+checked against. Nothing in the model is worth caching.
+
+**Render.** The window meter, not the CPU one. Methodology: release build,
+the viewer's `--benchmark 600` mode — 40 settle frames, then 600 measured
+frames of map 17 of the rus edition (12 487 sprites, characters overlay on);
+the samples are the `DiagnosticsStore` frame time that
+`FrameTimeDiagnosticsPlugin` writes each update, the percentiles are
+nearest-rank over the 600 samples, and each row is three runs in a row. The
+benchmark window opens with `PresentMode::AutoNoVsync` (`--benchmark` runs
+only; interactive runs keep the default Fifo), and that choice is the
+methodology, not a tweak: with vsync on, a finished frame sits on the
+monitor's quantum of 16.67 ms — day and night would both read as the
+display's pace and the meter would measure the screen, not the scene.
+Hardware: AMD Ryzen 9 9950X, NVIDIA GeForce RTX 2070 SUPER, wgpu backend
+Vulkan (the adapter log line of the runs). A draw-call counter is not
+reachable from `bevy_render` 0.20 without extra features, so the table counts
+sprites (`ScenePiece` entities of the scene) and the materials of the
+lighting pool instead.
+
+| Version | Light | avg ms | p95 ms | p99 ms | sprites | light materials |
+|---|---|---|---|---|---|---|
+| `main` a95db9f — the local `main` ref of this clone, full default Bevy features | none | 1.49–1.52 | 1.86–1.94 | 2.06–2.10 | 12 487 | 0 |
+| origin/main ba22cda — the commit this branch sits on (#105 build profiles) | none | 1.28–1.29 | 1.64–1.68 | 1.86–1.93 | 12 487 | 0 |
+| spike 3838657 — material on terrain only, CLI-pinned lighting | day, `--light-tick 0` | 3.00–3.01 | 3.46–3.47 | 3.71–3.77 | 12 487 | 20 |
+| spike 3838657 | night, `--light-tick 11000` | 2.96–3.02 | 3.38–3.43 | 3.64–3.67 | 12 487 | 20 |
+| this branch 16e4371 | day — clock at tick 0 | 3.30–3.33 | 3.82–3.86 | 4.03–4.20 | 12 487 | 21 |
+| this branch 16e4371 | night, `--light-tick 11000` | 3.27–3.30 | 3.76–3.80 | 3.97–4.06 | 12 487 | 21 |
+
+The baseline rows carry a caveat the comparison needs: the local `main` ref
+(a95db9f) is one build-infra commit behind `origin/main` (ba22cda, #105,
+which trimmed the Bevy feature set and toolchain), and that commit alone is
+worth ~0.2 ms of average frame time here (1.49 → 1.28). The lighting work
+sits on ba22cda, so the honest lighting deltas read against it:
+
+- **This branch's day against ba22cda — the full cost of the materials on
+  every surface:** +2.0 ms of average frame time (1.28 → 3.30–3.33), p95
+  1.64 → 3.82–3.86. Where the base bound no materials, this branch hands
+  every terrain, decoration, object and dark-cell creature sprite a light
+  material (21 in the pool, 19 LIGHTS.RES masks plus the two plain ones).
+- **Night against day — the cost of the formula:** none. The night triple
+  changes the uniforms, not the work: 3.27–3.30 against 3.30–3.33 ms of
+  average, inside the runs' spread. The per-frame CPU model is nanoseconds
+  (table above), and the day's zero blend takes the shader's no-op branch,
+  so both phases draw the same material graph.
+- **The spike against this branch — extending the material past the
+  terrain:** +0.3 ms of average (3.00 → 3.30–3.33 day, p95 3.46 → 3.82–3.86).
+  The terrain-only material cost 1.7 ms over the base (1.28 → 3.00); covering
+  decorations, objects and the per-creature material swaps adds another
+  third of a millisecond and the one extra plain material (20 → 21).
+
+Not measured, and the standing candidate for a profiler pass:
+`update_creature_lighting` (`kn-render::lighting`) rebuilds its per-creature
+dark map from `Simulation::states()` every frame — a fresh `Vec` of states
+per frame, the same pattern the creature display subsystem already pays (the
+viewer's label systems read `states()` per frame too). At dozens of
+creatures the allocation is plausibly noise next to the 2 ms the materials
+add, but that is an eyeball, not a measurement; it goes through the profiler
+before anyone optimizes it.
+
 ### Open questions
 
 - The `class` module in `k1-game::rules` is load-bearing since criteria 3 and 4:

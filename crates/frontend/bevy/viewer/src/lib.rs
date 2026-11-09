@@ -30,6 +30,7 @@ use bevy::{
     sprite_render::SpriteMaterial,
     ui::{Checked, Pressed},
     ui_widgets::{Activate, SliderStep, SliderValue, ValueChange},
+    window::PresentMode,
 };
 use k1_data::lights_res;
 use k1_data::map;
@@ -720,6 +721,15 @@ pub fn run_viewer(config: ViewerConfig) {
         })
         .unwrap_or_default();
     let benchmark_request = config.benchmark.map(|frames| BenchmarkRequest { frames });
+    // A benchmark run only: the measurement must not be quantized to the
+    // monitor's refresh quantum — with the default Fifo a frame sits on the
+    // next vblank, so day and night both read as ~16.67 ms and the meter
+    // reports the display's pace, not the scene's cost. Interactive runs keep
+    // the default.
+    let present_mode = benchmark_request
+        .as_ref()
+        .map(|_| PresentMode::AutoNoVsync)
+        .unwrap_or_default();
     // LIGHTS.RES is read before the game moves into its resource
     let setup = LightingSetup {
         tick: config.lighting_tick,
@@ -732,6 +742,7 @@ pub fn run_viewer(config: ViewerConfig) {
                 primary_window: Some(Window {
                     title: format!("re-konung viewer — {}", config.game_dir.display()),
                     resolution: (1280, 800).into(),
+                    present_mode,
                     ..default()
                 }),
                 ..default()
