@@ -21,11 +21,13 @@ use k1_game::time_of_day::CYCLE_TICKS;
 /// own granularity and cheap in release.
 const CYCLES: u64 = 200;
 
-fn measure(label: &str, floor: f64, body: impl Fn(u64)) {
+fn measure(label: &str, floor: f64, start_tick: u64, body: impl Fn(u64)) {
     let start = Instant::now();
+    let mut absolute = start_tick;
     for _ in 0..CYCLES {
-        for tick in 0..CYCLE_TICKS {
-            body(tick);
+        for _tick in 0..CYCLE_TICKS {
+            body(absolute);
+            absolute += 1;
         }
     }
     report(label, start.elapsed(), floor);
@@ -48,7 +50,7 @@ fn the_lighting_model_costs_are_recorded() {
     let seed = black_box(42u64);
 
     // Parameters: the entry-point called once per frame by the render layer.
-    measure("params (full LightingParams)", 0.2, |tick| {
+    measure("params (full LightingParams)", 0.2, 0, |tick| {
         black_box(params(black_box(tick), seed));
     });
 
@@ -58,6 +60,7 @@ fn the_lighting_model_costs_are_recorded() {
     measure(
         "apply_channel (base 0.5, blend -0.7, lightning 0.1, light_color 0.2)",
         0.2,
+        0,
         |_tick| {
             black_box(apply_channel(
                 black_box(0.5f32),
@@ -68,7 +71,7 @@ fn the_lighting_model_costs_are_recorded() {
             ));
         },
     );
-    measure("apply_channel blue (same args)", 0.2, |_tick| {
+    measure("apply_channel blue (same args)", 0.2, 0, |_tick| {
         black_box(apply_channel(
             black_box(0.5f32),
             black_box(-0.7f32),
@@ -79,45 +82,33 @@ fn the_lighting_model_costs_are_recorded() {
     });
 
     // Night palette selection: called once per cycle transition.
-    // Actually invokes the mixing function; inputs are black-boxed.
-    measure("night_palette (day index, seed → enum)", 0.2, |_tick| {
-        let day = black_box(_tick / CYCLE_TICKS);
-        black_box(k1_game::lighting::night_palette(day, seed));
-    });
+    // Uses non-zero start_tick so day is not always 0.
+    measure(
+        "night_palette (day index, seed → enum)",
+        0.2,
+        500_000,
+        |tick| {
+            let day = black_box(tick / CYCLE_TICKS);
+            black_box(k1_game::lighting::night_palette(day, seed));
+        },
+    );
 
     // Light color variation: re-rolled every 16 ticks.
-    measure("light_color (per-tile)", 0.2, |tick| {
+    measure("light_color (per-tile)", 0.2, 0, |tick| {
         black_box(k1_game::lighting::light_color(black_box(tick), seed));
     });
 
     // Combined full pipeline: params + channel application.
-    // lightning comes from the tile mask (ground_light), light_color from
-    // the draw pass colour — they are independent in the shader.
-    measure("full pipeline (params + 3-channel apply)", 0.5, |tick| {
+    // lightning is the mask brightness (0..1), light_color the draw-pass RGB.
+    // They are independent in the shader; here we pass distinct values.
+    measure("full pipeline (params + 3-channel apply)", 0.5, 0, |tick| {
         let lp = params(black_box(tick), seed);
         let base_r = black_box(0.5f32);
-        let draw_color = k1_game::lighting::light_color(tick, seed);
-        let r = apply_channel(
-            base_r,
-            lp.ambient[0],
-            lp.ground_light[0],
-            draw_color[0],
-            false,
-        );
-        let g = apply_channel(
-            base_r,
-            lp.ambient[1],
-            lp.ground_light[1],
-            draw_color[1],
-            false,
-        );
-        let b = apply_channel(
-            base_r,
-            lp.ambient[2],
-            lp.ground_light[2],
-            draw_color[2],
-            true,
-        );
+        let lightning = black_box(0.15f32); // mask brightness
+        let light_color = k1_game::lighting::light_color(tick, seed); // RGB source
+        let r = apply_channel(base_r, lp.ambient[0], lightning, light_color[0], false);
+        let g = apply_channel(base_r, lp.ambient[1], lightning, light_color[1], false);
+        let b = apply_channel(base_r, lp.ambient[2], lightning, light_color[2], true);
         black_box((r, g, b));
     });
 }

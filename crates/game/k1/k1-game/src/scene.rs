@@ -515,12 +515,7 @@ pub fn map_scene(
                         && column < lights.tiles[row].len()
                     {
                         let mask_value = lights.tiles[row][column];
-                        // LIGHTS.N stores 1-based indices; 0 means no mask.
-                        // Valid range is 1..=TILE_MASKS (19). Values outside
-                        // this range are treated as no mask (review #106, P2-1).
-                        if mask_value > 0 && (mask_value as usize) <= lights_res::TILE_MASKS {
-                            piece.light_mask_index = Some((mask_value as usize).saturating_sub(1));
-                        }
+                        piece.light_mask_index = tile_light_mask_index(mask_value);
                     }
                     background.push(piece);
                 }
@@ -1019,6 +1014,18 @@ fn foot_pieces(map: &KonungMap, pieces: &mut Vec<DrawPiece>) {
     }
 }
 
+/// Convert a raw LIGHTS.N tile value to a zero-based mask index.
+///
+/// LIGHTS.N stores 1-based indices: 0 means no mask, 1 → index 0, 19 → index 18.
+/// Values outside 1..=TILE_MASKS (19) are treated as no mask (corrupted data).
+pub fn tile_light_mask_index(value: u8) -> Option<usize> {
+    if value > 0 && (value as usize) <= lights_res::TILE_MASKS {
+        Some((value as usize).saturating_sub(1))
+    } else {
+        None
+    }
+}
+
 /// Reverse of [`map::tile_position`]: pixel → tile column/row.
 ///
 /// Forward: `x = col * 116 + (row & 1) * 58`, `y = row * 32`.
@@ -1367,62 +1374,30 @@ mod tests {
 
     #[test]
     fn light_mask_index_value_0_means_none() {
-        // LIGHTS.N stores 1-based values; value 0 means no mask.
-        let mut piece =
-            DrawPiece::textured(PieceGroup::Terrain, TextureKey::Tile { index: 0 }, 0, 0);
-        let mask_value = 0u8;
-        if mask_value > 0 && (mask_value as usize) <= lights_res::TILE_MASKS {
-            piece.light_mask_index = Some((mask_value as usize).saturating_sub(1));
-        }
-        assert_eq!(piece.light_mask_index, None, "value=0 → None");
+        assert_eq!(tile_light_mask_index(0), None, "value=0 → None");
     }
 
     #[test]
     fn light_mask_index_value_1_gives_index_0() {
-        // Value 1 → index 0 (first mask in LIGHTS.RES).
-        let mut piece =
-            DrawPiece::textured(PieceGroup::Terrain, TextureKey::Tile { index: 0 }, 0, 0);
-        let mask_value = 1u8;
-        if mask_value > 0 && (mask_value as usize) <= lights_res::TILE_MASKS {
-            piece.light_mask_index = Some((mask_value as usize).saturating_sub(1));
-        }
-        assert_eq!(piece.light_mask_index, Some(0));
+        assert_eq!(tile_light_mask_index(1), Some(0), "1 → 0");
     }
 
     #[test]
     fn light_mask_index_value_19_gives_index_18() {
         // Boundary: 19 is the last valid 1-based index → 18 zero-based.
-        let mut piece =
-            DrawPiece::textured(PieceGroup::Terrain, TextureKey::Tile { index: 0 }, 0, 0);
-        let mask_value = 19u8;
-        if mask_value > 0 && (mask_value as usize) <= lights_res::TILE_MASKS {
-            piece.light_mask_index = Some((mask_value as usize).saturating_sub(1));
-        }
-        assert_eq!(piece.light_mask_index, Some(18));
+        assert_eq!(tile_light_mask_index(19), Some(18), "19 → 18");
     }
 
     #[test]
     fn light_mask_index_value_20_is_out_of_range() {
         // 20 exceeds TILE_MASKS (19) → treated as no mask.
-        let mut piece =
-            DrawPiece::textured(PieceGroup::Terrain, TextureKey::Tile { index: 0 }, 0, 0);
-        let mask_value = 20u8;
-        if mask_value > 0 && (mask_value as usize) <= lights_res::TILE_MASKS {
-            piece.light_mask_index = Some((mask_value as usize).saturating_sub(1));
-        }
-        assert_eq!(piece.light_mask_index, None, "20 > 19 → None");
+        assert_eq!(tile_light_mask_index(20), None, "20 > 19 → None");
     }
 
     #[test]
     fn light_mask_index_value_255_is_out_of_range() {
         // Corrupted LIGHTS.N value 255 exceeds TILE_MASKS (19) → no mask.
-        let mut piece =
-            DrawPiece::textured(PieceGroup::Terrain, TextureKey::Tile { index: 0 }, 0, 0);
-        let mask_value = 255u8;
-        if mask_value > 0 && (mask_value as usize) <= lights_res::TILE_MASKS {
-            piece.light_mask_index = Some((mask_value as usize).saturating_sub(1));
-        }
-        assert_eq!(piece.light_mask_index, None, "255 > 19 → None");
+        assert_eq!(tile_light_mask_index(255), None, "255 > 19 → None");
     }
 
     #[test]
