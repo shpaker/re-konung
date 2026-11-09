@@ -47,6 +47,8 @@ fn cli(game_dir: PathBuf) -> Cli {
         game_dir,
         map: None,
         source: SourceArg::Game,
+        light_tick: None,
+        screenshot: None,
         command: None,
     }
 }

@@ -118,6 +118,7 @@ fn load_start_map(
         |_| true,
         &mut cache,
         &mut images,
+        None,
         &mut commands,
         &mut pending,
     ) {

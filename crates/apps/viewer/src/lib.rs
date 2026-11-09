@@ -64,6 +64,8 @@ pub fn viewer_config(cli: &Cli) -> Result<ViewerConfig, ViewerError> {
         game_dir: cli.game_dir.clone(),
         maps,
         selected: selected.unwrap_or(0),
+        lighting_tick: cli.light_tick,
+        screenshot: cli.screenshot.clone(),
     })
 }
 
@@ -397,6 +399,8 @@ mod tests {
             game_dir: dir.path().to_path_buf(),
             map: None,
             source: crate::cli::SourceArg::Game,
+            light_tick: None,
+            screenshot: None,
             command: None,
         };
         assert!(matches!(

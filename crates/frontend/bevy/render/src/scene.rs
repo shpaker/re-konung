@@ -10,10 +10,12 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
+use bevy::sprite_render::SpriteMaterial;
 use kn_game::{Game, Piece, PieceGroup, Scene, TextureId};
 
 use crate::animation::{Animator, Frame, Sequence};
 use crate::camera::{PendingFrame, frame_scene};
+use crate::lighting::TerrainLightMaterials;
 use crate::textures::{TextureCache, TextureEntry};
 
 /// Шаг z между соседними кусками сцены.
@@ -146,7 +148,16 @@ pub fn piece_sequence(
 /// этом не меняется, потому что z даёт номер куска в [`Scene::pieces`], а не
 /// соседство в дереве: куски одной группы идут вперемежку с чужими (персонажи с
 /// объектами), и каждый остаётся на своём месте.
-pub fn spawn_scene(commands: &mut Commands, scene: &Scene, cache: &TextureCache) -> Entity {
+///
+/// `lighting` — пул материалов ночной подсветки ([`TerrainLightMaterials`]):
+/// куску земли выдаётся материал по его маске из LIGHTS.N. `None` — обычный
+/// спрайтовый материал, как до подсветки.
+pub fn spawn_scene(
+    commands: &mut Commands,
+    scene: &Scene,
+    cache: &TextureCache,
+    lighting: Option<&TerrainLightMaterials>,
+) -> Entity {
     let root = commands
         .spawn((MapRoot, Transform::IDENTITY, Visibility::Visible))
         .id();
@@ -181,6 +192,11 @@ pub fn spawn_scene(commands: &mut Commands, scene: &Scene, cache: &TextureCache)
                 piece_visibility(base),
                 piece_transform(piece.x, piece.y, piece.w, piece.h, size, order),
             ));
+            if let Some(materials) = lighting
+                && group == PieceGroup::Terrain
+            {
+                entity.insert(SpriteMaterial(materials.handle(piece.light_mask_index)));
+            }
             if let (Some(sequence), Some(animation)) = (sequence, piece.animation.as_ref()) {
                 entity.insert(Animator::with_base(
                     sequence,
@@ -335,19 +351,22 @@ pub struct SceneLoad {
 ///
 /// Does NOT remove the previous scene — the caller keeps the old root and
 /// clears it only after this returns `Ok` (the current `rebuild_scene` semantics).
+/// `lighting` — пул материалов подсветки земли; `None` — без ночной подсветки.
+#[allow(clippy::too_many_arguments)]
 pub fn load_scene(
     game: &Game,
     scene: &Scene,
     shown: impl Fn(&Piece) -> bool,
     cache: &mut TextureCache,
     images: &mut Assets<Image>,
+    lighting: Option<&TerrainLightMaterials>,
     commands: &mut Commands,
     pending: &mut PendingFrame,
 ) -> kn_game::Result<SceneLoad> {
     let ids = scene.texture_ids();
     let unique_textures = ids.len();
     let problems = cache.load(game, &ids, images)?;
-    let root = spawn_scene(commands, scene, cache);
+    let root = spawn_scene(commands, scene, cache, lighting);
     frame_scene(scene, cache, shown, pending);
     Ok(SceneLoad {
         root,

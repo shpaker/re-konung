@@ -21,6 +21,16 @@ pub struct Cli {
     #[arg(long, value_enum, default_value = "game", global = true)]
     pub source: SourceArg,
 
+    /// Тик освещения для ночной подсветки земли (spike: в будущем заменяется
+    /// контрактом времени в плагине освещения)
+    #[arg(long, global = true)]
+    pub light_tick: Option<u64>,
+
+    /// Снять скриншот ночной подсветки в файл (spike: рядом кладётся второй —
+    /// с оверлеем масок света) и выйти
+    #[arg(long, global = true)]
+    pub screenshot: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -123,6 +133,30 @@ mod tests {
         let mut all = vec!["re-konung-viewer"];
         all.extend_from_slice(args);
         Cli::parse_from(all)
+    }
+
+    #[test]
+    fn spike_flags_parse_global() {
+        let parsed = cli(&[
+            "--game-dir",
+            "g",
+            "--map",
+            "17",
+            "--light-tick",
+            "11000",
+            "--screenshot",
+            "out/spike-night-material.png",
+        ]);
+        assert_eq!(parsed.light_tick, Some(11000));
+        assert_eq!(
+            parsed.screenshot,
+            Some(PathBuf::from("out/spike-night-material.png"))
+        );
+        // The subcommands stay reachable with the flags present
+        match cli(&["--game-dir", "g", "--light-tick", "5", "check", "--all"]).command {
+            Some(Command::Check { all, .. }) => assert!(all),
+            other => panic!("expected check, got {other:?}"),
+        }
     }
 
     #[test]

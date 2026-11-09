@@ -6,12 +6,13 @@
 //! app crate.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
+    ecs::schedule::common_conditions::resource_exists,
     feathers::{
         FeathersPlugins,
         controls::{
@@ -24,18 +25,25 @@ use bevy::{
     input::mouse::{AccumulatedMouseMotion, MouseWheel},
     picking::hover::Hovered,
     prelude::*,
+    render::view::screenshot::{Capturing, Screenshot, save_to_disk},
+    sprite_render::SpriteMaterial,
     ui::Checked,
     ui_widgets::{Activate, ValueChange},
 };
+use k1_data::lights_res;
+use k1_game::lighting;
 use kn_game::simulation::Simulation;
-use kn_game::{DayPhase, Game, MapRef, MapSource, Piece, SceneOptions, TICK_MS, group_is_shown};
+use kn_game::{
+    DayPhase, Game, MapRef, MapSource, Piece, PieceGroup, SceneOptions, TICK_MS, group_is_shown,
+};
 use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
     AnimPlugin, AnimSet, Animator, CameraApply, CameraBounds, CameraInput, CameraState, Clock,
     CreatureAnim, CreatureAnimReport, CreatureAnimationPlugin, CreatureMotion, CreatureNode,
     CreatureNodesVisible, CreatureRoot, CreatureSet, CreatureShadow, CreatureSim, CreatureSprite,
     GameResource, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup,
-    ScenePiece, Sequence, TextureCache, clear_scene, load_scene, ortho_scale,
+    ScenePiece, Sequence, TerrainLightMaterial, TerrainLightMaterialPlugin, TerrainLightMaterials,
+    TextureCache, clear_scene, load_scene, ortho_scale, piece_center, piece_size,
     reset_creature_animations, reset_creature_positions,
 };
 use kn_ui::{dark_theme, pointer_over_ui, sync_checked};
@@ -161,6 +169,182 @@ pub struct Stats {
 /// exact spawn of the first build (same seed, same map → same initial state).
 const SIM_SEED: u64 = 42;
 
+/// Spike: the CLI-driven night lighting and its screenshot capture. The
+/// lighting plugin and its time contract replace all of this — until then the
+/// flags below keep the spike runnable and reproducible.
+///
+/// Inputs the [`setup_lighting`] startup system turns into a
+/// [`TerrainLightMaterials`] pool: the tick picks the uniforms, the masks are
+/// the raw LIGHTS.RES tile brightness bytes with their pixel size.
+#[derive(Resource)]
+struct SpikeLighting {
+    tick: u64,
+    masks: Option<Vec<(Vec<u8>, u32, u32)>>,
+}
+
+/// Spike: where the capture camera aims — the first lit terrain piece of the
+/// current map, in world coordinates.
+#[derive(Resource, Default)]
+struct SpikeTarget(Option<Vec2>);
+
+/// Spike: capture paths and counters for the exit report.
+#[derive(Resource, Default)]
+struct SpikeCapture {
+    material_path: Option<PathBuf>,
+    overlay_path: Option<PathBuf>,
+    terrain_pieces: usize,
+}
+
+/// Spike: the LIGHTS.RES tile masks of the opened game. `None` — LIGHTS.RES
+/// did not read, the pool then holds only the no-mask material.
+fn spike_masks(game: &Game) -> Option<Vec<(Vec<u8>, u32, u32)>> {
+    let path = k1_game::resources::find_named(game.root(), "lights.res")?;
+    let res = lights_res::parse(&std::fs::read(path).ok()?).ok()?;
+    Some(
+        res.tiles
+            .into_iter()
+            .map(|mask| {
+                (
+                    mask,
+                    lights_res::TILE_MASK_WIDTH as u32,
+                    lights_res::TILE_MASK_HEIGHT as u32,
+                )
+            })
+            .collect(),
+    )
+}
+
+/// Spike: builds the material pool from the CLI flags. The uniforms come ready
+/// from `k1_game::lighting::params` — the same numbers the original passed to
+/// its shader: the ground ambient inside the ground-light window, the ground
+/// tile-light colour.
+fn setup_lighting(
+    setup: Res<SpikeLighting>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<TerrainLightMaterial>>,
+    mut commands: Commands,
+) {
+    // spike: replaced by the time contract in the lighting plugin
+    let params = lighting::params(setup.tick, SIM_SEED);
+    let blend = params.ground_ambient.unwrap_or(params.ambient);
+    let pool = TerrainLightMaterials::new(
+        &mut images,
+        &mut materials,
+        Vec3::from(blend),
+        Vec3::from(params.ground_light),
+        setup.masks.as_deref().unwrap_or(&[]),
+    );
+    info!(
+        "spike: lighting tick {} · blend {:?} · light_color {:?} · {} materials",
+        setup.tick,
+        blend,
+        params.ground_light,
+        pool.len(),
+    );
+    commands.insert_resource(pool);
+}
+
+/// Spike: capture phases — settle the pipelines, save the night shot, show the
+/// lights overlay, save it, report and exit.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum CapturePhase {
+    #[default]
+    Settle,
+    NightShot,
+    OverlayOn,
+    OverlayShot,
+    Done,
+}
+
+/// How many frames the pipelines get to specialize the light material before
+/// the first screenshot.
+const SETTLE_FRAMES: u32 = 40;
+/// Camera zoom step while capturing: 1:1, a 114-px tile spans 114 screen px.
+const CAPTURE_ZOOM: usize = 3;
+/// Frames to wait for the overlay sprites to show after the visibility flips.
+const OVERLAY_FRAMES: u32 = 10;
+
+/// Spike: drives the capture — aims the camera at the lit tile, takes the two
+/// screenshots, logs the run's measurements and exits.
+///
+/// Runs after [`CameraApply`]: the zoom it picks must reach the projection
+/// before the shot, and the map must already be built. The lights overlay is
+/// enabled in state (its checkbox stays unchecked — the spike does not touch
+/// the widgets).
+#[allow(clippy::too_many_arguments)]
+fn spike_capture(
+    mut commands: Commands,
+    capture: Res<SpikeCapture>,
+    target: Res<SpikeTarget>,
+    pool: Res<TerrainLightMaterials>,
+    mut viewer: ResMut<Viewer>,
+    mut state: ResMut<CameraState>,
+    mut camera: Single<&mut Transform, With<MapCamera>>,
+    lit: Query<(), With<SpriteMaterial<TerrainLightMaterial>>>,
+    capturing: Query<(), With<Capturing>>,
+    time: Res<Time>,
+    mut phase: Local<CapturePhase>,
+    mut frames: Local<u32>,
+    // (seconds sum, frame count) over the whole run — the CPU frame-time report
+    mut frame_time: Local<(f32, u32)>,
+) {
+    frame_time.0 += time.delta_secs();
+    frame_time.1 += 1;
+    match *phase {
+        CapturePhase::Settle => {
+            if let Some(center) = target.0 {
+                camera.translation = Vec3::new(center.x, center.y, 0.0);
+            }
+            state.zoom = CAPTURE_ZOOM;
+            if *frames >= SETTLE_FRAMES {
+                *frames = 0;
+                *phase = CapturePhase::NightShot;
+                if let Some(path) = capture.material_path.clone() {
+                    commands
+                        .spawn(Screenshot::primary_window())
+                        .observe(save_to_disk(path));
+                }
+            }
+        }
+        CapturePhase::NightShot => {
+            if capturing.is_empty() && *frames > 1 {
+                viewer.set(Overlay::Lights, true);
+                *frames = 0;
+                *phase = CapturePhase::OverlayOn;
+            }
+        }
+        CapturePhase::OverlayOn => {
+            if *frames >= OVERLAY_FRAMES {
+                *frames = 0;
+                *phase = CapturePhase::OverlayShot;
+                if let Some(path) = capture.overlay_path.clone() {
+                    commands
+                        .spawn(Screenshot::primary_window())
+                        .observe(save_to_disk(path));
+                }
+            }
+        }
+        CapturePhase::OverlayShot => {
+            if capturing.is_empty() && *frames > 1 {
+                let (seconds, count) = *frame_time;
+                info!(
+                    "spike: avg frame time {:.2} ms over {} frames · terrain pieces {} · \
+                     sprites with the light material {} · materials {}",
+                    seconds * 1000.0 / count.max(1) as f32,
+                    count,
+                    capture.terrain_pieces,
+                    lit.iter().count(),
+                    pool.len(),
+                );
+                commands.write_message(AppExit::Success);
+                *phase = CapturePhase::Done;
+            }
+        }
+        CapturePhase::Done => {}
+    }
+    *frames += 1;
+}
+
 /// Per-creature id labels the viewer draws above the creatures. The creature
 /// nodes themselves belong to the shared subsystem: `kn_render` spawns and
 /// animates them, the viewer only puts its diagnostics on top (issue #70).
@@ -222,90 +406,136 @@ pub struct ViewerConfig {
     pub game_dir: PathBuf,
     pub maps: Vec<MapRef>,
     pub selected: usize,
+    /// Spike: tick for the night lighting uniforms; the lighting plugin's time
+    /// contract replaces this.
+    pub lighting_tick: Option<u64>,
+    /// Spike: capture the night-material screenshot to this path, the lights
+    /// overlay shot next to it, and exit.
+    pub screenshot: Option<PathBuf>,
 }
 
 /// The viewer window: runs until the user closes it.
 pub fn run_viewer(config: ViewerConfig) {
     let labels = map_labels(&config.maps);
     let selected = config.selected;
-
-    App::new()
-        .add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: format!("re-konung viewer — {}", config.game_dir.display()),
-                        resolution: (1280, 800).into(),
-                        ..default()
-                    }),
+    // Spike: the screenshot flag drives the capture; the overlay shot lands
+    // next to the requested path under its fixed spike name.
+    let capture = config.screenshot.as_ref().map(|path| SpikeCapture {
+        material_path: Some(path.clone()),
+        overlay_path: Some(
+            path.parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("spike-lights-overlay.png"),
+        ),
+        terrain_pieces: 0,
+    });
+    // Spike: LIGHTS.RES is read before the game moves into its resource
+    let masks = config.lighting_tick.map(|tick| SpikeLighting {
+        tick,
+        masks: spike_masks(&config.game),
+    });
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: format!("re-konung viewer — {}", config.game_dir.display()),
+                    resolution: (1280, 800).into(),
                     ..default()
-                })
-                // Пиксельная графика: без сглаживания при дробном масштабе
-                .set(ImagePlugin::default_nearest()),
+                }),
+                ..default()
+            })
+            // Пиксельная графика: без сглаживания при дробном масштабе
+            .set(ImagePlugin::default_nearest()),
+    )
+    .add_plugins((
+        FeathersPlugins,
+        MapCameraPlugin,
+        // Тик игры: на нём меняются кадры объектов, персонажей и огней
+        AnimPlugin::new(TICK_MS as f32),
+        // Составные спрайты существ, их клипы и синхронизация кадров: та же
+        // подсистема, что поднимает существ в проигрывателе (#70)
+        CreatureAnimationPlugin,
+        // Ночная подсветка земли: материал с маской LIGHTS.RES (spike)
+        TerrainLightMaterialPlugin,
+        FrameTimeDiagnosticsPlugin::default(),
+    ))
+    .insert_resource(dark_theme())
+    .insert_resource(GameResource(config.game))
+    .init_resource::<TextureCache>()
+    .init_resource::<ActiveRoot>()
+    .init_resource::<Stats>()
+    .init_resource::<CreatureLabels>()
+    .init_resource::<SpikeTarget>()
+    .insert_resource(Rebuild { map: true })
+    .insert_resource(Viewer {
+        maps: config.maps.clone(),
+        selected,
+        overlays: DEFAULT_OVERLAYS,
+        playback: DEFAULT_PLAYBACK,
+    })
+    .add_systems(Startup, move |world: &mut World| {
+        if let Err(error) = world.spawn_scene_list(panel_list(labels.clone(), selected)) {
+            error!("не собрался интерфейс: {error}");
+        }
+    })
+    .add_systems(Update, camera_control.in_set(CameraInput))
+    .add_systems(
+        Update,
+        (
+            playback_hotkeys,
+            apply_playback,
+            sync_playboxes,
+            rebuild_scene,
+            sync_groups,
+            sync_creature_visibility,
+            spawn_creature_labels,
+            diagnostics,
         )
-        .add_plugins((
-            FeathersPlugins,
-            MapCameraPlugin,
-            // Тик игры: на нём меняются кадры объектов, персонажей и огней
-            AnimPlugin::new(TICK_MS as f32),
-            // Составные спрайты существ, их клипы и синхронизация кадров: та же
-            // подсистема, что поднимает существ в проигрывателе (#70)
-            CreatureAnimationPlugin,
-            FrameTimeDiagnosticsPlugin::default(),
-        ))
-        .insert_resource(dark_theme())
-        .insert_resource(GameResource(config.game))
-        .init_resource::<TextureCache>()
-        .init_resource::<ActiveRoot>()
-        .init_resource::<Stats>()
-        .init_resource::<CreatureLabels>()
-        .insert_resource(Rebuild { map: true })
-        .insert_resource(Viewer {
-            maps: config.maps.clone(),
-            selected,
-            overlays: DEFAULT_OVERLAYS,
-            playback: DEFAULT_PLAYBACK,
-        })
-        .add_systems(Startup, move |world: &mut World| {
-            if let Err(error) = world.spawn_scene_list(panel_list(labels.clone(), selected)) {
-                error!("не собрался интерфейс: {error}");
-            }
-        })
-        .add_systems(Update, camera_control.in_set(CameraInput))
-        .add_systems(
-            Update,
-            (
-                playback_hotkeys,
-                apply_playback,
-                sync_playboxes,
-                rebuild_scene,
-                sync_groups,
-                sync_creature_visibility,
-                spawn_creature_labels,
-                diagnostics,
-            )
-                .chain()
-                // The frame's clock position must be settled before the simulation
-                // catches up to it and before the creature systems read it, and the
-                // map a rebuild asks for must be requested before the shared
-                // subsystem builds it — never left to the scheduler's placement of
-                // two unconstrained chains (review #68).
-                .after(AnimSet::Clock)
-                .after(CameraInput)
-                .before(CreatureSet::Prepare)
-                .before(CameraApply),
-        )
-        // The viewer's diagnostics on top of the shared pipeline: the id rides the
-        // body image, so it can only be placed once the subsystem has written the
-        // node and the frame's sprite offsets.
-        .add_systems(
-            Update,
-            sync_creature_labels
-                .after(CreatureSet::Swap)
-                .after(AnimSet::Sprites)
-                .after(CreatureSet::Nodes),
-        )
-        .run();
+            .chain()
+            // The frame's clock position must be settled before the simulation
+            // catches up to it and before the creature systems read it, and the
+            // map a rebuild asks for must be requested before the shared
+            // subsystem builds it — never left to the scheduler's placement of
+            // two unconstrained chains (review #68).
+            .after(AnimSet::Clock)
+            .after(CameraInput)
+            .before(CreatureSet::Prepare)
+            .before(CameraApply),
+    )
+    // The viewer's diagnostics on top of the shared pipeline: the id rides the
+    // body image, so it can only be placed once the subsystem has written the
+    // node and the frame's sprite offsets.
+    .add_systems(
+        Update,
+        sync_creature_labels
+            .after(CreatureSet::Swap)
+            .after(AnimSet::Sprites)
+            .after(CreatureSet::Nodes),
+    )
+    // Spike: the lighting pool and the capture controller, only with the
+    // CLI flags set. The capture also requires the pool, so `--screenshot`
+    // without `--light-tick` just opens the viewer as usual. The controller
+    // runs after the camera write-out so the zoom it picks reaches the
+    // projection on the next frame's apply.
+    .add_systems(
+        Startup,
+        setup_lighting.run_if(resource_exists::<SpikeLighting>),
+    )
+    .add_systems(
+        Update,
+        spike_capture
+            .run_if(resource_exists::<SpikeCapture>)
+            .run_if(resource_exists::<TerrainLightMaterials>)
+            .after(CameraApply),
+    );
+    if let Some(setup) = masks {
+        app.insert_resource(setup);
+    }
+    if let Some(capture) = capture {
+        app.insert_resource(capture);
+    }
+    app.run();
 }
 
 /// Camera-control binding: applies the kn-input mechanisms to this app's camera.
@@ -544,6 +774,7 @@ fn rebuild_scene(
     game: Res<GameResource>,
     mut cache: ResMut<TextureCache>,
     mut images: ResMut<Assets<Image>>,
+    lighting: Option<Res<TerrainLightMaterials>>,
     mut commands: Commands,
     mut active: ResMut<ActiveRoot>,
     mut stats: ResMut<Stats>,
@@ -551,6 +782,8 @@ fn rebuild_scene(
     mut labels: ResMut<CreatureLabels>,
     mut motion: ResMut<CreatureMotion>,
     mut visible: ResMut<CreatureNodesVisible>,
+    target: Option<ResMut<SpikeTarget>>,
+    capture: Option<ResMut<SpikeCapture>>,
 ) {
     if !rebuild.map {
         return;
@@ -574,6 +807,7 @@ fn rebuild_scene(
         shown(&viewer.options()),
         &mut cache,
         &mut images,
+        lighting.as_deref(),
         &mut commands,
         &mut pending,
     ) {
@@ -583,6 +817,34 @@ fn rebuild_scene(
             return;
         }
     };
+    // spike: aim the capture camera at the first lit terrain tile and count
+    // the terrain pieces for the exit report
+    if let (Some(mut capture), Some(mut target)) = (capture, target)
+        && capture.material_path.is_some()
+    {
+        capture.terrain_pieces = scene
+            .pieces
+            .iter()
+            .filter(|piece| piece.group == PieceGroup::Terrain && piece.creature_id.is_none())
+            .count();
+        let lit = scene.pieces.iter().find(|piece| {
+            piece.group == PieceGroup::Terrain
+                && piece.light_mask_index.is_some()
+                && piece.creature_id.is_none()
+        });
+        if let Some(piece) = lit {
+            let size = piece
+                .texture
+                .as_ref()
+                .and_then(|id| cache.get(id))
+                .map_or(UVec2::ZERO, |entry| entry.size);
+            let size = piece_size(piece, size);
+            let center = piece_center(piece.x as f32, piece.y as f32, size.x, size.y);
+            target.0 = Some(center);
+            // The whole-map framing stays in bounds; only the center moves
+            pending.center = Some(center);
+        }
+    }
     for problem in &loaded.problems {
         warn!("карта {map_ref:?}: {problem}");
     }

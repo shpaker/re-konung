@@ -10,6 +10,10 @@ kn-game = { path = "../../../game/kn-game" }
 kn-render = { path = "../render" }
 kn-input = { path = "../input" }
 kn-ui = { path = "../ui" }
+# Spike: the CLI-driven night lighting reads LIGHTS.RES and the lighting
+# params from the K1 layer; the lighting plugin will own both
+k1-data = { path = "../../../game/k1/k1-data" }
+k1-game = { path = "../../../game/k1/k1-game" }
 bevy = { workspace = true, features = ["bevy_feathers"] }
 
 [features]
