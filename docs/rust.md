@@ -739,7 +739,24 @@ per frame, the same pattern the creature display subsystem already pays (the
 viewer's label systems read `states()` per frame too). At dozens of
 creatures the allocation is plausibly noise next to the 2 ms the materials
 add, but that is an eyeball, not a measurement; it goes through the profiler
-before anyone optimizes it.
+before anyone optimizes it. (The per-frame map allocation itself is gone
+since: `update_creature_lighting` reuses a `Local<HashMap>`.)
+
+**Scrub catch-up cost.** Releasing the time slider walks the simulation to
+the clock in one frame — forward by plain ticks, backward by the deterministic
+seed replay. Measured by `benchmark_scrub_catchup_cost` in `kn-fe-viewer`
+(`#[ignore]`, release, needs `original/`) on the busiest simulation of the
+rus edition — map 36 with 65 creatures — as the whole release frame
+(`app.update()` around the settle), three fresh runs per jump:
+
+| Jump | avg settle frame |
+|---|---|
+| 0 → 18960 (forward, 18 960 ticks) | 54–76 ms (worst of six runs 75.8) |
+| 18960 → 900 (backward, seed replay of 900) | 44–48 ms |
+
+Both sit below a tenth of a second, so a release is one dropped frame at
+worst, and the backward replay branch is consistently the cheaper one; no
+optimization is warranted until the frame-time gate (#98) says otherwise.
 
 ### Open questions
 

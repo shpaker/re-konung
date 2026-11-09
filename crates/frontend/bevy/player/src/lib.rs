@@ -19,7 +19,7 @@ use kn_render::{
     AnimPlugin, CameraInput, CameraState, CreatureAnimationPlugin, CreatureMotion, CreatureSim,
     FineLightGrid, GameResource, KonungLightMaterial, KonungLightingPlugin, LightingMaterials,
     LightingState, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, TextureCache, load_scene,
-    ortho_scale,
+    ortho_scale, update_lighting_uniforms,
 };
 use kn_ui::pointer_over_ui;
 
@@ -66,7 +66,13 @@ pub fn run_player(config: PlayerConfig) {
         .add_systems(Startup, load_start_map)
         .add_systems(
             Update,
-            (camera_control.in_set(CameraInput), update_lighting_state),
+            (
+                camera_control.in_set(CameraInput),
+                // The state is written before the plugin's uniform writer
+                // reads it, or a day change reaches the GPU a frame late
+                // (review #106).
+                update_lighting_state.before(update_lighting_uniforms),
+            ),
         )
         .run();
 }
@@ -155,13 +161,36 @@ fn load_start_map(
 /// The LIGHTS.RES tile masks of the opened game: raw brightness bytes with
 /// their pixel size, ready for [`LightingMaterials::new`]. A game without a
 /// readable LIGHTS.RES gets an empty pool — the scene still lights, the tiles
-/// just carry no tile mask.
+/// just carry no tile mask. Every way the file can fail warns with its path
+/// and reason: an empty pool reached silently reads as a broken night scene
+/// (review #106).
 fn lights_res_masks(game: &Game) -> Vec<(Vec<u8>, u32, u32)> {
     let Some(path) = k1_game::resources::find_named(game.root(), "lights.res") else {
+        warn!(
+            "LIGHTS.RES not found in {}; the scene lights without tile masks",
+            game.root().display()
+        );
         return Vec::new();
     };
-    let Ok(res) = k1_data::lights_res::parse(&std::fs::read(path).unwrap_or_default()) else {
-        return Vec::new();
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            warn!(
+                "LIGHTS.RES unreadable at {}: {error}; the scene lights without tile masks",
+                path.display()
+            );
+            return Vec::new();
+        }
+    };
+    let res = match k1_data::lights_res::parse(&bytes) {
+        Ok(res) => res,
+        Err(error) => {
+            warn!(
+                "LIGHTS.RES unparsable at {}: {error}; the scene lights without tile masks",
+                path.display()
+            );
+            return Vec::new();
+        }
     };
     res.tiles
         .into_iter()

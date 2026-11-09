@@ -346,6 +346,9 @@ pub fn update_creature_lighting(
     sim: Option<Res<CreatureSim>>,
     grid: Option<Res<FineLightGrid>>,
     pool: Option<Res<LightingMaterials>>,
+    // Reused across frames: the map is cleared and rebuilt from the same
+    // simulation every frame, so keeping the allocation beats paying it again.
+    mut dark: Local<HashMap<usize, bool>>,
     sprites: Query<(
         Entity,
         &CreatureSprite,
@@ -359,11 +362,13 @@ pub fn update_creature_lighting(
         return;
     };
     // Dark per creature id: one lookup per sprite instead of one per cell read.
-    let dark: HashMap<usize, bool> = simulation
-        .states()
-        .iter()
-        .map(|state| (state.id, grid.value(state.cell) == 0))
-        .collect();
+    dark.clear();
+    dark.extend(
+        simulation
+            .states()
+            .iter()
+            .map(|state| (state.id, grid.value(state.cell) == 0)),
+    );
     for (entity, tag, has_material) in &sprites {
         if tag.is_shadow {
             continue;
