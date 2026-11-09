@@ -797,9 +797,8 @@ fn object_pieces(
     {
         main.depth_bottom = Some(bottom);
     }
-    // Count active flame slots for self-lit detection: 2+ flames → skip ambient fade.
-    let flame_count = simple.flames.iter().filter(|f| f.flame_id >= 0).count();
-    if flame_count >= 2 {
+    // Self-lit goes by the flame list size, not by active slots (game.cpp:1573).
+    if simple.flames.len() >= 2 {
         for piece in stack.iter_mut() {
             piece.self_lit = true;
         }
@@ -973,13 +972,11 @@ fn light_pieces(input: &SceneInput<'_>, pieces: &mut Vec<DrawPiece>) {
     let Some(lights) = input.lights else { return };
     for (row, values) in lights.tiles.iter().enumerate() {
         for (column, &value) in values.iter().enumerate() {
-            if value != 0 {
+            if let Some(index) = tile_light_mask_index(value) {
                 let (x, y) = map::tile_position(column, row);
                 pieces.push(DrawPiece::textured(
                     PieceGroup::Lights,
-                    TextureKey::LightMask {
-                        index: (value - 1) as usize,
-                    },
+                    TextureKey::LightMask { index },
                     x,
                     y,
                 ));
@@ -1401,66 +1398,33 @@ mod tests {
     }
 
     #[test]
-    fn self_lit_counts_active_flames_not_slots() {
-        // An object with flame_id >= 0 is active; negative (i8 < 0) means empty slot.
-        // Two or more active flames → self_lit.
-        let active: Vec<k1_data::objects_res::Flame> = vec![
+    fn self_lit_follows_the_flame_list_size() {
+        // The original gates the fade on Flames.size() >= 2 (game.cpp:1573):
+        // the list length decides, whether the slots hold an active flame does not.
+        // Two inactive slots (flame_id < 0) still make the list two entries long:
+        // a slot-counting reading would say "not self-lit", the list says the opposite.
+        let two_empty: Vec<k1_data::objects_res::Flame> = vec![
             k1_data::objects_res::Flame {
                 flame_id: -1,
                 x: 0,
                 y: 0,
-            }, // empty
+            },
             k1_data::objects_res::Flame {
                 flame_id: -1,
                 x: 0,
                 y: 0,
-            }, // empty
-            k1_data::objects_res::Flame {
-                flame_id: 3,
-                x: 10,
-                y: 5,
-            }, // active
-            k1_data::objects_res::Flame {
-                flame_id: 5,
-                x: 20,
-                y: 10,
-            }, // active
-            k1_data::objects_res::Flame {
-                flame_id: -1,
-                x: 0,
-                y: 0,
-            }, // empty
+            },
         ];
-        assert_eq!(active.iter().filter(|f| f.flame_id >= 0).count(), 2);
+        assert_eq!(two_empty.iter().filter(|f| f.flame_id >= 0).count(), 0);
+        assert!(two_empty.len() >= 2);
 
-        // One active flame → not self-lit.
-        let one: Vec<_> = vec![
-            k1_data::objects_res::Flame {
-                flame_id: 3,
-                x: 0,
-                y: 0,
-            },
-            k1_data::objects_res::Flame {
-                flame_id: -1,
-                x: 0,
-                y: 0,
-            },
-        ];
-        assert_eq!(one.iter().filter(|f| f.flame_id >= 0).count(), 1);
-
-        // Zero active flames → not self-lit.
-        let zero: Vec<_> = vec![
-            k1_data::objects_res::Flame {
-                flame_id: -1,
-                x: 0,
-                y: 0,
-            },
-            k1_data::objects_res::Flame {
-                flame_id: -1,
-                x: 0,
-                y: 0,
-            },
-        ];
-        assert_eq!(zero.iter().filter(|f| f.flame_id >= 0).count(), 0);
+        // A single entry is not self-lit even when its slot is active.
+        let one_active: Vec<_> = vec![k1_data::objects_res::Flame {
+            flame_id: 5,
+            x: 0,
+            y: 0,
+        }];
+        assert_eq!(one_active.iter().filter(|f| f.flame_id >= 0).count(), 1);
+        assert!(one_active.len() < 2);
     }
 }

@@ -367,6 +367,39 @@ fn flames_res_is_parsed_to_the_last_byte() {
 }
 
 #[test]
+fn objects_with_a_two_entry_flame_list_always_have_two_active_slots() {
+    // The fade gate reads Flames.size() >= 2 (game.cpp:1573), not the count of
+    // active slots. Today no stored slot is inactive (flame_id < 0), so the two
+    // readings agree; this check pins that, so a future data sample cannot flip
+    // the self-lit semantics unnoticed.
+    for (edition, game) in game_dirs() {
+        let data = fs::read(find_name(&game, "objects.res")).unwrap();
+        let objects = objects_res::parse(&data).unwrap();
+        let multi: Vec<&objects_res::SimpleObject> = objects
+            .simple
+            .iter()
+            .flatten()
+            .filter(|object| object.flames.len() >= 2)
+            .collect();
+        assert_eq!(multi.len(), 74, "{edition}: flame lists of two or more");
+        for object in multi {
+            let active = object
+                .flames
+                .iter()
+                .filter(|flame| flame.flame_id >= 0)
+                .count();
+            assert!(
+                active >= 2,
+                "{edition}: object {} holds {} flames, {} active",
+                object.object_id,
+                object.flames.len(),
+                active
+            );
+        }
+    }
+}
+
+#[test]
 fn lights_res_masks_fill_the_file() {
     for (edition, game) in game_dirs() {
         let data = fs::read(find_name(&game, "lights.res")).unwrap();

@@ -100,12 +100,14 @@ pub fn channels(cycle_tick: u64, night: NightPalette) -> [f32; 3] {
 /// - `blend` is the ambient blend (`cBlend`), negative for darken, positive for
 ///   lighten toward white.
 ///
-/// Negative blend: multiply-darken, partially cancelled by tile-light brightness.
-/// If `lightning >= 0.01`, first `base += (1.0 - base) * light_color` (light adds
-/// toward white), then `base *= 1.0 + clamp(blend + lightning, -1.0, 0.0)`
-/// (multiply darkens).
+/// Negative blend: the multiply always carries lightning —
+/// `base *= 1.0 + clamp(blend + lightning, -1.0, 0.0)` (gfx.cpp:66) — while the
+/// additive step toward white runs only when `lightning >= 0.01`
+/// (`base += (1.0 - base) * light_color`, gfx.cpp:64-65); below the threshold the
+/// multiplier still shifts by `lightning`.
 /// Non-negative blend: blend toward white — `base += (1.0 - base) * blend`.
-/// Blue channel never gets the light term — only the blend operation.
+/// Blue channel never gets the light term, and its negative multiply is unclamped:
+/// `base *= 1.0 + blend` (gfx.cpp:81).
 ///
 /// Alpha is never touched here; the caller sets alpha on the sprite itself.
 pub fn apply_channel(
@@ -116,19 +118,19 @@ pub fn apply_channel(
     is_blue: bool,
 ) -> f32 {
     if is_blue {
-        // Blue never cancels darken with the tile-light source.
+        // Blue never gets the light term, and the reference multiplies it raw.
         if blend < 0.0 {
-            base * (1.0 + blend.max(-1.0))
+            base * (1.0 + blend)
         } else {
             base + (1.0 - base) * blend
         }
     } else if blend < 0.0 {
-        if lightning >= 0.01 {
-            let lit = base + (1.0 - base) * light_color;
-            lit * (1.0 + (blend + lightning).clamp(-1.0, 0.0))
+        let lit = if lightning >= 0.01 {
+            base + (1.0 - base) * light_color
         } else {
-            base * (1.0 + blend.max(-1.0))
-        }
+            base
+        };
+        lit * (1.0 + (blend + lightning).clamp(-1.0, 0.0))
     } else {
         base + (1.0 - base) * blend
     }
@@ -293,10 +295,11 @@ mod tests {
         let expected = 0.62 * 0.8;
         assert!((result - expected).abs() < 1e-6, "{result} ~= {expected}");
 
-        // Low lightning with high light_color → no white-add because lightning < 0.01.
-        //   result = 0.6 * (1 + clamp(-0.7, -1, 0)) = 0.18
+        // Low lightning with high light_color → no white-add because lightning < 0.01,
+        // but lightning still shifts the multiply:
+        //   result = 0.6 * (1 + clamp(-0.7 + 0.005, -1, 0)) = 0.6 * 0.305 = 0.183
         let result2 = apply_channel(0.6, -0.7, 0.005, 0.5, false);
-        let expected2 = 0.18;
+        let expected2 = 0.183;
         assert!(
             (result2 - expected2).abs() < 1e-6,
             "{result2} ~= {expected2}"
@@ -304,12 +307,23 @@ mod tests {
     }
 
     #[test]
-    fn apply_channel_light_below_threshold_does_not_add() {
-        // lightning = 0.009 → below 0.01, so light term is skipped entirely regardless of light_color.
-        // Should equal plain multiply-darken: 0.6 * (1 + clamp(-0.7, -1, 0)) = 0.18
+    fn apply_channel_light_below_threshold_has_no_add_but_multiplies() {
+        // lightning = 0.009 is below the 0.01 gate: no additive step toward white,
+        // yet lightning still enters the multiply (gfx.cpp:66 is unconditional).
+        // 0.6 * (1 + clamp(-0.7 + 0.009, -1, 0)) = 0.6 * (1 - 0.691) = 0.1854
         let result = apply_channel(0.6, -0.7, 0.009, 0.5, false);
-        let expected = 0.18;
-        assert!((result - expected).abs() < 1e-6);
+        let expected = 0.1854;
+        assert!((result - expected).abs() < 1e-6, "{result} ~= {expected}");
+    }
+
+    #[test]
+    fn apply_channel_blue_negative_blend_has_no_clamp() {
+        // The reference multiplies blue raw, without the -1 clamp (gfx.cpp:81).
+        // blend = -1.5 is outside real data but pins the formula:
+        // 0.6 * (1 + (-1.5)) = -0.3, while a clamp would give 0.0.
+        let result = apply_channel(0.6, -1.5, 0.0, 0.0, true);
+        let expected = -0.3;
+        assert!((result - expected).abs() < 1e-6, "{result} ~= {expected}");
     }
 
     #[test]
