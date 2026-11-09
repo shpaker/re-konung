@@ -16,7 +16,8 @@ use bevy::{
     feathers::{
         FeathersPlugins,
         controls::{
-            FeathersButton, FeathersCheckbox, FeathersSelect, OptionIndex, list_rows_from_strings,
+            FeathersButton, FeathersCheckbox, FeathersSelect, FeathersSlider, OptionIndex,
+            list_rows_from_strings,
         },
         display::caption,
         theme::ThemeBackgroundColor,
@@ -27,14 +28,14 @@ use bevy::{
     prelude::*,
     render::view::screenshot::{Capturing, Screenshot, save_to_disk},
     sprite_render::SpriteMaterial,
-    ui::Checked,
-    ui_widgets::{Activate, ValueChange},
+    ui::{Checked, Pressed},
+    ui_widgets::{Activate, SliderStep, SliderValue, ValueChange},
 };
 use k1_data::lights_res;
 use k1_data::map;
 use k1_data::repo::{GAME_FILES, GameDir, TUTORIAL_FILES};
 use k1_game::lighting;
-use kn_game::simulation::Simulation;
+use k1_game::time_of_day::CYCLE_TICKS;
 use kn_game::{
     DayPhase, Game, MapRef, MapSource, Piece, PieceGroup, SceneOptions, TICK_MS, group_is_shown,
 };
@@ -173,7 +174,7 @@ const SIM_SEED: u64 = 42;
 
 /// The lighting inputs of the opened game: the LIGHTS.RES tile masks the pool
 /// is built from at startup, and optionally the tick the lighting is pinned to
-/// (`--light-tick`) instead of following the simulation tick each frame.
+/// (`--light-tick`) instead of following the scene clock each frame.
 #[derive(Resource)]
 struct LightingSetup {
     tick: Option<u64>,
@@ -230,23 +231,19 @@ fn lighting_state(params: lighting::LightingParams) -> LightingState {
     }
 }
 
-/// Writes the lighting state for the simulation's current tick — or for the
-/// tick pinned by `--light-tick`, which holds a night scene up for screenshots
-/// and inspection. Writes only on change: a rewritten state re-extracts the
+/// Writes the lighting state for the scene clock — the single time source the
+/// scrub moves and the simulation is caught up to — or for the tick pinned by
+/// `--light-tick`, which holds a night scene up for screenshots and
+/// inspection. Writes only on change: a rewritten state re-extracts the
 /// uniforms for the GPU, and the day cycle shifts a few times a minute.
 fn update_lighting_state(
     setup: Option<Res<LightingSetup>>,
-    sim: Res<CreatureSim>,
+    clock: Res<Clock>,
     mut state: ResMut<LightingState>,
 ) {
     let tick = match setup.and_then(|setup| setup.tick) {
         Some(tick) => tick,
-        None => {
-            let Some(ref simulation) = sim.sim else {
-                return;
-            };
-            simulation.tick_number()
-        }
+        None => clock.ticks,
     };
     let next = lighting_state(lighting::params(tick, SIM_SEED));
     if *state != next {
@@ -270,6 +267,185 @@ fn setup_lighting(
         setup.masks.len(),
     );
     commands.insert_resource(pool);
+}
+
+// --- Time-of-day scrub -----------------------------------------------------
+
+/// Marker of the cycle-position slider: [`change_scrub`] tells this very
+/// slider's value changes from the other widgets'.
+#[derive(Component, Clone, Copy, Default)]
+struct ScrubSlider;
+
+/// A time-of-day preset button carrying its cycle position
+/// (`docs/k1/time-of-day.md`, "Camera presets" — places to stand in the cycle,
+/// not boundaries). `Default` exists for the template macro; every button in
+/// the panel names its own tick.
+#[derive(Component, Clone, Copy, Default)]
+struct ScrubPreset(u64);
+
+/// One scrub session: the slider drives the Clock while the simulation waits.
+///
+/// The Clock is the single time source; the widget writes nothing itself —
+/// like the `Play` checkbox, its thumb is mirrored from the state by
+/// [`sync_scrub_slider`] whenever no drag is in progress.
+#[derive(Resource, Default)]
+struct ScrubState {
+    /// The session is open: the slider is pressed, a preset fired, or a value
+    /// change is still unapplied. While it stands, the thumb mirror is held
+    /// off and the simulation stays where it is.
+    active: bool,
+    /// The absolute day (`ticks / CYCLE_TICKS`) captured once at the session's
+    /// start: a scrub moves the cycle position only, so the night palette —
+    /// `night_palette(day, seed)` over the absolute day — stays the day's.
+    day: u64,
+    /// The cycle position the widget asked for, `0..CYCLE_TICKS`.
+    target: u64,
+    /// `target` has not reached the Clock yet.
+    pending: bool,
+    /// The interaction is over (drag released, keyboard step, preset): apply
+    /// the last target and let the simulation catch up to the Clock.
+    release: bool,
+    /// The Clock moved during the session: a bare click on the track changes
+    /// nothing and must not settle the simulation.
+    moved: bool,
+}
+
+/// The cycle position a slider value names: whole ticks inside `0..CYCLE_TICKS`.
+fn scrub_position(value: f32) -> u64 {
+    value.round().clamp(0.0, (CYCLE_TICKS - 1) as f32) as u64
+}
+
+/// The slider's value change: it moves the Clock at once while the simulation
+/// stays where it is; the release (`is_final`) settles both. The day is
+/// captured at the session's start — the slider writes
+/// `day * CYCLE_TICKS + target`, never the day itself.
+fn change_scrub(
+    change: On<ValueChange<f32>>,
+    sliders: Query<&ScrubSlider>,
+    clock: Res<Clock>,
+    mut scrub: ResMut<ScrubState>,
+    mut commands: Commands,
+) {
+    if sliders.get(change.source).is_err() {
+        return;
+    }
+    if !scrub.active {
+        scrub.active = true;
+        scrub.day = clock.ticks / CYCLE_TICKS;
+    }
+    let position = scrub_position(change.value);
+    scrub.target = position;
+    scrub.pending = true;
+    if change.is_final {
+        // A keyboard step is a jump, not a drag: one change, settled at once.
+        scrub.release = true;
+    }
+    // The thumb and its label follow the pointer like a checkbox's tick
+    // follows the click ([kn_ui::sync_checked]): the value is the widget's own
+    // view state; the real one is the Clock, and [apply_scrub] moves that.
+    commands
+        .entity(change.source)
+        .insert(SliderValue(position as f32));
+}
+
+/// A preset button: the jump the slider makes without a drag — applied and
+/// settled right away.
+fn jump_to_preset(
+    activate: On<Activate>,
+    presets: Query<&ScrubPreset>,
+    clock: Res<Clock>,
+    mut scrub: ResMut<ScrubState>,
+) {
+    let Ok(preset) = presets.get(activate.entity) else {
+        return;
+    };
+    if !scrub.active {
+        scrub.active = true;
+        scrub.day = clock.ticks / CYCLE_TICKS;
+    }
+    scrub.target = preset.0;
+    scrub.pending = true;
+    scrub.release = true;
+}
+
+/// Applies the scrub session to the single time source and decides when the
+/// simulation may follow.
+///
+/// While the slider is held, every value change moves the Clock at once and
+/// the simulation is pinned where it stands (`epoch = clock.ticks,
+/// sim_ticks = 0` leaves the shared catch-up nothing to chase) — so a drag
+/// lights the scrubbed tick without replaying any movement. On release the
+/// hold is lifted by re-basing the epoch at zero, which is the whole settle:
+/// the next pass of `advance_creature_sim` walks the simulation to the Clock —
+/// forward by plain catch-up, backward by its own seed replay — and the
+/// creatures land exactly on the scrubbed tick. `reset_creature_positions`
+/// would teleport them home instead (its tested purpose), and nothing else can
+/// satisfy `tick_number == clock.ticks`.
+fn apply_scrub(
+    slider: Option<Single<Has<Pressed>, With<ScrubSlider>>>,
+    mut scrub: ResMut<ScrubState>,
+    mut clock: ResMut<Clock>,
+    mut sim: ResMut<CreatureSim>,
+) {
+    let pressed = slider.is_some_and(|slider| *slider);
+    if pressed && !scrub.active {
+        scrub.active = true;
+        scrub.day = clock.ticks / CYCLE_TICKS;
+    }
+    // The pointer left the slider without a final value change (cancel): the
+    // session is over all the same.
+    if scrub.active && !pressed && !scrub.release {
+        scrub.release = true;
+    }
+    if scrub.pending {
+        clock.ticks = scrub.day * CYCLE_TICKS + scrub.target;
+        // A scrub is a discrete jump: the partial tick of the old position
+        // means nothing about the new one.
+        clock.sub_tick = 0.0;
+        scrub.moved = true;
+        scrub.pending = false;
+    }
+    if !scrub.active {
+        return;
+    }
+    if !scrub.release {
+        sim.epoch = clock.ticks;
+        sim.sim_ticks = 0;
+        return;
+    }
+    if scrub.moved
+        && let Some(ticks) = sim.sim.as_ref().map(|simulation| simulation.tick_number())
+    {
+        sim.epoch = 0;
+        sim.sim_ticks = ticks;
+    }
+    *scrub = ScrubState::default();
+}
+
+/// Mirrors the Clock into the slider whenever no drag is in progress — the
+/// same direction as [sync_playboxes]: while the simulation plays, the thumb
+/// rides the cycle position (`clock.ticks % CYCLE_TICKS`) and the day line of
+/// the diagnostics moves with it; the widget never writes the state itself
+/// outside its own interaction.
+fn sync_scrub_slider(
+    mut commands: Commands,
+    scrub: Res<ScrubState>,
+    clock: Res<Clock>,
+    sliders: Query<(Entity, &SliderValue), With<ScrubSlider>>,
+) {
+    if scrub.active {
+        return;
+    }
+    let want = (clock.ticks % CYCLE_TICKS) as f32;
+    for (entity, value) in &sliders {
+        if value.0 != want {
+            // A new component, not a field write: `SliderValue` is immutable,
+            // and the widget docs name insertion as the way to set it.
+            // Written only on change — a rewritten value re-renders the
+            // widget's bar and label for nothing.
+            commands.entity(entity).insert(SliderValue(want));
+        }
+    }
 }
 
 /// Where the capture camera aims — the first lit terrain piece of the current
@@ -425,7 +601,7 @@ pub struct ViewerConfig {
     pub maps: Vec<MapRef>,
     pub selected: usize,
     /// Tick the lighting is pinned to (`--light-tick`); without it the lighting
-    /// follows the simulation tick every frame.
+    /// follows the scene clock every frame.
     pub lighting_tick: Option<u64>,
     /// Capture a screenshot to this path and exit.
     pub screenshot: Option<PathBuf>,
@@ -481,6 +657,7 @@ pub fn run_viewer(config: ViewerConfig) {
     .init_resource::<Stats>()
     .init_resource::<CreatureLabels>()
     .init_resource::<CaptureTarget>()
+    .init_resource::<ScrubState>()
     .insert_resource(Rebuild { map: true })
     .insert_resource(Viewer {
         maps: config.maps.clone(),
@@ -500,6 +677,9 @@ pub fn run_viewer(config: ViewerConfig) {
             playback_hotkeys,
             apply_playback,
             sync_playboxes,
+            apply_scrub,
+            sync_scrub_slider,
+            update_lighting_state,
             rebuild_scene,
             sync_groups,
             sync_creature_visibility,
@@ -507,11 +687,12 @@ pub fn run_viewer(config: ViewerConfig) {
             diagnostics,
         )
             .chain()
-            // The frame's clock position must be settled before the simulation
-            // catches up to it and before the creature systems read it, and the
-            // map a rebuild asks for must be requested before the shared
-            // subsystem builds it — never left to the scheduler's placement of
-            // two unconstrained chains (review #68).
+            // The frame's clock position must be settled — by the scrub as by
+            // anything else — before the lighting reads it, before the
+            // simulation catches up to it and before the creature systems read
+            // it, and the map a rebuild asks for must be requested before the
+            // shared subsystem builds it — never left to the scheduler's
+            // placement of two unconstrained chains (review #68).
             .after(AnimSet::Clock)
             .after(CameraInput)
             .before(CreatureSet::Prepare)
@@ -527,12 +708,11 @@ pub fn run_viewer(config: ViewerConfig) {
             .after(AnimSet::Sprites)
             .after(CreatureSet::Nodes),
     )
-    // The lighting pool at startup, the per-frame state after the clock and
-    // the capture controller, only with the CLI flag set. The controller runs
-    // after the camera write-out so the zoom it picks reaches the projection
-    // on the next frame's apply.
+    // The lighting pool at startup; the per-frame state runs in the chained
+    // systems above, after the scrub has settled the clock. The capture
+    // controller runs after the camera write-out so the zoom it picks reaches
+    // the projection on the next frame's apply.
     .add_systems(Startup, setup_lighting)
-    .add_systems(Update, update_lighting_state)
     .add_systems(
         Update,
         capture
@@ -668,6 +848,54 @@ fn panel(labels: Vec<String>, selected: usize) -> impl Scene {
             }
             ResetAnimation
             on(reset_animation)
+            --
+            @caption("Time of day")
+            --
+            @FeathersSlider {
+                @min: 0.0,
+                @max: {(CYCLE_TICKS - 1) as f32},
+            }
+            // Keyboard and track steps of one displayed minute; the drag itself
+            // rounds to whole ticks (`SliderPrecision` defaults to 0)
+            SliderStep(15.0)
+            ScrubSlider
+            on(change_scrub)
+            --
+            Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: px(6.0),
+            }
+            Children[
+                @FeathersButton {
+                    @caption: bsn! { @caption("Light 07:00") }
+                }
+                ScrubPreset(900)
+                on(jump_to_preset)
+                --
+                @FeathersButton {
+                    @caption: bsn! { @caption("Warm 09:00") }
+                }
+                ScrubPreset(2700)
+                on(jump_to_preset)
+            ]
+            --
+            Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: px(6.0),
+            }
+            Children[
+                @FeathersButton {
+                    @caption: bsn! { @caption("Ground 18:13") }
+                }
+                ScrubPreset(11000)
+                on(jump_to_preset)
+                --
+                @FeathersButton {
+                    @caption: bsn! { @caption("Ramp 03:04") }
+                }
+                ScrubPreset(18960)
+                on(jump_to_preset)
+            ]
             --
             @caption("") Diagnostics
         ]
@@ -1274,17 +1502,19 @@ fn playback_label(playback: PlayState) -> &'static str {
 
 /// The game-time readout: clock face, phase, day index and progress through the cycle.
 ///
-/// Every part of it is a function of the simulation's own tick, so the panel cannot
-/// disagree with the simulation — there is no clock, counter or timer of its own.
-/// With no simulation nothing is shown: a map whose simulation failed to build must
-/// not display a zero clock. The four phase words are our reading of the cycle, not
-/// a property of the original; the derivation and the 06:00 offset are recorded in
-/// `docs/k1/time-of-day.md`.
-fn game_time_line(sim: Option<&Simulation>) -> String {
-    let Some(simulation) = sim else {
+/// Every part of it is a function of the scene clock's tick — the single time
+/// source the lighting follows and the simulation is caught up to on a scrub
+/// release — so the panel cannot disagree with the picture. The simulation's
+/// own tick is not read here: mid-drag it lags the clock by design. `None`
+/// (a map whose simulation failed to build) shows nothing: a clock of its own
+/// would read 06:00 over a frozen scene and look like a running day. The four
+/// phase words are our reading of the cycle, not a property of the original;
+/// the derivation and the 06:00 offset are recorded in `docs/k1/time-of-day.md`.
+fn game_time_line(tick: Option<u64>) -> String {
+    let Some(tick) = tick else {
         return String::new();
     };
-    let time = simulation.game_time();
+    let time = k1_game::time_of_day::game_time(tick);
     format!(
         "\nclock {:02}:{:02} · {} · day {} of the cycle · {}%",
         time.clock_hour,
@@ -1366,7 +1596,9 @@ fn diagnostics(
                     playback_label(viewer.playback),
                 )
             };
-            let time = game_time_line(sim.sim.as_ref());
+            // The readout follows the Clock; the simulation's presence only
+            // gates it ([game_time_line]).
+            let time = game_time_line(sim.sim.is_some().then_some(clock.ticks));
             format!(
                 "{} {} · {pieces} · {} textures · {} ms{problems}{sim_error}{creatures}\nzoom ×{} · {} fps{playback}{time}",
                 match map.source {
@@ -2289,23 +2521,20 @@ mod tests {
             .game_time()
     }
 
-    /// The readout is the model's answer for the simulation's own tick: 317 ticks
-    /// are window 1 of `docs/k1/time-of-day.md` — neutral ambient, no ground
-    /// light, 21 minutes past the 06:00 our clock face starts the cycle at.
+    /// The readout is the model's answer for the scene clock's tick — the single
+    /// time source — so day and position always agree with the lighting and the
+    /// scrubbed thumb: 317 ticks are window 1 of `docs/k1/time-of-day.md` —
+    /// neutral ambient, no ground light, 21 minutes past the 06:00 our clock
+    /// face starts the cycle at; a full day on the clock shows as day 1.
     #[test]
-    fn the_time_line_reads_the_simulation_tick() {
-        let Some((dir, map_ref)) = game_and_first_map() else {
-            return;
-        };
-        let game = Game::open(&dir).unwrap();
-        let mut simulation = game.simulation(map_ref, SIM_SEED).unwrap();
-        for _ in 0..317 {
-            simulation.tick();
-        }
-        assert_eq!(simulation.game_time().cycle_tick, 317);
+    fn the_time_line_reads_the_clock_tick() {
         assert_eq!(
-            game_time_line(Some(&simulation)),
+            game_time_line(Some(317)),
             "\nclock 06:21 · day · day 0 of the cycle · 1%"
+        );
+        assert_eq!(
+            game_time_line(Some(CYCLE_TICKS + 317)),
+            "\nclock 06:21 · day · day 1 of the cycle · 1%"
         );
     }
 
@@ -3697,6 +3926,298 @@ mod tests {
             sprite_count,
             "no creature sprite was respawned by the light changes"
         );
+    }
+
+    // --- Time-of-day scrub ----------------------------------------------------
+
+    /// A headless scrub app: the lighting writer and the scrub systems in the
+    /// chained order the window runs them. `Some((game, map_ref))` arms the
+    /// shared catch-up's backward branch (its seed replay needs the map).
+    fn scrub_app(live: Option<(Game, MapRef)>) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Clock::new(TICK_MS as f32))
+            .insert_resource(CreatureSim::default())
+            .insert_resource(LightingState::default())
+            .init_resource::<ScrubState>()
+            .add_observer(change_scrub)
+            .add_observer(jump_to_preset)
+            // The window's chain runs the scrub before the lighting read; the
+            // shared catch-up lands between the settle and the next frame.
+            .add_systems(
+                Update,
+                (apply_scrub, sync_scrub_slider, update_lighting_state).chain(),
+            );
+        if let Some((game, map_ref)) = live {
+            app.insert_resource(GameResource(game))
+                .insert_resource(CreatureMotion {
+                    map: Some(map_ref),
+                    seed: SIM_SEED,
+                    ..Default::default()
+                })
+                .add_systems(Update, advance_creature_sim.after(apply_scrub));
+        }
+        app
+    }
+
+    /// The panel's slider, headless: the range and step of the template change
+    /// nothing the handlers read.
+    fn spawn_scrub_slider(app: &mut App) -> Entity {
+        app.world_mut().spawn((ScrubSlider, SliderValue(0.0))).id()
+    }
+
+    /// Drives the slider the way the widget does: a drag move holds `Pressed`
+    /// and arrives unfinished, a release (or a keyboard step) drops it and
+    /// arrives final. One frame runs after the event, as in the window.
+    fn scrub_to(app: &mut App, slider: Entity, position: f32, finished: bool) {
+        {
+            let mut held = app.world_mut().entity_mut(slider);
+            if finished {
+                held.remove::<Pressed>();
+            } else {
+                held.insert(Pressed);
+            }
+        }
+        app.world_mut().trigger(ValueChange {
+            source: slider,
+            value: position,
+            is_final: finished,
+        });
+        app.update();
+    }
+
+    fn scrub_clock(app: &App) -> u64 {
+        app.world().resource::<Clock>().ticks
+    }
+
+    fn scrub_lighting(app: &App) -> LightingState {
+        *app.world().resource::<LightingState>()
+    }
+
+    fn scrub_thumb(app: &App, slider: Entity) -> f32 {
+        app.world().entity(slider).get::<SliderValue>().unwrap().0
+    }
+
+    /// Scrubbing forward and back lights exactly the scrubbed tick, and the
+    /// same position lights the same way however it was reached — the state is
+    /// the pure `params(clock.ticks, seed)` of the single time source.
+    #[test]
+    fn a_scrub_lights_the_scrubbed_tick_forward_and_back() {
+        let mut app = scrub_app(None);
+        let slider = spawn_scrub_slider(&mut app);
+        for position in [900u64, 2700, 11000, 18960, 2700, 900] {
+            scrub_to(&mut app, slider, position as f32, false);
+            let ticks = scrub_clock(&app);
+            assert_eq!(ticks, position, "a drag move reaches the Clock at once");
+            let want = lighting_state(lighting::params(ticks, SIM_SEED));
+            assert_eq!(scrub_lighting(&app), want, "at {position}");
+        }
+    }
+
+    /// A scrub inside a day keeps that day: the night palette — a function of
+    /// the absolute day — stays the day's, so the same cycle position lights
+    /// differently on two days whose coin flips differ.
+    #[test]
+    fn a_scrub_keeps_the_day_of_the_night_palette() {
+        // Window 9 (tick 11950) is where the palettes differ in the ambient.
+        let position = 11950u64;
+        let (green_day, deep_day) = (2..32u64)
+            .find_map(|deep| {
+                (1..deep).find_map(|green| {
+                    ((lighting::night_palette(green, SIM_SEED)
+                        == k1_game::time_of_day::NightPalette::Green)
+                        && (lighting::night_palette(deep, SIM_SEED)
+                            == k1_game::time_of_day::NightPalette::Deep))
+                        .then_some((green, deep))
+                })
+            })
+            .expect("both palettes occur within 32 days");
+
+        let mut app = scrub_app(None);
+        let slider = spawn_scrub_slider(&mut app);
+        app.world_mut().resource_mut::<Clock>().ticks = deep_day * CYCLE_TICKS + 5000;
+        scrub_to(&mut app, slider, position as f32, true);
+        assert_eq!(
+            scrub_clock(&app),
+            deep_day * CYCLE_TICKS + position,
+            "the scrub moves the cycle position, never the day"
+        );
+        let deep = scrub_lighting(&app);
+        assert_eq!(
+            deep,
+            lighting_state(lighting::params(
+                deep_day * CYCLE_TICKS + position,
+                SIM_SEED
+            )),
+            "the deep day lights as its own full tick"
+        );
+
+        // The same position on the green day: a different palette, still its
+        // own day's.
+        app.world_mut().resource_mut::<Clock>().ticks = green_day * CYCLE_TICKS + 5000;
+        scrub_to(&mut app, slider, position as f32, true);
+        let green = scrub_lighting(&app);
+        assert_eq!(
+            green,
+            lighting_state(lighting::params(
+                green_day * CYCLE_TICKS + position,
+                SIM_SEED
+            )),
+            "the green day lights as its own full tick"
+        );
+        assert_ne!(
+            deep.ambient_blend, green.ambient_blend,
+            "the palette must follow the scrubbed day, not reset to day 0"
+        );
+    }
+
+    /// The release walks the simulation to the Clock through the shared
+    /// catch-up: `tick_number == clock.ticks` and the creatures stand exactly
+    /// where a forward run to that tick stands — forward by catch-up, backward
+    /// by the shared seed replay — while the held slider moves no creature.
+    #[test]
+    fn a_released_scrub_walks_the_simulation_to_the_clock() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        // Forward-run references for both targets: one simulation, two stops.
+        let mut reference = game.simulation(map_ref, SIM_SEED).unwrap();
+        for _ in 0..700 {
+            reference.tick();
+        }
+        let at_700 = home(&reference);
+        for _ in 0..200 {
+            reference.tick();
+        }
+        let at_900 = home(&reference);
+
+        let mut sim = CreatureSim::default();
+        sim.sim = game.simulation(map_ref, SIM_SEED).ok();
+        sim.initial_pixels = sim.sim.as_ref().unwrap().initial_pixels();
+        let mut app = scrub_app(Some((game, map_ref)));
+        *app.world_mut().resource_mut::<CreatureSim>() = sim;
+        let slider = spawn_scrub_slider(&mut app);
+
+        scrub_to(&mut app, slider, 300.0, false);
+        let simulation = app.world().resource::<CreatureSim>().sim.as_ref().unwrap();
+        assert_eq!(
+            simulation.tick_number(),
+            0,
+            "a held slider freezes the simulation"
+        );
+        assert_eq!(scrub_clock(&app), 300, "the Clock follows the held slider");
+
+        // Released at 900: plain forward catch-up.
+        scrub_to(&mut app, slider, 900.0, true);
+        assert_eq!(scrub_clock(&app), 900);
+        let simulation = app.world().resource::<CreatureSim>().sim.as_ref().unwrap();
+        assert_eq!(
+            simulation.tick_number(),
+            900,
+            "the release brings the simulation to the clock"
+        );
+        assert_eq!(
+            home(simulation),
+            at_900,
+            "creatures stand on the scrubbed tick's positions"
+        );
+
+        // Released at 700: no reverse tick — the seed replay lands the same.
+        scrub_to(&mut app, slider, 700.0, true);
+        assert_eq!(scrub_clock(&app), 700);
+        let simulation = app.world().resource::<CreatureSim>().sim.as_ref().unwrap();
+        assert_eq!(simulation.tick_number(), 700);
+        assert_eq!(
+            home(simulation),
+            at_700,
+            "the backward scrub replays to the forward run's positions"
+        );
+    }
+
+    /// The Clock alone is the source: moved directly, no widget involved, it
+    /// lights exactly what the same scrub would — there is no second time to
+    /// disagree with.
+    #[test]
+    fn the_clock_alone_moves_the_lighting() {
+        let mut app = scrub_app(None);
+        let _slider = spawn_scrub_slider(&mut app);
+        for ticks in [900u64, 2 * CYCLE_TICKS + 11000] {
+            app.world_mut().resource_mut::<Clock>().ticks = ticks;
+            app.update();
+            let want = lighting_state(lighting::params(ticks, SIM_SEED));
+            assert_eq!(scrub_lighting(&app), want, "at {ticks}");
+        }
+    }
+
+    /// While nobody holds the slider, the thumb rides the Clock's cycle
+    /// position; a held slider keeps the user's value, and the release hands
+    /// the mirror back.
+    #[test]
+    fn the_slider_rides_the_clock_until_someone_holds_it() {
+        let mut app = scrub_app(None);
+        let slider = spawn_scrub_slider(&mut app);
+        app.world_mut().resource_mut::<Clock>().ticks = 2 * CYCLE_TICKS + 317;
+        app.update();
+        assert_eq!(
+            scrub_thumb(&app, slider),
+            317.0,
+            "the thumb rides the cycle position of the clock"
+        );
+
+        scrub_to(&mut app, slider, 900.0, false);
+        app.world_mut().resource_mut::<Clock>().ticks = 15000;
+        app.update();
+        assert_eq!(
+            scrub_thumb(&app, slider),
+            900.0,
+            "a held slider keeps the user's value"
+        );
+
+        scrub_to(&mut app, slider, 900.0, true);
+        app.world_mut().resource_mut::<Clock>().ticks = 15200;
+        app.update();
+        assert_eq!(
+            scrub_thumb(&app, slider),
+            15200.0,
+            "the release hands the mirror back to the clock"
+        );
+    }
+
+    /// A preset is the jump without a drag: position, lighting and simulation
+    /// all land in the same frame.
+    #[test]
+    fn a_preset_jumps_the_whole_frame_at_once() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let mut reference = game.simulation(map_ref, SIM_SEED).unwrap();
+        for _ in 0..2700 {
+            reference.tick();
+        }
+        let at_2700 = home(&reference);
+
+        let mut sim = CreatureSim::default();
+        sim.sim = game.simulation(map_ref, SIM_SEED).ok();
+        sim.initial_pixels = sim.sim.as_ref().unwrap().initial_pixels();
+        let mut app = scrub_app(Some((game, map_ref)));
+        *app.world_mut().resource_mut::<CreatureSim>() = sim;
+        let button = app.world_mut().spawn(ScrubPreset(2700)).id();
+
+        app.world_mut().trigger(Activate { entity: button });
+        app.update();
+
+        assert_eq!(scrub_clock(&app), 2700);
+        let want = lighting_state(lighting::params(2700, SIM_SEED));
+        assert_eq!(scrub_lighting(&app), want);
+        let simulation = app.world().resource::<CreatureSim>().sim.as_ref().unwrap();
+        assert_eq!(
+            simulation.tick_number(),
+            2700,
+            "the preset settles the simulation in the same frame"
+        );
+        assert_eq!(home(simulation), at_2700);
     }
 
     fn fire_reset(mut commands: Commands, buttons: Query<Entity, With<ResetPositions>>) {
