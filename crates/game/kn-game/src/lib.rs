@@ -1269,12 +1269,12 @@ mod tests {
             shown(&SceneOptions::ALL),
             [
                 Terrain,
+                Lights,
                 Decorations,
                 Shadows,
                 Objects,
                 Characters,
                 CharacterShadows,
-                Lights,
                 Foot,
                 Markers,
             ],
@@ -1309,7 +1309,7 @@ mod tests {
                 lights: true,
                 ..SceneOptions::default()
             }),
-            [Terrain, Decorations, Shadows, Objects, Lights],
+            [Terrain, Lights, Decorations, Shadows, Objects],
             "один слой света"
         );
         assert_eq!(

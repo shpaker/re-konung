@@ -63,9 +63,11 @@ def cmd_k1_map(args: argparse.Namespace) -> None:
                 if sprite is not None:
                     sprites.append(sprite)
         konung_map = map_file.load(args.game, number, files)
-        image = render.render(konung_map, graph, objects, sprites, flames)
+        # Light goes onto the ground, under decorations and objects, as in the game
+        lights = None
         if masks is not None and (path := map_file.lights_path(args.game, number, files)):
-            render.draw_lights(image, map_file.parse_lights(path.read_bytes()), masks)
+            lights = (map_file.parse_lights(path.read_bytes()), masks)
+        image = render.render(konung_map, graph, objects, sprites, flames, lights)
         if args.foot:
             render.draw_foot(image, konung_map)
         if entities is not None:

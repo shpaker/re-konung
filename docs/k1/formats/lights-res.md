@@ -1,6 +1,6 @@
 # LIGHTS.RES — маски света
 
-Маски, которыми игра светит тайлы карты. 145472 байта, одинаков в RUS и ENG. Код — `konung/k1/lights_res.py` (`parse`, `to_rgba`). Какой тайл какой маской светится, задаёт `LIGHTS.N` карты ([map.md](map.md)). Свет поверх рендера:
+Masks the game lights the map tiles with. 145472 bytes, identical in RUS and ENG. Code — `konung/k1/lights_res.py` (`parse`, `to_rgba`). Which tile is lit by which mask is set by the map's `LIGHTS.N` ([map.md](map.md)). The light in the render:
 
 ```bash
 uv run konung k1 map original/k1/rus/game out/k1/maps -n 1 --lights
@@ -26,4 +26,4 @@ uv run konung k1 map original/k1/rus/game out/k1/maps -n 1 --lights
 
 Маска 0 почти равномерна (яркость 29–31 по всему ромбу), у остальных яркость спадает до 0 к краю пятна. Поэтому соседние тайлы с разными масками дают плавное пятно.
 
-По Slavik свет на земле включается с вечерних фаз суточного цикла (`CalculateLight`, `game.cpp:1764-1880`): маска прибавляет к тайлу цвет освещения (`game.cpp:975-983`). В рендере и в Tiled свет показан тёплым жёлтым цветом поверх карты — это подсказка, где он есть, а не вид ночной сцены.
+By Slavik, the ground light turns on with the evening phases of the day cycle (`CalculateLight`, `game.cpp:1764-1880`): the mask adds the light color to the tile (`game.cpp:975-983`). In the render and in Tiled the light is drawn warm yellow right above the ground tiles, under decorations and objects — it shows where the light is, not what a night scene looks like.

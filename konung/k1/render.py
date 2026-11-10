@@ -34,8 +34,13 @@ def render(
     objects: ObjectsRes | None = None,
     characters: Sequence[CharacterSprite] = (),
     flames: tuple[FlamesRes, list[tuple[int, int]]] | None = None,
+    lights: tuple[map_file.Lights, LightsRes] | None = None,
 ) -> Image.Image:
-    """Карта целиком; flames — кадры огней и их анимации из exe: огни объектов поверх них."""
+    """Карта целиком; flames — кадры огней и их анимации из exe: огни объектов поверх них.
+
+    `lights` — LIGHTS.N with LIGHTS.RES masks: the light goes onto the ground,
+    under decorations and objects, as in the game.
+    """
 
     @cache
     def tile_image(index: int) -> Image.Image:
@@ -51,6 +56,9 @@ def render(
                     canvas.alpha_composite(
                         tile_image(value - 1), map_file.tile_position(column, row)
                     )
+
+    if lights is not None:
+        draw_lights(canvas, lights[0], lights[1])
 
     for decoration in konung_map.decorations:
         if decoration.tile in graph.tiles:
@@ -216,10 +224,11 @@ LIGHT_COLOR = (255, 210, 120)
 
 
 def draw_lights(canvas: Image.Image, lights: map_file.Lights, masks: LightsRes) -> None:
-    """Поверх карты — маски света тайлов из LIGHTS.N: яркость маски — прозрачность.
+    """LIGHTS.N tile light masks: mask brightness is the alpha.
 
-    Это подсказка, где свет: в игре он ложится только на тайлы земли и верхнего
-    слоя, а декорации и объекты рисуются поверх (Slavik `game.cpp:996-1003`).
+    The caller places the light in the pipeline: in the game it reaches only
+    the ground and upper-layer tiles, and decorations and objects are drawn
+    over it (Slavik `game.cpp:996-1003`).
     """
     images = [lights_res.to_rgba(mask, LIGHT_COLOR) for mask in masks.tiles]
     for row, values in enumerate(lights.tiles):
