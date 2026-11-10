@@ -32,6 +32,10 @@ ISSUE_PREFIXES = ("bug", "feat", "task", "research")
 ISSUE_TITLE = re.compile(rf"^(?:{'|'.join(ISSUE_PREFIXES)}): \S")
 
 COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+# Windows line endings are tolerated: bodies edited by Windows agents or UI often arrive
+# with CRLF, and a `\r` before the line end would hide every heading and break the
+# translation anchor. Normalizing first keeps the rest of the patterns plain.
+CRLF = re.compile(r"\r\n?")
 HEADINGS = re.compile(r"^##(?!#)[ \t]+(.+?)[ \t]*$", re.MULTILINE)
 DETAILS_OPEN = re.compile(r"<details\b[^>]*>", re.IGNORECASE)
 TRANSLATION_BLOCK = re.compile(
@@ -57,6 +61,11 @@ AI_MENTION = re.compile(
 def mask_code(text: str) -> str:
     """The same text with code turned into spaces: offsets match, markup inside code is gone."""
     return CODE.sub(lambda match: " " * len(match.group()), text)
+
+
+def normalize(text: str) -> str:
+    """Line endings to `\n`: a CRLF body must pass the same checks as an LF one."""
+    return CRLF.sub("\n", text)
 
 
 def structure(body: str) -> list[tuple[str, str]]:
@@ -134,6 +143,7 @@ def check_ai_mention(title: str, body: str) -> list[str]:
 
 def check_pr(title: str, body: str) -> list[str]:
     """Every finding about a pull request: mentions and the shape of the description."""
+    body = normalize(body)
     return check_ai_mention(title, body) + check_body(body, PR_SECTIONS)
 
 
