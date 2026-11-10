@@ -851,6 +851,10 @@ pub fn run_viewer(config: ViewerConfig) {
             .before(CameraApply)
             .before(update_lighting_uniforms),
     )
+    // The scrub slider's label as clock hours: after the feathers value writer
+    // (PreUpdate) and after the frame's clock position has settled, so the
+    // face never lags a drag by a frame.
+    .add_systems(PostUpdate, scrub_clock_label)
     // The viewer's diagnostics on top of the shared pipeline: the id rides the
     // body image, so it can only be placed once the subsystem has written the
     // node and the frame's sprite offsets.
@@ -1682,6 +1686,59 @@ fn game_time_line(tick: Option<u64>) -> String {
         time.day,
         time.cycle_progress_percent,
     )
+}
+
+/// The scrub slider's value label, rewritten as clock hours.
+///
+/// `bevy_feathers` prints a slider's value as the bare number — it has no value
+/// formatter (0.20.1, `controls/slider.rs:356-370`) — which for the time scrub
+/// is a raw tick. The adapter below owns that widget knowledge in one place: it
+/// finds the first `Text` descendant of the scrub slider and rewrites it to
+/// `HH:MM` of the scene clock — the same source the lighting follows, so the
+/// label cannot disagree with the picture or the presets (`Warm 09:00`). The
+/// write goes one way: the slider's own `SliderValue` is never touched, and no
+/// text outside the slider is considered.
+///
+/// PostUpdate: the feathers writer runs in PreUpdate (`update_slider_pos`), so
+/// the clock face wins every frame; the write happens only on a change, so an
+/// untouched frame costs one comparison.
+fn scrub_clock_label(
+    slider: Single<Entity, With<ScrubSlider>>,
+    children: Query<&Children>,
+    mut texts: Query<&mut Text>,
+    clock: Res<Clock>,
+) {
+    let Some(entity) = slider_value_text(*slider, &children, &texts) else {
+        return;
+    };
+    let Ok(mut text) = texts.get_mut(entity) else {
+        return;
+    };
+    let time = k1_game::time_of_day::game_time(clock.ticks);
+    let label = format!("{:02}:{:02}", time.clock_hour, time.clock_minute);
+    if text.0 != label {
+        text.0 = label;
+    }
+}
+
+/// The first `Text` entity under the slider — the widget nests exactly one
+/// value label. A seam of its own so a widget change touches one function.
+/// The search reads through the write query's shared borrow, so the system
+/// stays a single-query one.
+fn slider_value_text(
+    root: Entity,
+    children: &Query<&Children>,
+    texts: &Query<&mut Text>,
+) -> Option<Entity> {
+    for child in children.get(root).ok()?.iter() {
+        if texts.get(child).is_ok() {
+            return Some(child);
+        }
+        if let Some(found) = slider_value_text(child, children, texts) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 /// The phase word shown to the player — a display concern: `k1-game` keeps ticks and
@@ -4300,6 +4357,60 @@ mod tests {
 
     fn scrub_thumb(app: &App, slider: Entity) -> f32 {
         app.world().entity(slider).get::<SliderValue>().unwrap().0
+    }
+
+    /// The panel's slider with its value label, as the widget template nests it.
+    fn spawn_scrub_slider_with_label(app: &mut App) -> (Entity, Entity) {
+        let label = app.world_mut().spawn(Text::new("0")).id();
+        let slider = app
+            .world_mut()
+            .spawn((ScrubSlider, SliderValue(0.0)))
+            .add_child(label)
+            .id();
+        (slider, label)
+    }
+
+    fn slider_label(app: &App, label: Entity) -> String {
+        app.world().entity(label).get::<Text>().unwrap().0.clone()
+    }
+
+    /// The scrub label reads as clock hours and follows every time source —
+    /// the drag, the presets and the clock's own advance — while the slider's
+    /// value keeps holding the tick and texts outside the slider stay theirs.
+    #[test]
+    fn the_scrub_label_shows_clock_hours() {
+        let mut app = scrub_app(None);
+        app.add_systems(PostUpdate, scrub_clock_label);
+        let (slider, label) = spawn_scrub_slider_with_label(&mut app);
+        let foreign = app.world_mut().spawn(Text::new("map 17")).id();
+
+        // The clock starts at tick 0 → 06:00 by our displayed-hour convention.
+        app.update();
+        assert_eq!(slider_label(&app, label), "06:00");
+
+        // A drag to the warm preset tick: 2700 → 09:00, the value stays a tick.
+        scrub_to(&mut app, slider, 2700.0, true);
+        assert_eq!(slider_label(&app, label), "09:00");
+        assert_eq!(scrub_thumb(&app, slider), 2700.0);
+
+        // A preset jump lands on the same face as its button promises.
+        let button = app.world_mut().spawn(ScrubPreset(18960)).id();
+        app.world_mut().trigger(Activate { entity: button });
+        app.update();
+        assert_eq!(slider_label(&app, label), "03:04");
+
+        // The clock's own advance moves the face: 15 ticks — one minute.
+        app.world_mut().resource_mut::<Clock>().ticks += 15;
+        app.update();
+        assert_eq!(slider_label(&app, label), "03:05");
+
+        // The write is one-way: the slider's value is untouched by the label,
+        // and a text outside the slider keeps its own string.
+        assert_eq!(scrub_thumb(&app, slider), 18975.0);
+        assert_eq!(
+            app.world().entity(foreign).get::<Text>().unwrap().0,
+            "map 17"
+        );
     }
 
     /// Scrubbing forward and back lights exactly the scrubbed tick, and the
