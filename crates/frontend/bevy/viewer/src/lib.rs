@@ -4374,6 +4374,66 @@ mod tests {
         app.world().entity(label).get::<Text>().unwrap().0.clone()
     }
 
+    /// The adapter finds its label inside the real FeathersSlider hierarchy:
+    /// the widget's own scene (the nested value text among fill and knob) is
+    /// spawned the way the panel template spawns it, and the clock face lands
+    /// on the value text — the only text of the subtree.
+    #[test]
+    fn the_scrub_label_is_found_in_the_real_slider_hierarchy() {
+        let mut app = scrub_app(None);
+        // The widget's scene resolves its embedded font through the asset
+        // plugin and reads the theme at spawn — the same resources the real
+        // window carries. Any theme serves: the hooks only need the resource
+        // to exist, and reaching for kn_ui's palette would couple the test to
+        // the theme rework (#110).
+        app.add_plugins((
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+        ));
+        app.init_asset::<bevy::text::Font>();
+        app.insert_resource(bevy::feathers::theme::UiTheme::default());
+        app.add_systems(PostUpdate, scrub_clock_label);
+        let entities = app
+            .world_mut()
+            .spawn_scene_list(bsn! {
+                @FeathersSlider { @min: 0.0, @max: 100.0 } ScrubSlider
+            })
+            .expect("the slider scene spawns");
+        let slider = entities[0];
+        app.update();
+
+        // Every Text of the widget's real subtree, collected recursively.
+        let mut texts = app.world_mut().query::<&Text>();
+        let mut children = app.world_mut().query::<&Children>();
+        let mut stack = vec![slider];
+        let mut found = Vec::new();
+        while let Some(entity) = stack.pop() {
+            if let Ok(nodes) = children.get(app.world(), entity) {
+                for child in nodes.iter() {
+                    stack.push(child);
+                    if texts.get(app.world(), child).is_ok() {
+                        found.push(child);
+                    }
+                }
+            }
+        }
+        assert!(
+            !found.is_empty(),
+            "the real slider carries a value label in its subtree"
+        );
+        assert_eq!(
+            found.len(),
+            1,
+            "the widget nests exactly one text — its value label"
+        );
+        assert_eq!(
+            app.world().entity(found[0]).get::<Text>().unwrap().0,
+            "06:00",
+            "the adapter rewrites the real value label, not a synthetic one"
+        );
+        assert!(app.world().entity(slider).get::<SliderValue>().is_some());
+    }
+
     /// The scrub label reads as clock hours and follows every time source —
     /// the drag, the presets and the clock's own advance — while the slider's
     /// value keeps holding the tick and texts outside the slider stay theirs.
