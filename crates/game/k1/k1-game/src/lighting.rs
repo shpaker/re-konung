@@ -11,6 +11,13 @@
 //!   `(day, seed) → palette` so a scrubbed timeline shows the same night regardless of
 //!   frame rate or replay order.
 //!
+//! - **The fade never brightens.** The reference shader blends positive ambient
+//!   channels toward white (Slavik `gfx.cpp:56-84`), which lit up houses and trees in
+//!   the warm band and at dusk. The played original shows no such glow, the branch is
+//!   not confirmed against the original binary, and an unconfirmed rule is not
+//!   reproduced: `channels` clamps positive channels to zero. See `channels` and
+//!   docs/k1/time-of-day.md, "Where we will differ from the original".
+//!
 //! - **Tile-light flicker**: the original re-rolls every draw (`rand() % 8 + 16`,
 //!   `rand() % 4 + 8`, game.cpp:925), making colour a function of frame rate. Ours
 //!   advances once every 16 ticks — an approximation we chose, NOT a period observed
@@ -83,9 +90,16 @@ pub fn ground_light_color(tick: u64, seed: u64) -> [f32; 3] {
 
 /// The ambient triple divided by 100, the way the original passes it to the shader
 /// (`_ambientColor = CalculateLight() / 100.0`, game.cpp:924).
+///
+/// The fade only darkens: positive channels are clamped to zero here. The
+/// toward-white branch of the reference shader (Slavik `gfx.cpp:56-84`) is not
+/// implemented — the played original shows no warm glow on houses and trees in
+/// the warm band and at dusk, so the original's handling of the positive
+/// channels is unknown and the unconfirmed rule is not reproduced
+/// (docs/k1/time-of-day.md, "Where we will differ from the original").
 pub fn channels(cycle_tick: u64, night: NightPalette) -> [f32; 3] {
     let (r, g, b) = time_of_day::ambient_value_with(cycle_tick, night);
-    [r / 100.0, g / 100.0, b / 100.0]
+    [r.min(0.0) / 100.0, g.min(0.0) / 100.0, b.min(0.0) / 100.0]
 }
 
 /// Per-channel composition reproduced from the original's fragment shader.
@@ -220,10 +234,12 @@ mod tests {
 
     #[test]
     fn ambient_divided_by_100() {
-        // Window 3 plateau: (12, 6, 0) / 100
-        assert_eq!(channels(2700, NightPalette::Deep), [0.12, 0.06, 0.0],);
-        // Window 5 plateau: (10, -20, -50) / 100
-        assert_eq!(channels(5501, NightPalette::Deep), [0.1, -0.2, -0.5],);
+        // Window 3 plateau: the table reads (12, 6, 0), but the fade only
+        // darkens — positive channels clamp to zero, so the warm band is a no-op.
+        assert_eq!(channels(2700, NightPalette::Deep), [0.0, 0.0, 0.0],);
+        // Window 6 plateau: the table reads (10, -20, -50); the positive red
+        // clamps away, the dusk tint comes from the darkened green and blue only.
+        assert_eq!(channels(5501, NightPalette::Deep), [0.0, -0.2, -0.5],);
     }
 
     #[test]

@@ -250,7 +250,11 @@ The ambient colour is a shader uniform, and a channel's sign selects the operati
 - a **negative** channel multiplies: `c *= 1 + clamp(blend + light, −1, 0)` — darkening,
   partially cancelled by the tile's light;
 - a **positive** channel blends toward white: `c += (1 − c) · blend` — the warm glow of
-  window 3;
+  window 3. **Unknown in the original and not implemented by us**: this branch is the
+  clone's shader alone, and the played original shows no glow on houses and trees in
+  the warm band and at dusk — `k1_game::lighting::channels` clamps positive channels
+  to zero, so the fade only darkens (see
+  [Where we will differ](#where-we-will-differ-from-the-original));
 - the blue channel darkens **without** the light cancellation, so a lit tile stays dark
   blue at night.
 
@@ -439,6 +443,16 @@ is never an extra position in this page.
 ## Where we will differ from the original
 
 Deliberate, recorded next to the facts they bend:
+
+- **The fade never brightens.** The clone's shader blends positive ambient channels
+  toward white, which made houses and trees glow in the warm band (windows 2–4) and at
+  dusk (the positive red of window 6). The played original shows no such glow, the
+  branch rests on the clone alone, and an unconfirmed rule is not reproduced:
+  `k1_game::lighting::channels` clamps positive channels to zero. The warm band becomes
+  a no-op and the dusk tint keeps only its darkened green and blue; everything inside
+  the ground-light window — the only span where the ground itself is blended — is
+  negative and unchanged. A byte-level read of the original's fade routine can still
+  overturn this: the clamp is one line.
 
 - **One tick per game tick, no speed multiplier.** The original adds `1 + speed` counter
   steps per frame, which makes the length of a day depend on a control that has nothing
