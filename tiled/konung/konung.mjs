@@ -346,6 +346,10 @@ function buildMap(fileName) {
         map.addLayer(layer);
     }
 
+    // Light lies on the ground only: the lights layer goes right above the
+    // ground tiles, under decorations and objects, which the game never lights
+    addLights(map, directory, number, files);
+
     const decorations = new ObjectGroup("decorations");
     decorations.drawOrder = ObjectGroup.IndexOrder;
     for (const cell of oddCells) {
@@ -373,13 +377,14 @@ function buildMap(fileName) {
     addObjects(map, objects, shadowsTileset, objectsTileset, data.objects);
     addFlames(map, directory, objects, data.objects);
     addGameStates(map, directory, number, graph, files);
-    addLights(map, directory, number, files);
     addFoot(map, data.foot);
     return map;
 }
 
-// Свет LIGHTS.N — тайловый слой поверх карты, скрыт. Номер тайла — номер маски
-// LIGHTS.RES (в файле он на 1 больше). Без LIGHTS.N или LIGHTS.RES слоя нет
+// LIGHTS.N light — a hidden tile layer right above the ground tiles, under
+// decorations and objects: the game lights only the ground tiles' pixels.
+// Tile number is the LIGHTS.RES mask number (1-based in the file). No layer
+// without LIGHTS.N or LIGHTS.RES
 function addLights(map, directory, number, files) {
     const masks = loadLightMasks(directory);
     const path = findLights(directory, number, files);
