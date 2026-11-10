@@ -275,11 +275,13 @@ fn a_changed_lighting_state_rewrites_the_uniforms_and_touches_no_entities() {
             assert_eq!(materials.get(&ambient).unwrap().blend(), Vec3::ZERO);
         }
 
-        // Night at tick 11000, ground window open: both blends non-zero.
+        // Night at tick 11000, ground window open: both blends non-zero, the
+        // gate open for the masks.
         let night = LightingState {
             terrain_blend: Vec3::new(-0.6, -0.5, -0.7),
             ambient_blend: Vec3::new(-0.4, -0.3, -0.5),
             light_color: Vec3::new(0.1, 0.05, 0.0),
+            light_gain: 1.0,
         };
         app.insert_resource(night);
         app.update();
@@ -293,14 +295,17 @@ fn a_changed_lighting_state_rewrites_the_uniforms_and_touches_no_entities() {
                 materials.get(&ambient).unwrap().blend(),
                 night.ambient_blend
             );
+            assert_eq!(materials.get(&terrain_plain).unwrap().light_gain(), 1.0);
+            assert_eq!(materials.get(&ambient).unwrap().light_gain(), 1.0);
         }
 
-        // Day — the window closed: the terrain blend lands on zero, the
-        // shader's no-op, while the ambient keeps its own value.
+        // Day — the zero triple is the shader's no-op for both surfaces, and
+        // the closed window leaves the masks inert without touching the blend.
         let day = LightingState {
             terrain_blend: Vec3::ZERO,
             ambient_blend: Vec3::new(0.02, 0.01, 0.0),
             light_color: Vec3::ZERO,
+            light_gain: 0.0,
         };
         app.insert_resource(day);
         app.update();

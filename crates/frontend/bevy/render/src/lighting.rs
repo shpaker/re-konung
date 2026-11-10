@@ -60,6 +60,13 @@ pub struct KonungLightMaterial {
     /// Unused where the mask is zero — every plain ambient sprite.
     #[uniform(20)]
     light_color: Vec3,
+    /// The ground-light window gate: 1.0 while the window is open, 0.0 outside.
+    /// Scales the sampled mask brightness, so a closed window leaves the mask
+    /// inert — no light colour, no cancellation — while the ambient blend keeps
+    /// following the phase for every surface (the original gates only the tile
+    /// light, never the fade; rus 0x425354).
+    #[uniform(20)]
+    light_gain: f32,
     /// LIGHTS.RES tile mask; brightness in `.r`. A sprite without a mask gets
     /// a 1×1 zero texture, so `lightning` stays 0 and the formula reduces to
     /// the plain ambient blend.
@@ -88,6 +95,11 @@ impl KonungLightMaterial {
     pub fn light_color(&self) -> Vec3 {
         self.light_color
     }
+
+    /// The ground-light window gate (1.0 open, 0.0 closed).
+    pub fn light_gain(&self) -> f32 {
+        self.light_gain
+    }
 }
 
 /// The lighting time contract, written by the frontend once per frame from its
@@ -99,14 +111,18 @@ impl KonungLightMaterial {
 /// speaks up.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct LightingState {
-    /// Ambient for terrain and decorations: the ground ambient inside the
-    /// ground-light window, zero outside it — the shader no-ops there.
+    /// Ambient for terrain and decorations: the phase value, window or not —
+    /// the original fades the ground together with everything on it.
     pub terrain_blend: Vec3,
-    /// Ambient for objects and characters: applied always, window or not.
+    /// Ambient for objects and characters: the same phase value.
     pub ambient_blend: Vec3,
     /// Tile-light colour /200, added toward white where a terrain mask is
     /// bright.
     pub light_color: Vec3,
+    /// The ground-light window gate for the tile light: 1.0 while the window
+    /// (ticks 8100..18900) is open, 0.0 outside — the masks and the light
+    /// colour switch with it, the ambient blend never does.
+    pub light_gain: f32,
 }
 
 impl Default for LightingState {
@@ -115,6 +131,7 @@ impl Default for LightingState {
             terrain_blend: Vec3::ZERO,
             ambient_blend: Vec3::ZERO,
             light_color: Vec3::ZERO,
+            light_gain: 0.0,
         }
     }
 }
@@ -250,6 +267,7 @@ impl LightingMaterials {
             materials.add(KonungLightMaterial {
                 blend: Vec3::ZERO,
                 light_color: Vec3::ZERO,
+                light_gain: 0.0,
                 mask,
             })
         };
@@ -314,8 +332,12 @@ pub fn update_lighting_uniforms(
         if let Some(mut material) = materials.get_mut(handle) {
             material.blend = blend;
             material.light_color = state.light_color;
+            material.light_gain = state.light_gain;
         }
     };
+    // Every material of the pool carries the window gate: the masked ones read
+    // it through their LIGHTS.RES sample, the plain ones are inert to it (a
+    // zero mask), and writing uniformly keeps the pool single-sourced.
     for handle in pool
         .masks
         .iter()
@@ -429,6 +451,29 @@ fn mask_image(data: Vec<u8>, width: u32, height: u32) -> Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The WESL transcription stays in step with the CPU reference: the gate
+    /// scales the sampled mask, the sign branches and the constants of
+    /// `k1_game::lighting::apply_channel` are all present. A structural check,
+    /// not a proof — the CPU reference and its own tests carry the formula.
+    #[test]
+    fn the_shader_transcribes_the_reference_formula() {
+        let wesl = include_str!("shaders/terrain_light_material.wesl");
+        // The window gate scales the sampled mask brightness.
+        assert!(
+            wesl.contains(
+                "textureSample(mask_texture, mask_sampler, input.uv).r * terrain_light.light_gain"
+            ),
+            "the mask sample must be scaled by the window gate"
+        );
+        assert!(wesl.contains("light_gain: f32"), "the uniform struct field");
+        // The per-channel constants of the reference.
+        assert!(wesl.contains(">= 0.01"));
+        assert!(wesl.contains("clamp(terrain_light.blend.r + lightning, -1.0, 0.0)"));
+        assert!(wesl.contains("clamp(terrain_light.blend.g + lightning, -1.0, 0.0)"));
+        // Blue multiplies raw, without the light term.
+        assert!(wesl.contains("rgb.b = rgb.b * (1.0 + terrain_light.blend.b)"));
+    }
 
     fn piece(group: PieceGroup) -> Piece {
         Piece {
@@ -564,6 +609,7 @@ mod tests {
                 terrain_blend: Vec3::ZERO,
                 ambient_blend: Vec3::ZERO,
                 light_color: Vec3::ZERO,
+                light_gain: 0.0,
             }
         );
     }
@@ -602,6 +648,7 @@ mod tests {
             terrain_blend: Vec3::new(-0.6, -0.5, -0.7),
             ambient_blend: Vec3::new(-0.3, -0.2, -0.4),
             light_color: Vec3::new(0.1, 0.05, 0.0),
+            light_gain: 1.0,
         });
         app.add_systems(Update, update_lighting_uniforms);
 
@@ -617,15 +664,17 @@ mod tests {
                 };
                 assert_eq!(material.blend, want, "material #{index}");
                 assert_eq!(material.light_color, Vec3::new(0.1, 0.05, 0.0));
+                assert_eq!(material.light_gain, 1.0, "the gate reaches #{index}");
             }
         }
 
-        // A new state — day, the ground window closed — rewrites them all, and
-        // the terrain blends land exactly on zero, the shader's no-op.
+        // A new state — day, the ground window closed — rewrites them all: the
+        // blends follow the phase, the gate closes for every material at once.
         app.insert_resource(LightingState {
             terrain_blend: Vec3::ZERO,
             ambient_blend: Vec3::new(0.1, 0.05, 0.0),
             light_color: Vec3::ZERO,
+            light_gain: 0.0,
         });
         app.update();
         let materials = app.world().resource::<Assets<KonungLightMaterial>>();
@@ -637,6 +686,7 @@ mod tests {
                 Vec3::ZERO
             };
             assert_eq!(material.blend, want, "material #{index} after the change");
+            assert_eq!(material.light_gain, 0.0, "the gate closes for #{index}");
         }
     }
 

@@ -249,9 +249,10 @@ fn map_fine_lights(game: &Game, map_ref: MapRef) -> Option<Vec<Vec<u8>>> {
 /// characters the plain ambient always, plus the ground tile-light colour.
 fn lighting_state(params: lighting::LightingParams) -> LightingState {
     LightingState {
-        terrain_blend: params.ground_ambient.map_or(Vec3::ZERO, Vec3::from),
+        terrain_blend: Vec3::from(params.ambient),
         ambient_blend: Vec3::from(params.ambient),
         light_color: Vec3::from(params.ground_light),
+        light_gain: if params.ground_window { 1.0 } else { 0.0 },
     }
 }
 
@@ -3969,11 +3970,11 @@ mod tests {
 
     // --- Scene lighting -------------------------------------------------------
 
-    /// The k1 mapping into the render contract: the ground window gates the
-    /// terrain blend, the plain ambient passes through always. Night at tick
-    /// 11000 sits inside the window; day at tick 900 outside it.
+    /// The k1 mapping into the render contract: the fade follows the phase for
+    /// every surface — the terrain carries the same ambient as the objects,
+    /// window or not — and the ground window gates only the tile light.
     #[test]
-    fn the_lighting_state_follows_the_ground_window() {
+    fn the_lighting_state_follows_the_phase_and_gates_the_tile_light() {
         let night = lighting::params(11000, SIM_SEED);
         assert!(
             night.ground_window,
@@ -3982,11 +3983,12 @@ mod tests {
         let state = lighting_state(night);
         assert_eq!(
             state.terrain_blend,
-            Vec3::from(night.ground_ambient.expect("window open")),
-            "the terrain carries the ground ambient while the window is open"
+            Vec3::from(night.ambient),
+            "the terrain fades with the ambient like every surface"
         );
         assert_eq!(state.ambient_blend, Vec3::from(night.ambient));
         assert_eq!(state.light_color, Vec3::from(night.ground_light));
+        assert_eq!(state.light_gain, 1.0, "the window is open: masks live");
 
         let day = lighting::params(900, SIM_SEED);
         assert!(!day.ground_window, "tick 900 is outside the ground window");
@@ -3994,10 +3996,22 @@ mod tests {
         assert_eq!(
             state.terrain_blend,
             Vec3::ZERO,
-            "a closed window must leave the terrain at the shader's no-op"
+            "daylight is the zero triple — the original's transform no-ops"
         );
-        assert_eq!(state.ambient_blend, Vec3::from(day.ambient));
-        assert_eq!(state.light_color, Vec3::from(day.ground_light));
+        assert_eq!(state.ambient_blend, Vec3::ZERO);
+        assert_eq!(
+            state.light_gain, 0.0,
+            "the window is closed: the tile light is off, the fade is untouched"
+        );
+
+        // Dusk (window 6 plateau): outside the ground window, and the terrain
+        // still carries the ambient — the ground dims together with the objects.
+        let dusk = lighting::params(7000, SIM_SEED);
+        assert!(!dusk.ground_window);
+        let state = lighting_state(dusk);
+        assert_eq!(state.terrain_blend, Vec3::from(dusk.ambient));
+        assert_eq!(state.ambient_blend, Vec3::from(dusk.ambient));
+        assert_eq!(state.light_gain, 0.0);
     }
 
     /// The moving-creature lighting regression: a creature in a dark cell

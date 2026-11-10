@@ -124,14 +124,15 @@ Three different kinds of state were mixed in earlier drafts. They are ours, per 
 |---|---|---|---|
 | `[0x81D5EC]` | the **user's day/night option** (the clone's `_bConfDayNight`) | four copy sites that take the value from a settings/serialization table — e.g. rus `0x4363D5` (`VA 0x4363D5` region) does `mov eax, [0x831C5C] ; mov [0x81D5EC], eax`; rus writers `0x1B8E1`/`0x267D5`/`0x27E04`/`0x2805C`, eng `0x1BAA1`/`0x26A1A`/`0x28048`/`0x282A0`, tutorial `0x1BAA1`/`0x2692A`/`0x27431`/`0x27689` — and its address is handed to both serializer passes (rus `0x14B8F`, `0x15039`) | the day/night gate (`je`) plus one plain read (rus `0x27097`) and two comparisons |
 | `[0x81D5DC]` | the **current map's constant-light flag** — a property of the map, not a user setting | not pinned: no absolute writer exists; the write happens base-relative somewhere in map activation | exactly one read: the gate ahead of day/night |
-| `[0x82D168]` | the **ground-light flag**, computed — the clone's `_bLightGround` | exactly three stores inside the routine: cleared at its top (rus `0x193EC`), set for windows 7–12 (rus `0x195FF` / `VA 0x4291FF`), cleared again in the last branch (rus `0x198AD` / `VA 0x4294AD`); eng and tutorial `0x19564`/`0x19777`/`0x19A25`. No absolute reader: the ground-draw path consumes it base-relative |
+| `[0x82D168]` | the **ground-light flag**, computed — the clone's `_bLightGround` | exactly three stores inside the routine: cleared at its top (rus `0x193EC`), set for windows 7–12 (rus `0x195FF` / `VA 0x4291FF`), cleared again in the last branch (rus `0x198AD` / `VA 0x4294AD`); eng and tutorial `0x19564`/`0x19777`/`0x19A25`. One absolute reader, now ours: `cmp dword [0x82D168], 0` at rus `0x15754` / `VA 0x425354` (eng `0x15884`), the ground-pass gate — see ["How the ambient value reaches the pixels"](#how-the-ambient-value-reaches-the-pixels) |
 | `[0x81D608]` | the **per-day palette flag**, computed — the coin flip's target, the clone's `_bLightEff` | once, by the coin flip (above) | three comparisons in windows 9–11 only |
 
-A fifth global, the **user's light-effects option** (the clone's `_bConfLightEffects`,
-which the ground-draw guard reads next to `_bLightGround`:
-[`game.cpp:918-1013`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L918-L1013)),
-is real in the clone but **not pinned to an address by our read**: it is reached
-base-relative and no absolute reference exposes it. It stays **by Slavik**.
+A fifth global, the **user's light-effects option** (the clone's `_bConfLightEffects`):
+`[0x81D604]`, ours. It is read right after the ground-light flag in the ground-pass
+gate (rus `0x42535D` / `VA 0x42535D`, `cmp dword [0x81D604], 0` — eng also `0x20E97`
+and `0x28051`, the options and save code), and it gates exactly what the clone says:
+with it off the ground takes the plain tile path, window or not. The default stays
+unknown — same `.bss` story as the day/night option.
 
 There is **no confirmed default** for either user option. `[0x81D5EC]` is `.bss`: zero at
 power-on, and every writer copies from the settings table `[0x831C5C]` — no code in any
@@ -243,24 +244,53 @@ the dark one, so the cycle is not "bright half, dark half".
 
 ### How the ambient value reaches the pixels
 
-The ambient colour is a shader uniform, and a channel's sign selects the operation
-(**by Slavik**
-[`gfx.cpp:24-84`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/gfx.cpp#L24-L84)):
+The chain is ours now, read end to end from the binaries (rus offsets; eng
+control-checked):
 
-- a **negative** channel multiplies: `c *= 1 + clamp(blend + light, −1, 0)` — darkening,
-  partially cancelled by the tile's light;
-- a **positive** channel blends toward white: `c += (1 − c) · blend` — the warm glow of
-  window 3;
-- the blue channel darkens **without** the light cancellation, so a lit tile stays dark
-  blue at night.
+1. **The packed triple.** The light routine returns the ambient as one dword —
+   blue | green<<8 | red<<16, three signed bytes, whole numbers (the window
+   formulas are `fistp`-truncated toward zero at the packing sites, e.g. rus
+   `0x429143-0x42914E`) — and the single caller stores it to `[0x5076BC]`
+   (rus `0x42866D`). No division happens anywhere: the clone's `/100` is its
+   own float translation. The address also sits in the save-field table at rus
+   `0x437D9x`: the triple travels with a saved game.
+2. **One shared transform, no state.** Every drawn sprite resolves its palette
+   through the same function (rus `0x43D971`): a zero triple (daylight) returns
+   the palette untouched; anything else maps each palette entry per channel
+   through lookup tables and caches the result per palette bank. There is no
+   fade state to set or inherit — the clone's `SetFade(bool)` state machine is
+   its own modeling, and its "decorations inherit the previous pass's state"
+   question does not exist in the original.
+3. **The tables.** Six tables are built at startup (rus `0x439B08-0x439D18`,
+   565 layout; a twin cluster at `0x43A012+` for 555): per channel, 100 values
+   each, negative and positive apart. The value `v` selects an entry through a
+   float32 accumulator `k` that takes `v` steps of the pool constant `0.01f`
+   (VA `0x4506C7` — the f32 accumulation, not `v/100`), and the entry maps a
+   component `c` (5-bit, 6-bit for green) as:
+   - negative: `trunc(c · (1 − k))` — darkening;
+   - positive: `c + trunc((MAX − c) · k)` with `MAX` = 31/63 — **brightening
+     toward the component maximum**;
+   - truncation toward zero (the conversion helper sets the x87 control word to
+     `0x1F`); the intermediates are exact in the 80-bit registers.
+   So the clone's per-channel shader (`gfx.cpp:56-84` — negative multiplies,
+   positive blends toward white) transcribes the tables faithfully, and the
+   warm band really does brighten the whole picture in the original.
+4. **The ground-pass gate.** The flag `[0x82D168]` has one reader (rus
+   `0x425354`): with the flag set **and** the light-effects option
+   `[0x81D604]` on, the ground pass takes the lit path (per tile: the
+   `LIGHTS.N` value picks a `LIGHTS.RES` mask, `value × 0x1C80 + 0x5A1010`,
+   and the lit blit `0x43CC49` adds the light colour); otherwise — window
+   closed or option off — the same tiles draw through the plain blit with the
+   **same ambient-transformed palettes** (the transform is called per tile at
+   rus `0x42541D`/`0x425472` for the ground and overlay bytes alike).
 
-Three surfaces are treated differently, and this is the part #96 has to reproduce:
+The consequences for the surfaces, all **confirmed** by that chain:
 
 | Surface | when it is darkened | source |
 |---|---|---|
-| ground and its upper layer | only while the tile-light window is open **and** the light-effects option is on — otherwise it is drawn with no blend at all | **by Slavik** [`game.cpp:949-1013`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L949-L1013) |
+| ground, its upper layer, decorations, objects | with the ambient, whenever the triple is non-zero — dusk and the warm band fade the ground together with everything on it; the window and the option gate only the tile light | our own read (the transform call sites, the gate) |
 | characters and dynamic objects | per creature, from the fine block of the map's `LIGHTS.N`: a creature in a cell whose fine value is 0 is blended toward the ambient, one in a lit cell is not | **by Slavik** [`game.cpp:1089-1100`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L1089-L1100), [`game.cpp:1611-1626`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L1611-L1626); our own read of the fine block in [formats/map.md](formats/map.md#lightsn) |
-| the tile light itself | the mask named by `LIGHTS.N` for that tile is sampled for brightness; where it is bright it adds the light colour and cancels the darkening | **by Slavik** [`game.cpp:997`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L997), [`gfx.cpp:55-84`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/gfx.cpp#L55-L84) |
+| the tile light itself | only inside the window and with the option on: the mask named by `LIGHTS.N` for that tile is sampled for brightness; where it is bright it adds the light colour and cancels the darkening | our own read (the gate, the lit blit); the clone agrees |
 
 The tile-light window is windows 7 to 12 — the same span as the **yes** column above,
 which is the three stores to `[0x82D168]` we read ourselves — and the light colour it
@@ -269,6 +299,13 @@ ground pass
 (**by Slavik** [`game.cpp:925`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L925),
 [`game.cpp:979`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L979)).
 A per-draw random is a frame-rate dependency; we will not reproduce it (see below).
+
+The byte-level arithmetic — whole-byte ramps, the f32 accumulator, the
+truncation — is reproduced by the model (`k1_game::lighting`: `channels`,
+`fade_factor`, `fade_table_entry` and its golden tests). The GPU path computes
+the same formulas in 8-bit floats; the difference is bounded by the original's
+own output quantization (16-bit colour) and is recorded with the divergences
+below.
 
 Two more surfaces on the same screen never fade at all, and the fade-off reads are the
 clone's (**by Slavik**, pinned above). A character's shadow is drawn right after
@@ -299,8 +336,8 @@ thing that is neither:
 | | what it gates | kind | source |
 |---|---|---|---|
 | day/night (`[0x81D5EC]`) | the phase computation from the gate on: off means the ambient result is `(0,0,0)` — **except on constant-light maps**, which returned already | user option, data-driven default | our own read (gate, writers); default unconfirmed |
-| light effects | the ground's tile light and its ambient blend: with it off the ground is drawn unblended, whatever the phase | user option | **by Slavik** [`game.cpp:949`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L949); our read pins no address for it |
-| the ground-light flag (`[0x82D168]`) | whether the phase lights the ground at all: outside windows 7..12 there is no tile light to draw | computed from the phase | our own read (three stores) |
+| light effects (`[0x81D604]`) | the ground's tile light: with it off the ground takes the plain tile path, window or not — the ambient fade is not affected | user option | our own read (the gate at rus `0x42535D`); the clone agrees on the effect |
+| the ground-light flag (`[0x82D168]`) | whether the phase lights the ground's tiles at all: outside windows 7..12 there is no tile light to draw — the ambient fade is not affected | computed from the phase | our own read (three stores, one reader) |
 | the palette flag (`[0x81D608]`) | which night palette windows 9–11 return | computed per day (coin flip) | our own read (write and three reads) |
 | the constant-light flag (`[0x81D5DC]`) | the whole phase computation, by returning early with the per-map colour | property of the current map | our own read (gate); its writer is not pinned |
 
@@ -440,6 +477,13 @@ is never an extra position in this page.
 
 Deliberate, recorded next to the facts they bend:
 
+- **The fade runs in floats against the original's integer tables.** The original
+  computes each palette entry in 5/6-bit integer lookup tables (above); the render
+  computes the same formulas in 8-bit floats. The formulas, the whole-byte ramp
+  steps, the f32 accumulator and the truncation are reproduced by the model; what
+  stays float is the last mile to the pixel, whose difference is bounded by the
+  original's own output quantization (its display was 16-bit colour).
+
 - **One tick per game tick, no speed multiplier.** The original adds `1 + speed` counter
   steps per frame, which makes the length of a day depend on a control that has nothing
   to do with the world. Our day is 21600 ticks of the simulation's own tick — the counter
@@ -502,16 +546,18 @@ Deliberate, recorded next to the facts they bend:
   the same original, one by comparison, one by arithmetic, and the branch spans of the
   interval table stay the contract for comparisons.
 - **#96 — implemented, the rendered lighting.** What it took from this page: the interval
-  table, the window table with its exact ramp branches, the per-channel blend rules, the
-  three surfaces treated differently, the coin flip against the day index, and the camera
-  presets — as places to stand the camera, never as boundaries. The model is
+  table, the window table with its exact ramp branches, the per-channel blend rules with
+  the original's byte-level arithmetic (`fade_factor`, `fade_table_entry` and its golden
+  tests), the surfaces table — the fade follows the phase for every surface, the window
+  gates only the tile light (`light_gain`) — the coin flip against the day index, and the
+  camera presets — as places to stand the camera, never as boundaries. The model is
   `k1_game::lighting` (`crates/game/k1/k1-game/src/lighting.rs`): pure functions over the
-  tick — `params`, `apply_channel`, `night_palette`, `light_color`, `fades` — and the CPU
-  reference of the per-channel formula. The application is `KonungLightingPlugin` in
-  `kn-render` (`crates/frontend/bevy/render/src/lighting.rs`): a sprite material
-  (`KonungLightMaterial`, a Bevy `MaterialExtension2d`) whose WESL fragment
-  (`shaders/terrain_light_material.wesl`) reproduces the per-channel blend of the
-  `gfx.cpp:56-84` rules above, a pool of 21 materials (`LightingMaterials`: one per
+  tick — `params`, `channels`, `apply_channel`, `night_palette`, `light_color`, `fades` —
+  and the CPU reference of the per-channel formula. The application is
+  `KonungLightingPlugin` in `kn-render` (`crates/frontend/bevy/render/src/lighting.rs`):
+  a sprite material (`KonungLightMaterial`, a Bevy `MaterialExtension2d`) whose WESL
+  fragment (`shaders/terrain_light_material.wesl`) reproduces the per-channel blend of
+  the confirmed rules above, a pool of 21 materials (`LightingMaterials`: one per
   LIGHTS.RES mask plus the two plain ones), the `LightingState` time contract the
   frontend writes each frame, and `FineLightGrid` — the map's LIGHTS.N fine values the
   creature lighting reads per cell. Both frontends derive `LightingState` from
