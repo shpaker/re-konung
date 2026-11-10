@@ -23,6 +23,7 @@ __pycache__/
 .vscode/
 .idea/
 .qwen/
+.zcode/
 .claude/*
 !.claude/settings.json
 !.claude/skills/
