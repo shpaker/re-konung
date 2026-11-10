@@ -172,6 +172,19 @@ def test_markup_quoted_in_code_is_not_markup():
     assert form.check_body(render(What=quoted), form.PR_SECTIONS) == []
 
 
+def test_crlf_body_passes_like_an_lf_one():
+    """Windows agents and UIs deliver CRLF bodies: the check must not hide every
+    heading behind a stray `\r` (a real failure of the form job on #111)."""
+    body = render().replace("\n", "\r\n")
+    assert form.check_pr("fix: keep the unknown map bytes", body) == []
+
+
+def test_cr_only_body_passes_too():
+    """Old-Mac line endings are the same tolerance, one pattern for both."""
+    body = render().replace("\n", "\r")
+    assert form.check_pr("fix: keep the unknown map bytes", body) == []
+
+
 @pytest.mark.parametrize(
     "text",
     [
