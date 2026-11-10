@@ -21,6 +21,25 @@ pub struct Cli {
     #[arg(long, value_enum, default_value = "game", global = true)]
     pub source: SourceArg,
 
+    /// Тик, на котором закрепить освещение сцены (без него освещение следует
+    /// за тиком симуляции; ночь — например, 11000)
+    #[arg(long, global = true)]
+    pub light_tick: Option<u64>,
+
+    /// Снять скриншот карты в файл и выйти
+    #[arg(long, global = true)]
+    pub screenshot: Option<PathBuf>,
+
+    /// Run N measured frames after the warm-up, print one `BENCH …` line to
+    /// stdout and exit; a benchmark run never captures a screenshot
+    #[arg(
+        long,
+        global = true,
+        value_parser = clap::value_parser!(u32).range(1..),
+        conflicts_with = "screenshot"
+    )]
+    pub benchmark: Option<u32>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -126,6 +145,30 @@ mod tests {
     }
 
     #[test]
+    fn screenshot_flags_parse_global() {
+        let parsed = cli(&[
+            "--game-dir",
+            "g",
+            "--map",
+            "17",
+            "--light-tick",
+            "11000",
+            "--screenshot",
+            "out/plugin-night.png",
+        ]);
+        assert_eq!(parsed.light_tick, Some(11000));
+        assert_eq!(
+            parsed.screenshot,
+            Some(PathBuf::from("out/plugin-night.png"))
+        );
+        // The subcommands stay reachable with the flags present
+        match cli(&["--game-dir", "g", "--light-tick", "5", "check", "--all"]).command {
+            Some(Command::Check { all, .. }) => assert!(all),
+            other => panic!("expected check, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn initial_map_follows_source_and_number() {
         assert_eq!(cli(&["--game-dir", "g"]).initial_map(&maps()), Some(0));
         assert_eq!(
@@ -179,6 +222,31 @@ mod tests {
                 assert_eq!(format, Format::Json);
                 assert!(all);
             }
+            other => panic!("expected check, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn benchmark_flag_parses_and_stays_separate_from_capture() {
+        let parsed = cli(&["--game-dir", "g", "--map", "17", "--benchmark", "600"]);
+        assert_eq!(parsed.benchmark, Some(600));
+        // A benchmark run must not capture: the pair is a CLI error up front
+        let both = Cli::try_parse_from([
+            "re-konung-viewer",
+            "--game-dir",
+            "g",
+            "--benchmark",
+            "600",
+            "--screenshot",
+            "out/x.png",
+        ]);
+        assert!(both.is_err(), "--benchmark conflicts with --screenshot");
+        // Zero frames measure nothing: rejected at the CLI, not at runtime
+        let zero = Cli::try_parse_from(["re-konung-viewer", "--game-dir", "g", "--benchmark", "0"]);
+        assert!(zero.is_err(), "--benchmark 0 is not a run");
+        // The subcommands stay reachable with the flag present
+        match cli(&["--game-dir", "g", "--benchmark", "10", "check", "--all"]).command {
+            Some(Command::Check { all, .. }) => assert!(all),
             other => panic!("expected check, got {other:?}"),
         }
     }

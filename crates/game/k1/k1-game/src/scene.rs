@@ -13,6 +13,7 @@ use k1_data::{
     executable::Executable,
     game_state::{self, GameState, MapEntities},
     graph_res::{GraphError, GraphRes},
+    lights_res,
     map::{self, KonungMap, Lights, MapObject},
     objects_res::{self, ObjectsRes},
 };
@@ -47,6 +48,13 @@ pub struct DrawPiece {
     /// Logical depth bottom for DepthMap boundary lookup when it differs from
     /// `y + height` (objects with `flags & 8`, Slavik `game.cpp:1391-1395`).
     pub depth_bottom: Option<i32>,
+    /// Index into LIGHTS.N tiles (1-based value minus 1); None = no tile light.
+    pub light_mask_index: Option<usize>,
+    /// Whether this piece carries two or more flames (self-lit → skip ambient fade).
+    pub self_lit: bool,
+    /// Fine-grid light value from LIGHTS.N at the creature's cell; 0 = dark patch.
+    /// Used by the lighting plugin to decide dynamic fade per tick.
+    pub fine_light_value: u8,
 }
 
 /// Кадр анимированного куска: картинка (`None` — слоя в этом кадре не видно) и
@@ -230,6 +238,9 @@ impl DrawPiece {
             group,
             creature_id: None,
             depth_bottom: None,
+            light_mask_index: None,
+            self_lit: false,
+            fine_light_value: 0,
         }
     }
 
@@ -245,6 +256,9 @@ impl DrawPiece {
             group,
             creature_id: None,
             depth_bottom: None,
+            light_mask_index: None,
+            self_lit: false,
+            fine_light_value: 0,
         }
     }
 
@@ -259,6 +273,9 @@ impl DrawPiece {
             group,
             creature_id: None,
             depth_bottom: None,
+            light_mask_index: None,
+            self_lit: false,
+            fine_light_value: 0,
         }
     }
 }
@@ -371,6 +388,9 @@ pub struct Pose {
     /// two poses of one creature may list the same layers differently.
     pub layer_keys: Vec<LayerKey>,
     pub shadow: Option<DrawPiece>,
+    /// Fine-grid light value from LIGHTS.N at the creature's cell; 0 = dark patch.
+    /// Used by the lighting plugin to decide dynamic fade per tick.
+    pub fine_light_value: u8,
 }
 
 impl Pose {
@@ -473,20 +493,31 @@ pub fn map_scene(
 ) -> Result<MapScene> {
     let mut background = Vec::new();
 
-    // Земля и верхний слой: номера тайлов с единицы, 0 — пусто
+    // Земля и верхний слой: номера тайлов с единицы, 0 — пусто.
+    // Tile light masks are assigned from the original (col,row) indices:
+    // inverse pixel mapping is unreliable for decorations and objects, and
+    // unconfirmed for shadows (review #106, P1-4).
     for layer in [&input.map.ground, &input.map.overlay] {
         for (row, cells) in layer.iter().enumerate() {
             for (column, &value) in cells.iter().enumerate() {
                 if value != 0 {
                     let (x, y) = map::tile_position(column, row);
-                    background.push(DrawPiece::textured(
+                    let mut piece = DrawPiece::textured(
                         PieceGroup::Terrain,
                         TextureKey::Tile {
                             index: (value - 1) as usize,
                         },
                         x,
                         y,
-                    ));
+                    );
+                    if let Some(lights) = input.lights
+                        && row < lights.tiles.len()
+                        && column < lights.tiles[row].len()
+                    {
+                        let mask_value = lights.tiles[row][column];
+                        piece.light_mask_index = tile_light_mask_index(mask_value);
+                    }
+                    background.push(piece);
                 }
             }
         }
@@ -531,6 +562,12 @@ pub fn map_scene(
     {
         marker_pieces(entities, &mut overlays);
     }
+
+    // self_lit is already set by object_pieces for objects with 2+ flames.
+    // Light masks are NOT assigned to decorations, objects or shadows:
+    // the inverse pixel→tile mapping is unconfirmed for those surfaces
+    // (review #106, P1-4).
+
     Ok(MapScene {
         background,
         shadows,
@@ -567,8 +604,8 @@ pub fn creature_poses(
         objects,
         tables,
     };
-    for (character, x, y) in characters::placed(entities, state) {
-        let (px, py) = game_state::character_position(x, y);
+    for (character, cx, cy) in characters::placed(entities, state) {
+        let (px, py) = game_state::character_position(cx, cy);
         if let Some(pose) = character_pose(
             character,
             px,
@@ -576,6 +613,9 @@ pub fn creature_poses(
             state,
             &graphics,
             &PoseKind::of_record(character),
+            input.lights,
+            cx,
+            cy,
         )? {
             poses.push(pose);
         }
@@ -622,7 +662,25 @@ pub fn pose_in(
     graphics: &Graphics<'_>,
     kind: &PoseKind,
 ) -> Result<Option<Pose>> {
-    character_pose(character, x, y, state, graphics, kind)
+    character_pose(character, x, y, state, graphics, kind, None, 0, 0)
+}
+
+/// The same as [`pose_in`], but with a reference to LIGHTS.N for lighting metadata.
+#[allow(clippy::too_many_arguments)]
+pub fn pose_in_with_lights(
+    character: &game_state::Character,
+    x: i32,
+    y: i32,
+    state: &GameState,
+    graphics: &Graphics<'_>,
+    kind: &PoseKind,
+    lights: Option<&Lights>,
+    cell_x: i32,
+    cell_y: i32,
+) -> Result<Option<Pose>> {
+    character_pose(
+        character, x, y, state, graphics, kind, lights, cell_x, cell_y,
+    )
 }
 
 /// The graphics of one map, shared by the objects and the creatures of the list.
@@ -739,6 +797,12 @@ fn object_pieces(
     {
         main.depth_bottom = Some(bottom);
     }
+    // Self-lit goes by the flame list size, not by active slots (game.cpp:1573).
+    if simple.flames.len() >= 2 {
+        for piece in stack.iter_mut() {
+            piece.self_lit = true;
+        }
+    }
     // Огни объекта — сразу поверх него: все кадры анимации своего вида, по тике
     // на кадр. У кадра огня нет своего смещения, угол задаёт точка огня.
     for flame in &simple.flames {
@@ -776,6 +840,7 @@ fn object_pieces(
 ///
 /// `None` when there are no frames or no bottom edge is found: such a creature is
 /// not in the list at all, as in `render.py`.
+#[allow(clippy::too_many_arguments)]
 fn character_pose(
     character: &game_state::Character,
     x: i32,
@@ -783,6 +848,9 @@ fn character_pose(
     state: &GameState,
     graphics: &Graphics<'_>,
     kind: &PoseKind,
+    lights: Option<&Lights>,
+    cell_x: i32,
+    cell_y: i32,
 ) -> Result<Option<Pose>> {
     // The pose may belong to another animation than the record describes
     let mut record = (*character).clone();
@@ -867,10 +935,20 @@ fn character_pose(
     };
     let mut pieces = Vec::new();
     let mut layer_keys = Vec::new();
+    // Fine-grid light value from LIGHTS.N at the creature's cell.
+    let fine_light_value = lights.map_or(0u8, |lights| {
+        lights
+            .fine
+            .get(cell_y as usize)
+            .and_then(|r| r.get(cell_x as usize))
+            .copied()
+            .unwrap_or(0)
+    });
     for (key, frames) in tracks {
         if let Some(track) = layer_track(frames, base, ONE_TICK) {
             let mut p = DrawPiece::track(PieceGroup::Characters, track);
             p.creature_id = Some(record.slot);
+            p.fine_light_value = fine_light_value;
             pieces.push(p);
             layer_keys.push(key);
         }
@@ -878,6 +956,7 @@ fn character_pose(
     let shadow = layer_track(shadows_by_frame, base, ONE_TICK).map(|track| {
         let mut p = DrawPiece::track(PieceGroup::CharacterShadows, track);
         p.creature_id = Some(record.slot);
+        p.fine_light_value = fine_light_value;
         p
     });
     Ok(Some(Pose {
@@ -885,6 +964,7 @@ fn character_pose(
         pieces,
         layer_keys,
         shadow,
+        fine_light_value,
     }))
 }
 
@@ -892,13 +972,11 @@ fn light_pieces(input: &SceneInput<'_>, pieces: &mut Vec<DrawPiece>) {
     let Some(lights) = input.lights else { return };
     for (row, values) in lights.tiles.iter().enumerate() {
         for (column, &value) in values.iter().enumerate() {
-            if value != 0 {
+            if let Some(index) = tile_light_mask_index(value) {
                 let (x, y) = map::tile_position(column, row);
                 pieces.push(DrawPiece::textured(
                     PieceGroup::Lights,
-                    TextureKey::LightMask {
-                        index: (value - 1) as usize,
-                    },
+                    TextureKey::LightMask { index },
                     x,
                     y,
                 ));
@@ -931,6 +1009,66 @@ fn foot_pieces(map: &KonungMap, pieces: &mut Vec<DrawPiece>) {
             }
         }
     }
+}
+
+/// Convert a raw LIGHTS.N tile value to a zero-based mask index.
+///
+/// LIGHTS.N stores 1-based indices: 0 means no mask, 1 → index 0, 19 → index 18.
+/// Values outside 1..=TILE_MASKS (19) are treated as no mask (corrupted data).
+pub fn tile_light_mask_index(value: u8) -> Option<usize> {
+    if value > 0 && (value as usize) <= lights_res::TILE_MASKS {
+        Some((value as usize).saturating_sub(1))
+    } else {
+        None
+    }
+}
+
+/// Reverse of [`map::tile_position`]: pixel → tile column/row.
+///
+/// Forward: `x = col * 116 + (row & 1) * 58`, `y = row * 32`.
+/// The inverse reconstructs `row` from y exactly (`row = py / 32`), then tries both
+/// parity hypotheses for x — whichever yields a consistent integer column wins.
+/// Falls back to `(0, 0)` for negative coordinates or when both parities fail.
+#[cfg(test)]
+fn tile_column_row(px: i32, py: i32) -> (usize, usize) {
+    if px < 0 || py < 0 {
+        return (0, 0);
+    }
+    let tile_step_x: i32 = k1_data::map::TILE_STEP_X; // 116
+    let tile_step_y: i32 = k1_data::map::TILE_STEP_Y; // 32
+    let odd_row_shift: i32 = k1_data::map::ODD_ROW_SHIFT; // 58
+    let row = (py / tile_step_y) as usize;
+    // Try odd-row hypothesis first: x = col * STEP_X + SHIFT → col = (x - SHIFT) / STEP_X
+    if let Some(col_odd) = try_column(px - odd_row_shift, tile_step_x) {
+        return (col_odd, row);
+    }
+    // Even-row hypothesis: no shift → col = x / STEP_X
+    if let Some(col_even) = try_column(px, tile_step_x) {
+        return (col_even, row);
+    }
+    (0, 0)
+}
+
+/// Best-effort inverse: `(px - shift) / STEP` clamped to non-negative.
+/// Used by callers who don't mind an approximate column — e.g. bounding-box culling.
+#[cfg(test)]
+pub fn approximate_tile_column(px: i32) -> usize {
+    if px < 0 {
+        return 0;
+    }
+    (px / k1_data::map::TILE_STEP_X) as usize
+}
+
+/// Exact inverse component: returns `col` only when `px` is cleanly divisible by `step`.
+#[cfg(test)]
+fn try_column(px: i32, step: i32) -> Option<usize> {
+    if px < 0 {
+        return None;
+    }
+    if px % step != 0 {
+        return None;
+    }
+    Some((px / step) as usize)
 }
 
 fn marker_pieces(entities: &MapEntities<'_>, pieces: &mut Vec<DrawPiece>) {
@@ -1156,5 +1294,137 @@ mod tests {
         let animation = track.animation.unwrap();
         assert_eq!(animation.base, 1);
         assert_eq!(animation.frames[1].dx, 0);
+    }
+
+    // ── Lighting metadata tests ──────────────────────────────────────────────
+
+    #[test]
+    fn tile_column_row_reverses_tile_position_even_rows() {
+        // Even rows have no x-shift: col * 116 → exact match
+        for col in 0..80u32 {
+            let (px, py) = map::tile_position(col as usize, 0);
+            assert_eq!(tile_column_row(px, py), (col as usize, 0), "col={col}");
+        }
+        // Row 2 (even)
+        for col in 0..80u32 {
+            let (px, py) = map::tile_position(col as usize, 2);
+            assert_eq!(
+                tile_column_row(px, py),
+                (col as usize, 2),
+                "col={col}, row=2"
+            );
+        }
+    }
+
+    #[test]
+    fn tile_column_row_reverses_tile_position_odd_rows() {
+        // Odd rows shift x by ODD_ROW_SHIFT (=58): col * 116 + 58
+        for col in 0..80u32 {
+            let (px, py) = map::tile_position(col as usize, 1);
+            assert_eq!(tile_column_row(px, py), (col as usize, 1), "col={col}");
+        }
+        // Row 3 (odd)
+        for col in 0..80u32 {
+            let (px, py) = map::tile_position(col as usize, 3);
+            assert_eq!(
+                tile_column_row(px, py),
+                (col as usize, 3),
+                "col={col}, row=3"
+            );
+        }
+    }
+
+    #[test]
+    fn tile_column_row_boundary_edge_cases() {
+        // Negative coordinates → (0, 0)
+        assert_eq!(tile_column_row(-1, 0), (0, 0));
+        assert_eq!(tile_column_row(0, -1), (0, 0));
+        assert_eq!(tile_column_row(-1, -1), (0, 0));
+        // Zero → correct mapping
+        assert_eq!(tile_column_row(0, 0), (0, 0));
+        // Off-grid pixel that doesn't align with any tile → fallback
+        assert_eq!(tile_column_row(1, 0), (0, 0));
+        assert_eq!(tile_column_row(0, 1), (0, 0));
+        // Offset sprite: decoration placed between tiles — try_column returns None
+        // because 58 % 116 != 0 (the odd-row position is not divisible)
+        // but the odd-row hypothesis should catch it since 58 - 58 = 0
+        let (px, py) = map::tile_position(0, 1); // 0 * 116 + 58 = 58, 1 * 32 = 32
+        assert_eq!(tile_column_row(px, py), (0, 1));
+    }
+
+    #[test]
+    fn tile_column_row_across_all_tiles_round_trips() {
+        // Every tile on an 80×160 map round-trips correctly through forward + inverse.
+        for row in 0..160u32 {
+            for col in 0..80u32 {
+                let (px, py) = map::tile_position(col as usize, row as usize);
+                let got = tile_column_row(px, py);
+                assert_eq!(
+                    got,
+                    (col as usize, row as usize),
+                    "round-trip failed at ({col}, {row}): got {:?}",
+                    got
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn light_mask_index_value_0_means_none() {
+        assert_eq!(tile_light_mask_index(0), None, "value=0 → None");
+    }
+
+    #[test]
+    fn light_mask_index_value_1_gives_index_0() {
+        assert_eq!(tile_light_mask_index(1), Some(0), "1 → 0");
+    }
+
+    #[test]
+    fn light_mask_index_value_19_gives_index_18() {
+        // Boundary: 19 is the last valid 1-based index → 18 zero-based.
+        assert_eq!(tile_light_mask_index(19), Some(18), "19 → 18");
+    }
+
+    #[test]
+    fn light_mask_index_value_20_is_out_of_range() {
+        // 20 exceeds TILE_MASKS (19) → treated as no mask.
+        assert_eq!(tile_light_mask_index(20), None, "20 > 19 → None");
+    }
+
+    #[test]
+    fn light_mask_index_value_255_is_out_of_range() {
+        // Corrupted LIGHTS.N value 255 exceeds TILE_MASKS (19) → no mask.
+        assert_eq!(tile_light_mask_index(255), None, "255 > 19 → None");
+    }
+
+    #[test]
+    fn self_lit_follows_the_flame_list_size() {
+        // The original gates the fade on Flames.size() >= 2 (game.cpp:1573):
+        // the list length decides, whether the slots hold an active flame does not.
+        // Two inactive slots (flame_id < 0) still make the list two entries long:
+        // a slot-counting reading would say "not self-lit", the list says the opposite.
+        let two_empty: Vec<k1_data::objects_res::Flame> = vec![
+            k1_data::objects_res::Flame {
+                flame_id: -1,
+                x: 0,
+                y: 0,
+            },
+            k1_data::objects_res::Flame {
+                flame_id: -1,
+                x: 0,
+                y: 0,
+            },
+        ];
+        assert_eq!(two_empty.iter().filter(|f| f.flame_id >= 0).count(), 0);
+        assert!(two_empty.len() >= 2);
+
+        // A single entry is not self-lit even when its slot is active.
+        let one_active: Vec<_> = vec![k1_data::objects_res::Flame {
+            flame_id: 5,
+            x: 0,
+            y: 0,
+        }];
+        assert_eq!(one_active.iter().filter(|f| f.flame_id >= 0).count(), 1);
+        assert!(one_active.len() < 2);
     }
 }

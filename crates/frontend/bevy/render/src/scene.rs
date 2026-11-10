@@ -10,10 +10,12 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
+use bevy::sprite_render::SpriteMaterial;
 use kn_game::{Game, Piece, PieceGroup, Scene, TextureId};
 
 use crate::animation::{Animator, Frame, Sequence};
 use crate::camera::{PendingFrame, frame_scene};
+use crate::lighting::{LightingMaterials, SurfaceLighting, piece_surface_lighting};
 use crate::textures::{TextureCache, TextureEntry};
 
 /// Шаг z между соседними кусками сцены.
@@ -146,7 +148,17 @@ pub fn piece_sequence(
 /// этом не меняется, потому что z даёт номер куска в [`Scene::pieces`], а не
 /// соседство в дереве: куски одной группы идут вперемежку с чужими (персонажи с
 /// объектами), и каждый остаётся на своём месте.
-pub fn spawn_scene(commands: &mut Commands, scene: &Scene, cache: &TextureCache) -> Entity {
+///
+/// `lighting` — пул материалов подсветки ([`LightingMaterials`]): кусок получает
+/// материал по правилам поверхностей ([`surface_lighting`]) — земля по маске из
+/// LIGHTS.N, декорации и объекты без маски, огни и тени без материала. `None` —
+/// обычный спрайтовый материал, как до подсветки.
+pub fn spawn_scene(
+    commands: &mut Commands,
+    scene: &Scene,
+    cache: &TextureCache,
+    lighting: Option<&LightingMaterials>,
+) -> Entity {
     let root = commands
         .spawn((MapRoot, Transform::IDENTITY, Visibility::Visible))
         .id();
@@ -181,6 +193,21 @@ pub fn spawn_scene(commands: &mut Commands, scene: &Scene, cache: &TextureCache)
                 piece_visibility(base),
                 piece_transform(piece.x, piece.y, piece.w, piece.h, size, order),
             ));
+            if let Some(materials) = lighting {
+                match piece_surface_lighting(piece) {
+                    SurfaceLighting::TerrainMasked(index) => {
+                        entity.insert(SpriteMaterial(materials.terrain(Some(index))));
+                    }
+                    SurfaceLighting::TerrainPlain => {
+                        entity.insert(SpriteMaterial(materials.terrain(None)));
+                    }
+                    SurfaceLighting::Ambient => {
+                        entity.insert(SpriteMaterial(materials.ambient()));
+                    }
+                    // Flames, self-lit pieces, shadows and overlays draw unlit.
+                    SurfaceLighting::None => {}
+                }
+            }
             if let (Some(sequence), Some(animation)) = (sequence, piece.animation.as_ref()) {
                 entity.insert(Animator::with_base(
                     sequence,
@@ -335,19 +362,22 @@ pub struct SceneLoad {
 ///
 /// Does NOT remove the previous scene — the caller keeps the old root and
 /// clears it only after this returns `Ok` (the current `rebuild_scene` semantics).
+/// `lighting` — пул материалов подсветки; `None` — без подсветки.
+#[allow(clippy::too_many_arguments)]
 pub fn load_scene(
     game: &Game,
     scene: &Scene,
     shown: impl Fn(&Piece) -> bool,
     cache: &mut TextureCache,
     images: &mut Assets<Image>,
+    lighting: Option<&LightingMaterials>,
     commands: &mut Commands,
     pending: &mut PendingFrame,
 ) -> kn_game::Result<SceneLoad> {
     let ids = scene.texture_ids();
     let unique_textures = ids.len();
     let problems = cache.load(game, &ids, images)?;
-    let root = spawn_scene(commands, scene, cache);
+    let root = spawn_scene(commands, scene, cache, lighting);
     frame_scene(scene, cache, shown, pending);
     Ok(SceneLoad {
         root,
@@ -455,6 +485,9 @@ mod tests {
             group: PieceGroup::Objects,
             creature_id: None,
             depth_bottom: None,
+            light_mask_index: None,
+            self_lit: false,
+            fine_light_value: 0,
         };
         // Границы считают по базовому кадру и по каждому кадру анимации:
         // крупный огонь больше своего базового кадра, и без этого он ушёл бы за
@@ -476,6 +509,9 @@ mod tests {
             group,
             creature_id: None,
             depth_bottom: None,
+            light_mask_index: None,
+            self_lit: false,
+            fine_light_value: 0,
         }
     }
 

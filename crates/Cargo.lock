@@ -3403,6 +3403,8 @@ name = "kn-fe-player"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "k1-data",
+ "k1-game",
  "kn-game",
  "kn-input",
  "kn-render",
@@ -3414,6 +3416,8 @@ name = "kn-fe-viewer"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "k1-data",
+ "k1-game",
  "kn-game",
  "kn-input",
  "kn-render",

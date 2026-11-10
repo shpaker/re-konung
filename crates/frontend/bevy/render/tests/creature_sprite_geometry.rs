@@ -38,6 +38,9 @@ fn body() -> Piece {
         animation: None,
         group: PieceGroup::Characters,
         creature_id: Some(CREATURE),
+        light_mask_index: None,
+        self_lit: false,
+        fine_light_value: 0,
     }
 }
 
@@ -52,6 +55,9 @@ fn shadow() -> Piece {
         animation: None,
         group: PieceGroup::CharacterShadows,
         creature_id: Some(CREATURE),
+        light_mask_index: None,
+        self_lit: false,
+        fine_light_value: 0,
     }
 }
 

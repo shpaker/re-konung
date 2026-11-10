@@ -14,11 +14,34 @@
 //! What remains in the lighting ticket (#96) is applying the triple: the blend, the
 //! tile light, the two option switches and the per-map constant light. The windows
 //! whose value is the per-day night palette are reported as the darker palette: the
-//! original draws that choice as a coin flip at the cycle start, both palettes are
-//! dark, and so the missing flip moves no boundary.
+//! original draws that choice as a coin flip at the cycle start, both palettes are dark,
+//! and so the missing flip moves no boundary.
+//!
+//! #96 adds [`NightPalette`] so callers can select the variant explicitly; the default
+//! still returns the deeper one to keep existing callers green.
 
 /// Ticks in one full day/night cycle (confirmed: rus `0x5460` divisor).
 pub const CYCLE_TICKS: u64 = 21600;
+
+/// Which of the two confirmed night palettes the coin flip chooses at cycle tick 0.
+///
+/// Source: the coin flip (`System::rand() % 100 < 90`, Slavik `game.cpp:1768`) when the
+/// cycle remainder wraps through zero (rus file offset `0x1943F` / `VA 0x42903F`).
+/// Why the game alternates between them stays unknown — see the research page's
+/// "Unknown" section; we do not invent a cause such as moonlight or lightning.
+///
+/// Our divergence from the original: the original rolls once per cycle from an unseeded
+/// random source, making it a replay artifact. Ours is a pure function `(day, seed)` so
+/// a scrubbed timeline shows the same night regardless of frame rate or replay order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NightPalette {
+    /// The darker triple everywhere in the affected windows: `(-60, -70, -70)`.
+    Deep,
+    /// The lighter version where the green channel lifts to `-50` in plateaus of windows
+    /// 9–10, with ramps on entry and exit (`t <= 40`: `-70 + half(t)`, then
+    /// `-50 - half(t)`). Both palettes are dark so no boundary shifts.
+    Green,
+}
 
 /// The twelve non-zero thresholds that delimit thirteen windows within a cycle.
 /// Confirmed: contiguous int16 array at `VA 0x45AE0E` (rus), `0x45AE46` (eng),
@@ -104,7 +127,26 @@ fn half(t: f32) -> f32 {
 ///
 /// The two windows whose value is the per-day night palette are reported as the
 /// darker palette; see the module docs.
+///
+/// The ambient triple before the division by 100, for a cycle tick — using the
+/// darker night palette. This is what every existing caller gets and the value
+/// tested throughout the module so all existing tests stay green.
 pub fn ambient_value(cycle_tick: u64) -> (f32, f32, f32) {
+    ambient_value_with(cycle_tick, NightPalette::Deep)
+}
+
+/// Variant of [`ambient_value`] that selects a specific night palette.
+///
+/// When the palette is [`NightPalette::Green`] windows 8–10 (cycle ticks
+/// 11880..11910, 11910..16155, 16155..16200) change as follows:
+/// - index 8: flat `(-60,-70,-70)` → ramp `t <= 40`:
+///   `(-60, -70 + half(t), -70)`, else `(-60,-50,-70)`.
+/// - index 9: `(-60,-70,-70)` → `(-60,-50,-70)`.
+/// - index 10: flat `(-60,-70,-70)` → ramp `t <= 40`:
+///   `(-60, -50 - half(t), -70)`, else `(-60,-70,-70)`.
+///   All arithmetic stays the original's integer-halved kind; boundaries do not
+///   move because both palettes are dark.
+pub fn ambient_value_with(cycle_tick: u64, night: NightPalette) -> (f32, f32, f32) {
     let d = cycle_tick % CYCLE_TICKS;
     let t = |w: usize| since_start(d, w);
     match window_index(d) {
@@ -134,11 +176,30 @@ pub fn ambient_value(cycle_tick: u64) -> (f32, f32, f32) {
             (-u, -50.0 - u / 3.0, -70.0)
         }
         7 => (-60.0, -70.0, -70.0),
-        // Window 9: the night palette, ramped from the previous window's value;
-        // the darker palette is the model's stand-in for the coin flip.
-        8 if t(8) < 41.0 => (-60.0, -70.0 + half(t(8)), -70.0),
-        8 | 9 => (-60.0, -70.0, -70.0),
-        10 if t(10) < 41.0 => (-60.0, -50.0 - half(t(10)), -70.0),
+        // Window 9/10: the night palette. Index 8 is all-ramp for Green only;
+        // Deep stays flat throughout. The plateau differs by palette; green also
+        // has a down-ramp on its exit (index 10).
+        8 if t(8) < 41.0 => {
+            if matches!(night, NightPalette::Green) {
+                (-60.0, -70.0 + half(t(8)), -70.0)
+            } else {
+                (-60.0, -70.0, -70.0)
+            }
+        }
+        8 | 9 => {
+            if matches!(night, NightPalette::Green) {
+                (-60.0, -50.0, -70.0)
+            } else {
+                (-60.0, -70.0, -70.0)
+            }
+        }
+        10 if t(10) < 41.0 => {
+            if matches!(night, NightPalette::Green) {
+                (-60.0, -50.0 - half(t(10)), -70.0)
+            } else {
+                (-60.0, -70.0, -70.0)
+            }
+        }
         10 => (-60.0, -70.0, -70.0),
         11 if t(11) < 101.0 => {
             let u = half(t(11));
@@ -428,26 +489,64 @@ mod tests {
         }
     }
 
-    /// Window 9 is thirty ticks long and its ramp condition is `t <= 40`, so
-    /// the whole window is the ramp: it leaves the previous plateau rising and
-    /// the window ends mid-climb — there is no run of ticks at a settled
-    /// triple. The flat `(-60, -70, -70)` belongs to window 10, not here, even
-    /// though the ramp's first two ticks carry the same value on their way out
-    /// of window 8.
+    /// Window 9 (index 8) is thirty ticks long. For Green it is all ramp;
+    /// for Deep it stays flat at `(-60, -70, -70)` because the ramp only lifts
+    /// the green channel toward `-50`.
     #[test]
-    fn window_9_is_all_ramp_and_reaches_no_plateau() {
+    fn window_9_is_flat_for_deep_and_ramp_for_green() {
+        // Deep: flat throughout.
         for tick in 11880..11910 {
-            let t = (tick - 11880) as f32;
             assert_eq!(window_index(tick), 8, "at {tick}");
             assert_eq!(
-                ambient_value(tick),
-                (-60.0, -70.0 + half(t), -70.0),
-                "at {tick}: still on the ramp"
+                ambient_value_with(tick, NightPalette::Deep),
+                (-60.0, -70.0, -70.0),
+                "at {tick}: Deep must stay flat"
             );
         }
-        // The climb peaks at the window's last tick fourteen units above the
-        // triple it left with, and turns back down there — it settles nowhere.
-        assert_eq!(ambient_value(11909), (-60.0, -56.0, -70.0));
+        // Green: ramp from -70 to -50.
+        for tick in 11880..11910 {
+            let t = (tick - 11880) as f32;
+            assert_eq!(
+                ambient_value_with(tick, NightPalette::Green),
+                (-60.0, -70.0 + half(t), -70.0),
+                "at {tick}: Green must ramp"
+            );
+        }
+        assert_eq!(
+            ambient_value_with(11909, NightPalette::Green),
+            (-60.0, -56.0, -70.0)
+        );
+    }
+
+    /// Regression: the window-8 ramp must not affect Deep. Boundary ticks
+    /// checked with concrete expected values for both palettes.
+    #[test]
+    fn window_8_regression_deep_vs_green() {
+        // Deep stays flat at every tick in the window.
+        for tick in [11880, 11890, 11909, 11910] {
+            assert_eq!(
+                ambient_value_with(tick, NightPalette::Deep),
+                (-60.0, -70.0, -70.0),
+                "Deep at {tick}"
+            );
+        }
+        // Green ramps inside the window, then plateaus.
+        assert_eq!(
+            ambient_value_with(11880, NightPalette::Green),
+            (-60.0, -70.0, -70.0)
+        );
+        assert_eq!(
+            ambient_value_with(11890, NightPalette::Green),
+            (-60.0, -65.0, -70.0)
+        );
+        assert_eq!(
+            ambient_value_with(11909, NightPalette::Green),
+            (-60.0, -56.0, -70.0)
+        );
+        assert_eq!(
+            ambient_value_with(11910, NightPalette::Green),
+            (-60.0, -50.0, -70.0)
+        );
     }
 
     #[test]

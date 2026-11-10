@@ -10,6 +10,10 @@ kn-game = { path = "../../../game/kn-game" }
 kn-render = { path = "../render" }
 kn-input = { path = "../input" }
 kn-ui = { path = "../ui" }
+# The lighting of the scene is K1 knowledge: the LIGHTS.RES masks, the map's
+# LIGHTS.N fine grid and the per-tick light params all come from the K1 layer
+k1-data = { path = "../../../game/k1/k1-data" }
+k1-game = { path = "../../../game/k1/k1-game" }
 bevy = { workspace = true, features = ["bevy_feathers"] }
 
 [features]

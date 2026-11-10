@@ -101,7 +101,7 @@ fn spawn_map(edition: &'static str, dir: PathBuf) -> (App, Scene, Entity) {
                 problems.is_empty(),
                 "{edition}: {map_ref:?}: картинки не собрались: {problems:?}"
             );
-            built.root = Some(spawn_scene(&mut commands, &built.scene, &cache));
+            built.root = Some(spawn_scene(&mut commands, &built.scene, &cache, None));
         },
     );
     // Два кадра: команды разворачиваются после системы, а GlobalTransform и

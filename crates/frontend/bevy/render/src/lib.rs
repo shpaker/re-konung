@@ -9,6 +9,7 @@ pub mod animation;
 pub mod camera;
 pub mod creature_animation;
 pub mod creatures;
+pub mod lighting;
 pub mod scene;
 pub mod textures;
 
@@ -31,6 +32,11 @@ pub use creatures::{
     CreatureData, CreatureLayer, CreatureNode, CreatureRoot, CreatureShadow, CreatureSlot,
     DepthMap, LayerAnimation, LayerData, SpawnedCreature, clear_creatures, creature_layer_step,
     despawn_creature, spawn_creature, update_creature_depth,
+};
+pub use lighting::{
+    FineLightGrid, KonungLightMaterial, KonungLightingPlugin, LightingMaterials, LightingState,
+    SurfaceLighting, light_mask_image, piece_surface_lighting, surface_lighting,
+    update_creature_lighting, update_lighting_uniforms,
 };
 pub use scene::{
     MapRoot, SceneGroup, SceneLoad, ScenePiece, Z_STEP, clear_scene, load_scene, piece_center,

@@ -74,6 +74,13 @@ pub struct Piece {
     pub group: PieceGroup,
     pub creature_id: Option<usize>,
     pub depth_bottom: Option<i32>,
+    /// Index into LIGHTS.N tiles (1-based value minus 1); None = no tile light.
+    pub light_mask_index: Option<usize>,
+    /// Whether this piece carries two or more flames (self-lit → skip ambient fade).
+    pub self_lit: bool,
+    /// Fine-grid light value from LIGHTS.N at the creature's cell; 0 = dark patch.
+    /// Used by the lighting plugin to decide dynamic fade per tick.
+    pub fine_light_value: u8,
 }
 
 impl Piece {
@@ -389,7 +396,13 @@ impl Game {
                     (true, Some(state)) => {
                         let graphics =
                             k1_game::scene::Graphics::new(graph, objects, &self.resources.tables);
-                        creature_geometry(state, map_ref.number as usize, hero, &graphics)
+                        creature_geometry(
+                            state,
+                            map_ref.number as usize,
+                            hero,
+                            &graphics,
+                            lights.as_ref(),
+                        )
                     }
                     _ => (Vec::new(), std::collections::HashMap::new()),
                 };
@@ -503,10 +516,11 @@ impl Game {
                 // the machine plays it. Every other record shows the state its
                 // file carries.
                 let is_special = character.state == k1_game::creature_anim::SPECIAL_STATE;
-                let rest = match creature_rest_pose(character, px, py, &state, &graphics) {
-                    Some(pose) => clips_of(pose),
-                    None => continue,
-                };
+                let rest =
+                    match creature_rest_pose(character, px, py, &state, &graphics, None, 0, 0) {
+                        Some(pose) => clips_of(pose),
+                        None => continue,
+                    };
                 let walk: Vec<Option<CreatureClips>> = (0..DIRECTIONS as u8)
                     .map(|direction| {
                         k1_game::scene::pose_in(
@@ -756,6 +770,9 @@ fn piece(from: k1_game::scene::DrawPiece) -> Piece {
         group: from.group,
         creature_id: from.creature_id,
         depth_bottom: from.depth_bottom,
+        light_mask_index: from.light_mask_index,
+        self_lit: from.self_lit,
+        fine_light_value: from.fine_light_value,
     }
 }
 
@@ -853,30 +870,42 @@ fn creature_layer(piece: k1_game::scene::DrawPiece, key: LayerKey) -> CreatureLa
 /// Shared by [`Game::creature_animations`] and [`creature_geometry`] so the
 /// node's static geometry and its resting clips come from one pose, never two
 /// that could list the layers differently.
+#[allow(clippy::too_many_arguments)]
 fn creature_rest_pose(
     character: &game_state::Character,
     x: i32,
     y: i32,
     state: &GameState,
     graphics: &k1_game::scene::Graphics<'_>,
+    lights: Option<&map::Lights>,
+    cell_x: i32,
+    cell_y: i32,
 ) -> Option<k1_game::scene::Pose> {
     let rest_state = if character.state == k1_game::creature_anim::SPECIAL_STATE {
         6
     } else {
         character.state
     };
-    k1_game::scene::pose_in(
-        character,
-        x,
-        y,
-        state,
-        graphics,
-        &PoseKind {
-            state: rest_state,
-            direction: character.direction,
-            frame: Some(0),
-        },
-    )
+    let kind = PoseKind {
+        state: rest_state,
+        direction: character.direction,
+        frame: Some(0),
+    };
+    if let Some(lights) = lights {
+        k1_game::scene::pose_in_with_lights(
+            character,
+            x,
+            y,
+            state,
+            graphics,
+            &kind,
+            Some(lights),
+            cell_x,
+            cell_y,
+        )
+    } else {
+        k1_game::scene::pose_in(character, x, y, state, graphics, &kind)
+    }
     .ok()
     .flatten()
 }
@@ -897,6 +926,7 @@ fn creature_geometry(
     map_number: usize,
     hero: Option<usize>,
     graphics: &k1_game::scene::Graphics<'_>,
+    lights: Option<&map::Lights>,
 ) -> (Vec<Piece>, std::collections::HashMap<usize, (i32, i32)>) {
     let roster = k1_game::creatures::roster(state, map_number, hero);
     let mut pieces = Vec::new();
@@ -907,7 +937,16 @@ fn creature_geometry(
         };
         let (px, py) =
             game_state::character_position(i32::from(creature.cell.0), i32::from(creature.cell.1));
-        let Some(pose) = creature_rest_pose(character, px, py, state, graphics) else {
+        let Some(pose) = creature_rest_pose(
+            character,
+            px,
+            py,
+            state,
+            graphics,
+            lights,
+            i32::from(creature.cell.0),
+            i32::from(creature.cell.1),
+        ) else {
             continue;
         };
         let before = pieces.len();
@@ -1036,6 +1075,9 @@ mod tests {
             group: PieceGroup::Terrain,
             creature_id: None,
             depth_bottom: None,
+            light_mask_index: None,
+            self_lit: false,
+            fine_light_value: 0,
         }
     }
 
@@ -1171,6 +1213,9 @@ mod tests {
                 group: PieceGroup::Characters,
                 creature_id: None,
                 depth_bottom: None,
+                light_mask_index: None,
+                self_lit: false,
+                fine_light_value: 0,
             }],
         };
         assert_eq!(scene.texture_ids(), [TextureId(gear), TextureId(body)]);

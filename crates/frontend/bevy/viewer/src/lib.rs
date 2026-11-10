@@ -12,10 +12,12 @@ use std::time::{Duration, Instant};
 
 use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
+    ecs::schedule::common_conditions::resource_exists,
     feathers::{
         FeathersPlugins,
         controls::{
-            FeathersButton, FeathersCheckbox, FeathersSelect, OptionIndex, list_rows_from_strings,
+            FeathersButton, FeathersCheckbox, FeathersSelect, FeathersSlider, OptionIndex,
+            list_rows_from_strings,
         },
         display::caption,
         theme::ThemeBackgroundColor,
@@ -24,19 +26,29 @@ use bevy::{
     input::mouse::{AccumulatedMouseMotion, MouseWheel},
     picking::hover::Hovered,
     prelude::*,
-    ui::Checked,
-    ui_widgets::{Activate, ValueChange},
+    render::view::screenshot::{Capturing, Screenshot, save_to_disk},
+    sprite_render::SpriteMaterial,
+    ui::{Checked, Pressed},
+    ui_widgets::{Activate, SliderStep, SliderValue, ValueChange},
+    window::PresentMode,
 };
-use kn_game::simulation::Simulation;
-use kn_game::{DayPhase, Game, MapRef, MapSource, Piece, SceneOptions, TICK_MS, group_is_shown};
+use k1_data::lights_res;
+use k1_data::map;
+use k1_data::repo::{GAME_FILES, GameDir, TUTORIAL_FILES};
+use k1_game::lighting;
+use k1_game::time_of_day::CYCLE_TICKS;
+use kn_game::{
+    DayPhase, Game, MapRef, MapSource, Piece, PieceGroup, SceneOptions, TICK_MS, group_is_shown,
+};
 use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
     AnimPlugin, AnimSet, Animator, CameraApply, CameraBounds, CameraInput, CameraState, Clock,
     CreatureAnim, CreatureAnimReport, CreatureAnimationPlugin, CreatureMotion, CreatureNode,
     CreatureNodesVisible, CreatureRoot, CreatureSet, CreatureShadow, CreatureSim, CreatureSprite,
-    GameResource, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup,
-    ScenePiece, Sequence, TextureCache, clear_scene, load_scene, ortho_scale,
-    reset_creature_animations, reset_creature_positions,
+    FineLightGrid, GameResource, KonungLightMaterial, KonungLightingPlugin, LightingMaterials,
+    LightingState, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup,
+    ScenePiece, Sequence, TextureCache, clear_scene, load_scene, ortho_scale, piece_center,
+    piece_size, reset_creature_animations, reset_creature_positions, update_lighting_uniforms,
 };
 use kn_ui::{dark_theme, pointer_over_ui, sync_checked};
 
@@ -161,6 +173,506 @@ pub struct Stats {
 /// exact spawn of the first build (same seed, same map → same initial state).
 const SIM_SEED: u64 = 42;
 
+/// The lighting inputs of the opened game: the LIGHTS.RES tile masks the pool
+/// is built from at startup, and optionally the tick the lighting is pinned to
+/// (`--light-tick`) instead of following the scene clock each frame.
+#[derive(Resource)]
+struct LightingSetup {
+    tick: Option<u64>,
+    masks: Vec<(Vec<u8>, u32, u32)>,
+}
+
+/// The LIGHTS.RES tile masks of the opened game: raw brightness bytes with
+/// their pixel size, ready for [`LightingMaterials::new`]. A game without a
+/// readable LIGHTS.RES gets an empty pool — the scene still lights, the tiles
+/// just carry no tile mask. Every way the file can fail warns with its path
+/// and reason: an empty pool reached silently reads as a broken night scene
+/// (review #106).
+fn lights_res_masks(game: &Game) -> Vec<(Vec<u8>, u32, u32)> {
+    let Some(path) = k1_game::resources::find_named(game.root(), "lights.res") else {
+        warn!(
+            "LIGHTS.RES not found in {}; the scene lights without tile masks",
+            game.root().display()
+        );
+        return Vec::new();
+    };
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            warn!(
+                "LIGHTS.RES unreadable at {}: {error}; the scene lights without tile masks",
+                path.display()
+            );
+            return Vec::new();
+        }
+    };
+    let res = match lights_res::parse(&bytes) {
+        Ok(res) => res,
+        Err(error) => {
+            warn!(
+                "LIGHTS.RES unparsable at {}: {error}; the scene lights without tile masks",
+                path.display()
+            );
+            return Vec::new();
+        }
+    };
+    res.tiles
+        .into_iter()
+        .map(|mask| {
+            (
+                mask,
+                lights_res::TILE_MASK_WIDTH as u32,
+                lights_res::TILE_MASK_HEIGHT as u32,
+            )
+        })
+        .collect()
+}
+
+/// The map's LIGHTS.N fine grid — the tile-light index per fine cell, what the
+/// creature lighting reads to tell a lit patch from a dark one. `None` when
+/// the map has no LIGHTS.N: every cell counts as dark, exactly as on a map
+/// without lights.
+fn map_fine_lights(game: &Game, map_ref: MapRef) -> Option<Vec<Vec<u8>>> {
+    let files = match map_ref.source {
+        MapSource::Game => GAME_FILES,
+        MapSource::Tutorial => TUTORIAL_FILES,
+    };
+    let bytes = GameDir::new(game.root())
+        .lights_bytes(map_ref.number, files)
+        .ok()??;
+    map::parse_lights(&bytes).ok().map(|lights| lights.fine)
+}
+
+/// The k1 reading of `k1_game::lighting::params` into the render contract:
+/// terrain and decorations get the ground ambient only inside the ground-light
+/// window (outside it a zero blend is the shader's no-op), objects and
+/// characters the plain ambient always, plus the ground tile-light colour.
+fn lighting_state(params: lighting::LightingParams) -> LightingState {
+    LightingState {
+        terrain_blend: params.ground_ambient.map_or(Vec3::ZERO, Vec3::from),
+        ambient_blend: Vec3::from(params.ambient),
+        light_color: Vec3::from(params.ground_light),
+    }
+}
+
+/// Writes the lighting state for the scene clock — the single time source the
+/// scrub moves and the simulation is caught up to — or for the tick pinned by
+/// `--light-tick`, which holds a night scene up for screenshots and
+/// inspection. Writes only on change: a rewritten state re-extracts the
+/// uniforms for the GPU, and the day cycle shifts a few times a minute.
+fn update_lighting_state(
+    setup: Option<Res<LightingSetup>>,
+    clock: Res<Clock>,
+    mut state: ResMut<LightingState>,
+) {
+    let tick = match setup.and_then(|setup| setup.tick) {
+        Some(tick) => tick,
+        None => clock.ticks,
+    };
+    let next = lighting_state(lighting::params(tick, SIM_SEED));
+    if *state != next {
+        *state = next;
+    }
+}
+
+/// Builds the material pool from the game's LIGHTS.RES at startup: lighting is
+/// part of the scene, not an option — the uniforms arrive every frame through
+/// [`update_lighting_state`].
+fn setup_lighting(
+    setup: Res<LightingSetup>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<KonungLightMaterial>>,
+    mut commands: Commands,
+) {
+    let pool = LightingMaterials::new(&mut images, &mut materials, &setup.masks);
+    info!(
+        "lighting: {} materials ({} tile masks from LIGHTS.RES)",
+        pool.len(),
+        setup.masks.len(),
+    );
+    commands.insert_resource(pool);
+}
+
+// --- Time-of-day scrub -----------------------------------------------------
+
+/// Marker of the cycle-position slider: [`change_scrub`] tells this very
+/// slider's value changes from the other widgets'.
+#[derive(Component, Clone, Copy, Default)]
+struct ScrubSlider;
+
+/// A time-of-day preset button carrying its cycle position
+/// (`docs/k1/time-of-day.md`, "Camera presets" — places to stand in the cycle,
+/// not boundaries). `Default` exists for the template macro; every button in
+/// the panel names its own tick.
+#[derive(Component, Clone, Copy, Default)]
+struct ScrubPreset(u64);
+
+/// One scrub session: the slider drives the Clock while the simulation waits.
+///
+/// The Clock is the single time source; the widget writes nothing itself —
+/// like the `Play` checkbox, its thumb is mirrored from the state by
+/// [`sync_scrub_slider`] whenever no drag is in progress.
+#[derive(Resource, Default)]
+struct ScrubState {
+    /// The session is open: the slider is pressed, a preset fired, or a value
+    /// change is still unapplied. While it stands, the thumb mirror is held
+    /// off and the simulation stays where it is.
+    active: bool,
+    /// The absolute day (`ticks / CYCLE_TICKS`) captured once at the session's
+    /// start: a scrub moves the cycle position only, so the night palette —
+    /// `night_palette(day, seed)` over the absolute day — stays the day's.
+    day: u64,
+    /// The cycle position the widget asked for, `0..CYCLE_TICKS`.
+    target: u64,
+    /// `target` has not reached the Clock yet.
+    pending: bool,
+    /// The interaction is over (drag released, keyboard step, preset): apply
+    /// the last target and let the simulation catch up to the Clock.
+    release: bool,
+    /// The Clock moved during the session: a bare click on the track changes
+    /// nothing and must not settle the simulation.
+    moved: bool,
+}
+
+/// The cycle position a slider value names: whole ticks inside `0..CYCLE_TICKS`.
+fn scrub_position(value: f32) -> u64 {
+    value.round().clamp(0.0, (CYCLE_TICKS - 1) as f32) as u64
+}
+
+/// The slider's value change: it moves the Clock at once while the simulation
+/// stays where it is; the release (`is_final`) settles both. The day is
+/// captured at the session's start — the slider writes
+/// `day * CYCLE_TICKS + target`, never the day itself.
+fn change_scrub(
+    change: On<ValueChange<f32>>,
+    sliders: Query<&ScrubSlider>,
+    clock: Res<Clock>,
+    mut scrub: ResMut<ScrubState>,
+    mut commands: Commands,
+) {
+    if sliders.get(change.source).is_err() {
+        return;
+    }
+    if !scrub.active {
+        scrub.active = true;
+        scrub.day = clock.ticks / CYCLE_TICKS;
+    }
+    let position = scrub_position(change.value);
+    scrub.target = position;
+    scrub.pending = true;
+    if change.is_final {
+        // A keyboard step is a jump, not a drag: one change, settled at once.
+        scrub.release = true;
+    }
+    // The thumb and its label follow the pointer like a checkbox's tick
+    // follows the click ([kn_ui::sync_checked]): the value is the widget's own
+    // view state; the real one is the Clock, and [apply_scrub] moves that.
+    commands
+        .entity(change.source)
+        .insert(SliderValue(position as f32));
+}
+
+/// A preset button: the jump the slider makes without a drag — applied and
+/// settled right away.
+fn jump_to_preset(
+    activate: On<Activate>,
+    presets: Query<&ScrubPreset>,
+    clock: Res<Clock>,
+    mut scrub: ResMut<ScrubState>,
+) {
+    let Ok(preset) = presets.get(activate.entity) else {
+        return;
+    };
+    if !scrub.active {
+        scrub.active = true;
+        scrub.day = clock.ticks / CYCLE_TICKS;
+    }
+    scrub.target = preset.0;
+    scrub.pending = true;
+    scrub.release = true;
+}
+
+/// Applies the scrub session to the single time source and decides when the
+/// simulation may follow.
+///
+/// While the slider is held, the Clock is pinned to the target every frame and
+/// the simulation stays where it stands (`epoch = clock.ticks,
+/// sim_ticks = 0` leaves the shared catch-up nothing to chase) — so a drag
+/// lights the scrubbed tick without replaying any movement. The pin is not a
+/// one-shot: `advance_clock` keeps running under the held slider while
+/// playback is on, and without rewriting `clock.ticks` every frame the light
+/// would drift a tick per frame from the scrubbed position until the next
+/// value change restored it (review #106). A bare press opens the session at
+/// the Clock's own position — the thumb has not moved, so a hold to
+/// `day * CYCLE_TICKS + target` with the target read from the Clock moves
+/// nothing. On release the hold is lifted by re-basing the epoch at zero,
+/// which is the whole settle: the next pass of `advance_creature_sim` walks
+/// the simulation to the Clock — forward by plain catch-up, backward by its
+/// own seed replay — and the creatures land exactly on the scrubbed tick.
+/// `reset_creature_positions` would teleport them home instead (its tested
+/// purpose), and nothing else can satisfy `tick_number == clock.ticks`.
+fn apply_scrub(
+    slider: Option<Single<Has<Pressed>, With<ScrubSlider>>>,
+    mut scrub: ResMut<ScrubState>,
+    mut clock: ResMut<Clock>,
+    mut sim: ResMut<CreatureSim>,
+) {
+    let pressed = slider.is_some_and(|slider| *slider);
+    if pressed && !scrub.active {
+        scrub.active = true;
+        scrub.day = clock.ticks / CYCLE_TICKS;
+        // The hold starts where the clock stands: until the first value change
+        // the session owns the Clock but moves it nowhere.
+        scrub.target = clock.ticks % CYCLE_TICKS;
+    }
+    // The pointer left the slider without a final value change (cancel): the
+    // session is over all the same.
+    if scrub.active && !pressed && !scrub.release {
+        scrub.release = true;
+    }
+    if scrub.pending {
+        clock.ticks = scrub.day * CYCLE_TICKS + scrub.target;
+        // A scrub is a discrete jump: the partial tick of the old position
+        // means nothing about the new one.
+        clock.sub_tick = 0.0;
+        scrub.moved = true;
+        scrub.pending = false;
+    }
+    if !scrub.active {
+        return;
+    }
+    if !scrub.release {
+        // Hold the Clock at the target for the whole frame: the same formula
+        // the value change applied, rewritten after `advance_clock` moved it.
+        clock.ticks = scrub.day * CYCLE_TICKS + scrub.target;
+        clock.sub_tick = 0.0;
+        sim.epoch = clock.ticks;
+        sim.sim_ticks = 0;
+        return;
+    }
+    if scrub.moved
+        && let Some(ticks) = sim.sim.as_ref().map(|simulation| simulation.tick_number())
+    {
+        sim.epoch = 0;
+        sim.sim_ticks = ticks;
+    }
+    *scrub = ScrubState::default();
+}
+
+/// Mirrors the Clock into the slider whenever no drag is in progress — the
+/// same direction as [sync_playboxes]: while the simulation plays, the thumb
+/// rides the cycle position (`clock.ticks % CYCLE_TICKS`) and the day line of
+/// the diagnostics moves with it; the widget never writes the state itself
+/// outside its own interaction.
+fn sync_scrub_slider(
+    mut commands: Commands,
+    scrub: Res<ScrubState>,
+    clock: Res<Clock>,
+    sliders: Query<(Entity, &SliderValue), With<ScrubSlider>>,
+) {
+    if scrub.active {
+        return;
+    }
+    let want = (clock.ticks % CYCLE_TICKS) as f32;
+    for (entity, value) in &sliders {
+        if value.0 != want {
+            // A new component, not a field write: `SliderValue` is immutable,
+            // and the widget docs name insertion as the way to set it.
+            // Written only on change — a rewritten value re-renders the
+            // widget's bar and label for nothing.
+            commands.entity(entity).insert(SliderValue(want));
+        }
+    }
+}
+
+/// Where the capture camera aims — the first lit terrain piece of the current
+/// map, in world coordinates.
+#[derive(Resource, Default)]
+struct CaptureTarget(Option<Vec2>);
+
+/// Capture path and counters for the exit report, set by `--screenshot`.
+#[derive(Resource, Default)]
+struct CaptureRequest {
+    path: Option<PathBuf>,
+    terrain_pieces: usize,
+}
+
+/// Capture phases — settle the pipelines, save the shot, report and exit.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum CapturePhase {
+    #[default]
+    Settle,
+    Shot,
+    Done,
+}
+
+/// How many frames the pipelines get to specialize the light material before
+/// the screenshot.
+const SETTLE_FRAMES: u32 = 40;
+/// Camera zoom step while capturing: 1:1, a 114-px tile spans 114 screen px.
+const CAPTURE_ZOOM: usize = 3;
+
+/// Drives the `--screenshot` capture — aims the camera at the first lit tile,
+/// settles the pipelines, saves the shot, logs the run's measurements and
+/// exits. The lighting on the shot is the session's: pinned by `--light-tick`
+/// or the simulation's current tick.
+///
+/// Runs after [`CameraApply`]: the zoom it picks must reach the projection
+/// before the shot, and the map must already be built.
+#[allow(clippy::too_many_arguments)]
+fn capture(
+    mut commands: Commands,
+    request: Res<CaptureRequest>,
+    target: Res<CaptureTarget>,
+    pool: Res<LightingMaterials>,
+    state: Res<LightingState>,
+    mut zoom: ResMut<CameraState>,
+    mut camera: Single<&mut Transform, With<MapCamera>>,
+    lit: Query<(), With<SpriteMaterial<KonungLightMaterial>>>,
+    capturing: Query<(), With<Capturing>>,
+    time: Res<Time>,
+    mut phase: Local<CapturePhase>,
+    mut frames: Local<u32>,
+    // (seconds sum, frame count) over the whole run — the CPU frame-time report
+    mut frame_time: Local<(f32, u32)>,
+) {
+    frame_time.0 += time.delta_secs();
+    frame_time.1 += 1;
+    match *phase {
+        CapturePhase::Settle => {
+            if let Some(center) = target.0 {
+                camera.translation = Vec3::new(center.x, center.y, 0.0);
+            }
+            zoom.zoom = CAPTURE_ZOOM;
+            if *frames >= SETTLE_FRAMES {
+                *frames = 0;
+                *phase = CapturePhase::Shot;
+                if let Some(path) = request.path.clone() {
+                    commands
+                        .spawn(Screenshot::primary_window())
+                        .observe(save_to_disk(path));
+                }
+            }
+        }
+        CapturePhase::Shot => {
+            if capturing.is_empty() && *frames > 1 {
+                let (seconds, count) = *frame_time;
+                info!(
+                    "capture: avg frame time {:.2} ms over {} frames · terrain blend {:?} · \
+                     terrain pieces {} · sprites with the light material {} · materials {}",
+                    seconds * 1000.0 / count.max(1) as f32,
+                    count,
+                    state.terrain_blend,
+                    request.terrain_pieces,
+                    lit.iter().count(),
+                    pool.len(),
+                );
+                commands.write_message(AppExit::Success);
+                *phase = CapturePhase::Done;
+            }
+        }
+        CapturePhase::Done => {}
+    }
+    *frames += 1;
+}
+
+/// Benchmark request from `--benchmark N`: after the same settle window the
+/// screenshot uses, collect N per-frame times and print the `BENCH …` line.
+/// A benchmark run never captures — the CLI rejects `--benchmark` together
+/// with `--screenshot` up front.
+#[derive(Resource)]
+struct BenchmarkRequest {
+    frames: u32,
+}
+
+/// Benchmark phases — settle the pipelines and the camera, measure, exit.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum BenchmarkPhase {
+    #[default]
+    Settle,
+    Measure,
+    Done,
+}
+
+/// Drives `--benchmark N` — reuses the screenshot path's settle window, then
+/// samples the frame time for N frames and prints one machine-readable line:
+/// `BENCH map=17 frames=600 avg_ms=.. p95_ms=.. p99_ms=.. sprites=..
+/// light_materials=..`, followed by `AppExit::Success`. No screenshot is
+/// taken.
+///
+/// The samples are read from the `DiagnosticsStore` value
+/// [`FrameTimeDiagnosticsPlugin`] writes each Update — the same wall-clock
+/// frame time the diagnostics panel shows, not a second measurement. Where
+/// the scheduler places this system against the plugin's own system decides
+/// whether a sample is the current frame's delta or the previous frame's;
+/// either way it is N consecutive deltas of settled frames. The percentiles
+/// are nearest-rank over the N samples.
+#[allow(clippy::too_many_arguments)]
+fn benchmark(
+    request: Res<BenchmarkRequest>,
+    stats: Res<Stats>,
+    viewer: Res<Viewer>,
+    pool: Option<Res<LightingMaterials>>,
+    diagnostics: Res<DiagnosticsStore>,
+    pieces: Query<(), With<ScenePiece>>,
+    mut commands: Commands,
+    mut phase: Local<BenchmarkPhase>,
+    mut frames: Local<u32>,
+    mut samples: Local<Vec<f64>>,
+) {
+    match *phase {
+        BenchmarkPhase::Settle => {
+            if *frames >= SETTLE_FRAMES {
+                samples.clear();
+                *frames = 0;
+                *phase = BenchmarkPhase::Measure;
+            }
+        }
+        BenchmarkPhase::Measure => {
+            if let Some(value) = diagnostics
+                .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
+                .and_then(|frame_time| frame_time.value())
+            {
+                samples.push(value);
+            }
+            if samples.len() >= request.frames as usize {
+                let mut sorted = samples.clone();
+                sorted.sort_by(f64::total_cmp);
+                // Nearest-rank: the smallest value covering the fraction of
+                // the sorted samples.
+                let percentile = |fraction: f64| {
+                    let rank = ((sorted.len() as f64) * fraction).ceil() as usize;
+                    sorted[rank.clamp(1, sorted.len()) - 1]
+                };
+                let average = samples.iter().sum::<f64>() / samples.len() as f64;
+                let map = stats
+                    .map
+                    .or_else(|| viewer.maps.get(viewer.selected).copied())
+                    .map_or_else(
+                        || "?".to_owned(),
+                        |map| match map.source {
+                            MapSource::Game => map.number.to_string(),
+                            MapSource::Tutorial => format!("t{}", map.number),
+                        },
+                    );
+                println!(
+                    "BENCH map={map} frames={} avg_ms={average:.2} p95_ms={:.2} p99_ms={:.2} \
+                     sprites={} light_materials={}",
+                    samples.len(),
+                    percentile(0.95),
+                    percentile(0.99),
+                    pieces.iter().count(),
+                    pool.as_ref().map_or(0, |pool| pool.len()),
+                );
+                commands.write_message(AppExit::Success);
+                *phase = BenchmarkPhase::Done;
+            }
+        }
+        BenchmarkPhase::Done => {}
+    }
+    *frames += 1;
+}
+
 /// Per-creature id labels the viewer draws above the creatures. The creature
 /// nodes themselves belong to the shared subsystem: `kn_render` spawns and
 /// animates them, the viewer only puts its diagnostics on top (issue #70).
@@ -222,90 +734,155 @@ pub struct ViewerConfig {
     pub game_dir: PathBuf,
     pub maps: Vec<MapRef>,
     pub selected: usize,
+    /// Tick the lighting is pinned to (`--light-tick`); without it the lighting
+    /// follows the scene clock every frame.
+    pub lighting_tick: Option<u64>,
+    /// Capture a screenshot to this path and exit.
+    pub screenshot: Option<PathBuf>,
+    /// Run this many measured frames after the settle window, print one
+    /// `BENCH …` line to stdout and exit (`--benchmark`).
+    pub benchmark: Option<u32>,
 }
 
 /// The viewer window: runs until the user closes it.
 pub fn run_viewer(config: ViewerConfig) {
     let labels = map_labels(&config.maps);
     let selected = config.selected;
-
-    App::new()
-        .add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: format!("re-konung viewer — {}", config.game_dir.display()),
-                        resolution: (1280, 800).into(),
-                        ..default()
-                    }),
+    let capture_request = config
+        .screenshot
+        .as_ref()
+        .map(|path| CaptureRequest {
+            path: Some(path.clone()),
+            terrain_pieces: 0,
+        })
+        .unwrap_or_default();
+    let benchmark_request = config.benchmark.map(|frames| BenchmarkRequest { frames });
+    // A benchmark run only: the measurement must not be quantized to the
+    // monitor's refresh quantum — with the default Fifo a frame sits on the
+    // next vblank, so day and night both read as ~16.67 ms and the meter
+    // reports the display's pace, not the scene's cost. Interactive runs keep
+    // the default.
+    let present_mode = benchmark_request
+        .as_ref()
+        .map(|_| PresentMode::AutoNoVsync)
+        .unwrap_or_default();
+    // LIGHTS.RES is read before the game moves into its resource
+    let setup = LightingSetup {
+        tick: config.lighting_tick,
+        masks: lights_res_masks(&config.game),
+    };
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: format!("re-konung viewer — {}", config.game_dir.display()),
+                    resolution: (1280, 800).into(),
+                    present_mode,
                     ..default()
-                })
-                // Пиксельная графика: без сглаживания при дробном масштабе
-                .set(ImagePlugin::default_nearest()),
+                }),
+                ..default()
+            })
+            // Пиксельная графика: без сглаживания при дробном масштабе
+            .set(ImagePlugin::default_nearest()),
+    )
+    .add_plugins((
+        FeathersPlugins,
+        MapCameraPlugin,
+        // Тик игры: на нём меняются кадры объектов, персонажей и огней
+        AnimPlugin::new(TICK_MS as f32),
+        // Составные спрайты существ, их клипы и синхронизация кадров: та же
+        // подсистема, что поднимает существ в проигрывателе (#70)
+        CreatureAnimationPlugin,
+        // Подсветка сцены: материалы с масками LIGHTS.RES и контракт времени
+        KonungLightingPlugin,
+        FrameTimeDiagnosticsPlugin::default(),
+    ))
+    .insert_resource(dark_theme())
+    .insert_resource(GameResource(config.game))
+    .init_resource::<TextureCache>()
+    .init_resource::<ActiveRoot>()
+    .init_resource::<Stats>()
+    .init_resource::<CreatureLabels>()
+    .init_resource::<CaptureTarget>()
+    .init_resource::<ScrubState>()
+    .insert_resource(Rebuild { map: true })
+    .insert_resource(Viewer {
+        maps: config.maps.clone(),
+        selected,
+        overlays: DEFAULT_OVERLAYS,
+        playback: DEFAULT_PLAYBACK,
+    })
+    .add_systems(Startup, move |world: &mut World| {
+        if let Err(error) = world.spawn_scene_list(panel_list(labels.clone(), selected)) {
+            error!("не собрался интерфейс: {error}");
+        }
+    })
+    .add_systems(Update, camera_control.in_set(CameraInput))
+    .add_systems(
+        Update,
+        (
+            playback_hotkeys,
+            apply_playback,
+            sync_playboxes,
+            apply_scrub,
+            sync_scrub_slider,
+            update_lighting_state,
+            rebuild_scene,
+            sync_groups,
+            sync_creature_visibility,
+            spawn_creature_labels,
+            diagnostics,
         )
-        .add_plugins((
-            FeathersPlugins,
-            MapCameraPlugin,
-            // Тик игры: на нём меняются кадры объектов, персонажей и огней
-            AnimPlugin::new(TICK_MS as f32),
-            // Составные спрайты существ, их клипы и синхронизация кадров: та же
-            // подсистема, что поднимает существ в проигрывателе (#70)
-            CreatureAnimationPlugin,
-            FrameTimeDiagnosticsPlugin::default(),
-        ))
-        .insert_resource(dark_theme())
-        .insert_resource(GameResource(config.game))
-        .init_resource::<TextureCache>()
-        .init_resource::<ActiveRoot>()
-        .init_resource::<Stats>()
-        .init_resource::<CreatureLabels>()
-        .insert_resource(Rebuild { map: true })
-        .insert_resource(Viewer {
-            maps: config.maps.clone(),
-            selected,
-            overlays: DEFAULT_OVERLAYS,
-            playback: DEFAULT_PLAYBACK,
-        })
-        .add_systems(Startup, move |world: &mut World| {
-            if let Err(error) = world.spawn_scene_list(panel_list(labels.clone(), selected)) {
-                error!("не собрался интерфейс: {error}");
-            }
-        })
-        .add_systems(Update, camera_control.in_set(CameraInput))
-        .add_systems(
-            Update,
-            (
-                playback_hotkeys,
-                apply_playback,
-                sync_playboxes,
-                rebuild_scene,
-                sync_groups,
-                sync_creature_visibility,
-                spawn_creature_labels,
-                diagnostics,
-            )
-                .chain()
-                // The frame's clock position must be settled before the simulation
-                // catches up to it and before the creature systems read it, and the
-                // map a rebuild asks for must be requested before the shared
-                // subsystem builds it — never left to the scheduler's placement of
-                // two unconstrained chains (review #68).
-                .after(AnimSet::Clock)
-                .after(CameraInput)
-                .before(CreatureSet::Prepare)
-                .before(CameraApply),
-        )
-        // The viewer's diagnostics on top of the shared pipeline: the id rides the
-        // body image, so it can only be placed once the subsystem has written the
-        // node and the frame's sprite offsets.
-        .add_systems(
-            Update,
-            sync_creature_labels
-                .after(CreatureSet::Swap)
-                .after(AnimSet::Sprites)
-                .after(CreatureSet::Nodes),
-        )
-        .run();
+            .chain()
+            // The frame's clock position must be settled — by the scrub as by
+            // anything else — before the lighting reads it, before the
+            // simulation catches up to it and before the creature systems read
+            // it, and the map a rebuild asks for must be requested before the
+            // shared subsystem builds it — never left to the scheduler's
+            // placement of two unconstrained chains (review #68). The lighting
+            // state itself is written before the plugin's uniform writer reads
+            // it, or a day change would reach the GPU a frame late (review
+            // #106).
+            .after(AnimSet::Clock)
+            .after(CameraInput)
+            .before(CreatureSet::Prepare)
+            .before(CameraApply)
+            .before(update_lighting_uniforms),
+    )
+    // The viewer's diagnostics on top of the shared pipeline: the id rides the
+    // body image, so it can only be placed once the subsystem has written the
+    // node and the frame's sprite offsets.
+    .add_systems(
+        Update,
+        sync_creature_labels
+            .after(CreatureSet::Swap)
+            .after(AnimSet::Sprites)
+            .after(CreatureSet::Nodes),
+    )
+    // The lighting pool at startup; the per-frame state runs in the chained
+    // systems above, after the scrub has settled the clock. The capture
+    // controller runs after the camera write-out so the zoom it picks reaches
+    // the projection on the next frame's apply.
+    .add_systems(Startup, setup_lighting)
+    .add_systems(
+        Update,
+        (
+            capture
+                .run_if(resource_exists::<CaptureRequest>)
+                .run_if(resource_exists::<LightingMaterials>)
+                .after(CameraApply),
+            benchmark.run_if(resource_exists::<BenchmarkRequest>),
+        ),
+    );
+    app.insert_resource(setup);
+    if capture_request.path.is_some() {
+        app.insert_resource(capture_request);
+    }
+    if let Some(request) = benchmark_request {
+        app.insert_resource(request);
+    }
+    app.run();
 }
 
 /// Camera-control binding: applies the kn-input mechanisms to this app's camera.
@@ -430,6 +1007,54 @@ fn panel(labels: Vec<String>, selected: usize) -> impl Scene {
             ResetAnimation
             on(reset_animation)
             --
+            @caption("Time of day")
+            --
+            @FeathersSlider {
+                @min: 0.0,
+                @max: {(CYCLE_TICKS - 1) as f32},
+            }
+            // Keyboard and track steps of one displayed minute; the drag itself
+            // rounds to whole ticks (`SliderPrecision` defaults to 0)
+            SliderStep(15.0)
+            ScrubSlider
+            on(change_scrub)
+            --
+            Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: px(6.0),
+            }
+            Children[
+                @FeathersButton {
+                    @caption: bsn! { @caption("Light 07:00") }
+                }
+                ScrubPreset(900)
+                on(jump_to_preset)
+                --
+                @FeathersButton {
+                    @caption: bsn! { @caption("Warm 09:00") }
+                }
+                ScrubPreset(2700)
+                on(jump_to_preset)
+            ]
+            --
+            Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: px(6.0),
+            }
+            Children[
+                @FeathersButton {
+                    @caption: bsn! { @caption("Ground 18:13") }
+                }
+                ScrubPreset(11000)
+                on(jump_to_preset)
+                --
+                @FeathersButton {
+                    @caption: bsn! { @caption("Ramp 03:04") }
+                }
+                ScrubPreset(18960)
+                on(jump_to_preset)
+            ]
+            --
             @caption("") Diagnostics
         ]
     }
@@ -544,6 +1169,7 @@ fn rebuild_scene(
     game: Res<GameResource>,
     mut cache: ResMut<TextureCache>,
     mut images: ResMut<Assets<Image>>,
+    lighting: Option<Res<LightingMaterials>>,
     mut commands: Commands,
     mut active: ResMut<ActiveRoot>,
     mut stats: ResMut<Stats>,
@@ -551,6 +1177,8 @@ fn rebuild_scene(
     mut labels: ResMut<CreatureLabels>,
     mut motion: ResMut<CreatureMotion>,
     mut visible: ResMut<CreatureNodesVisible>,
+    target: Option<ResMut<CaptureTarget>>,
+    capture: Option<ResMut<CaptureRequest>>,
 ) {
     if !rebuild.map {
         return;
@@ -574,6 +1202,7 @@ fn rebuild_scene(
         shown(&viewer.options()),
         &mut cache,
         &mut images,
+        lighting.as_deref(),
         &mut commands,
         &mut pending,
     ) {
@@ -583,6 +1212,37 @@ fn rebuild_scene(
             return;
         }
     };
+    // The fine grid of the map just loaded: what the creature lighting reads.
+    // Maps without LIGHTS.N insert `None` — every cell dark.
+    commands.insert_resource(FineLightGrid(map_fine_lights(&game.0, map_ref)));
+    // aim the capture camera at the first lit terrain tile and count the
+    // terrain pieces for the exit report
+    if let (Some(mut capture), Some(mut target)) = (capture, target)
+        && capture.path.is_some()
+    {
+        capture.terrain_pieces = scene
+            .pieces
+            .iter()
+            .filter(|piece| piece.group == PieceGroup::Terrain && piece.creature_id.is_none())
+            .count();
+        let lit = scene.pieces.iter().find(|piece| {
+            piece.group == PieceGroup::Terrain
+                && piece.light_mask_index.is_some()
+                && piece.creature_id.is_none()
+        });
+        if let Some(piece) = lit {
+            let size = piece
+                .texture
+                .as_ref()
+                .and_then(|id| cache.get(id))
+                .map_or(UVec2::ZERO, |entry| entry.size);
+            let size = piece_size(piece, size);
+            let center = piece_center(piece.x as f32, piece.y as f32, size.x, size.y);
+            target.0 = Some(center);
+            // The whole-map framing stays in bounds; only the center moves
+            pending.center = Some(center);
+        }
+    }
     for problem in &loaded.problems {
         warn!("карта {map_ref:?}: {problem}");
     }
@@ -1000,17 +1660,19 @@ fn playback_label(playback: PlayState) -> &'static str {
 
 /// The game-time readout: clock face, phase, day index and progress through the cycle.
 ///
-/// Every part of it is a function of the simulation's own tick, so the panel cannot
-/// disagree with the simulation — there is no clock, counter or timer of its own.
-/// With no simulation nothing is shown: a map whose simulation failed to build must
-/// not display a zero clock. The four phase words are our reading of the cycle, not
-/// a property of the original; the derivation and the 06:00 offset are recorded in
-/// `docs/k1/time-of-day.md`.
-fn game_time_line(sim: Option<&Simulation>) -> String {
-    let Some(simulation) = sim else {
+/// Every part of it is a function of the scene clock's tick — the single time
+/// source the lighting follows and the simulation is caught up to on a scrub
+/// release — so the panel cannot disagree with the picture. The simulation's
+/// own tick is not read here: mid-drag it lags the clock by design. `None`
+/// (a map whose simulation failed to build) shows nothing: a clock of its own
+/// would read 06:00 over a frozen scene and look like a running day. The four
+/// phase words are our reading of the cycle, not a property of the original;
+/// the derivation and the 06:00 offset are recorded in `docs/k1/time-of-day.md`.
+fn game_time_line(tick: Option<u64>) -> String {
+    let Some(tick) = tick else {
         return String::new();
     };
-    let time = simulation.game_time();
+    let time = k1_game::time_of_day::game_time(tick);
     format!(
         "\nclock {:02}:{:02} · {} · day {} of the cycle · {}%",
         time.clock_hour,
@@ -1092,7 +1754,9 @@ fn diagnostics(
                     playback_label(viewer.playback),
                 )
             };
-            let time = game_time_line(sim.sim.as_ref());
+            // The readout follows the Clock; the simulation's presence only
+            // gates it ([game_time_line]).
+            let time = game_time_line(sim.sim.is_some().then_some(clock.ticks));
             format!(
                 "{} {} · {pieces} · {} textures · {} ms{problems}{sim_error}{creatures}\nzoom ×{} · {} fps{playback}{time}",
                 match map.source {
@@ -1496,6 +2160,9 @@ mod tests {
             group,
             creature_id: None,
             depth_bottom: None,
+            light_mask_index: None,
+            self_lit: false,
+            fine_light_value: 0,
         };
         let scene = kn_game::Scene {
             creature_pieces: Vec::new(),
@@ -2012,23 +2679,20 @@ mod tests {
             .game_time()
     }
 
-    /// The readout is the model's answer for the simulation's own tick: 317 ticks
-    /// are window 1 of `docs/k1/time-of-day.md` — neutral ambient, no ground
-    /// light, 21 minutes past the 06:00 our clock face starts the cycle at.
+    /// The readout is the model's answer for the scene clock's tick — the single
+    /// time source — so day and position always agree with the lighting and the
+    /// scrubbed thumb: 317 ticks are window 1 of `docs/k1/time-of-day.md` —
+    /// neutral ambient, no ground light, 21 minutes past the 06:00 our clock
+    /// face starts the cycle at; a full day on the clock shows as day 1.
     #[test]
-    fn the_time_line_reads_the_simulation_tick() {
-        let Some((dir, map_ref)) = game_and_first_map() else {
-            return;
-        };
-        let game = Game::open(&dir).unwrap();
-        let mut simulation = game.simulation(map_ref, SIM_SEED).unwrap();
-        for _ in 0..317 {
-            simulation.tick();
-        }
-        assert_eq!(simulation.game_time().cycle_tick, 317);
+    fn the_time_line_reads_the_clock_tick() {
         assert_eq!(
-            game_time_line(Some(&simulation)),
+            game_time_line(Some(317)),
             "\nclock 06:21 · day · day 0 of the cycle · 1%"
+        );
+        assert_eq!(
+            game_time_line(Some(CYCLE_TICKS + 317)),
+            "\nclock 06:21 · day · day 1 of the cycle · 1%"
         );
     }
 
@@ -2185,6 +2849,59 @@ mod tests {
             time_of(&app).cycle_tick,
             5,
             "and continues from there alone"
+        );
+    }
+
+    /// A map change keeps the ambient correct: the state the lighting pool is
+    /// driven from stays `params(clock.ticks, seed)` — the Clock never resets
+    /// on a switch, and the fresh simulation's day begins at the epoch the
+    /// switch pinned (the day-restart itself is
+    /// [`switching_to_another_map_recreates_the_day_with_the_new_simulation`]
+    /// ). The pool is game-wide (LIGHTS.RES), built once at startup, so what a
+    /// switch could strand stale is the state, not the materials.
+    #[test]
+    fn switching_to_another_map_keeps_the_ambient_on_the_new_simulation_s_tick() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let mut app = scrub_app(Some((game, map_ref)));
+        app.world_mut().resource_mut::<Clock>().ticks = 2 * CYCLE_TICKS + 11000;
+        app.update();
+        assert_eq!(
+            scrub_lighting(&app),
+            lighting_state(lighting::params(2 * CYCLE_TICKS + 11000, SIM_SEED)),
+            "the first map lights from the clock"
+        );
+
+        // The map-change path: a fresh simulation, the epoch pinned to the
+        // clock; the ambient must not move off the clock's tick.
+        let clock_ticks = app.world().resource::<Clock>().ticks;
+        let fresh = app
+            .world()
+            .resource::<GameResource>()
+            .0
+            .simulation(map_ref, SIM_SEED)
+            .unwrap();
+        {
+            let mut sim = app.world_mut().resource_mut::<CreatureSim>();
+            sim.sim = Some(fresh);
+            sim.epoch = clock_ticks;
+            sim.sim_ticks = 0;
+        }
+        app.update();
+        assert_eq!(
+            scrub_lighting(&app),
+            lighting_state(lighting::params(clock_ticks, SIM_SEED)),
+            "the ambient stays on the clock across the switch"
+        );
+
+        app.world_mut().resource_mut::<Clock>().ticks = clock_ticks + 5;
+        app.update();
+        assert_eq!(
+            scrub_lighting(&app),
+            lighting_state(lighting::params(clock_ticks + 5, SIM_SEED)),
+            "and follows it with the new simulation"
         );
     }
 
@@ -3109,6 +3826,85 @@ mod tests {
         );
     }
 
+    /// The cost of a scrub release's settle on the busiest map — the one whose
+    /// simulation carries the most creatures. Forward `0 -> 18960` is plain
+    /// catch-up; backward `18960 -> 900` is the seed replay, the only way
+    /// back. Measured in release and printed; no bound on the numbers and no
+    /// optimization — the measurement says only whether a release can stutter
+    /// (review #106).
+    ///
+    /// ```bash
+    /// cargo test --release --manifest-path crates/Cargo.toml -p kn-fe-viewer \
+    ///     --lib benchmark_scrub_catchup_cost -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "cost measurement: release only, and only when run explicitly"]
+    fn benchmark_scrub_catchup_cost() {
+        let Some((dir, _)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        // The map whose simulation carries the most creatures: the settle
+        // walks exactly that population.
+        let (busiest, creatures) = game
+            .maps()
+            .unwrap()
+            .into_iter()
+            .filter_map(|map_ref| {
+                game.simulation(map_ref, SIM_SEED)
+                    .ok()
+                    .map(|simulation| (map_ref, simulation.states().len()))
+            })
+            .max_by_key(|&(_, count)| count)
+            .expect("the edition gives maps with simulations");
+        println!("scrub catch-up cost, busiest map {busiest:?}: {creatures} creatures");
+
+        for (label, from, to) in [
+            ("forward   0 -> 18960", 0, 18960),
+            ("backward 18960 -> 900", 18960, 900),
+        ] {
+            let mut runs = [Duration::ZERO; 3];
+            for run in &mut runs {
+                let mut app = catch_up_app(&dir, busiest, from);
+                let slider = spawn_scrub_slider(&mut app);
+                app.world_mut().entity_mut(slider).remove::<Pressed>();
+                app.world_mut().trigger(ValueChange {
+                    source: slider,
+                    value: to as f32,
+                    is_final: true,
+                });
+                let started = Instant::now();
+                app.update();
+                *run = started.elapsed();
+                // The settle really landed on the scrubbed tick.
+                let simulation = app.world().resource::<CreatureSim>().sim.as_ref().unwrap();
+                assert_eq!(simulation.tick_number(), to, "{label}");
+            }
+            let ms: Vec<String> = runs
+                .iter()
+                .map(|run| format!("{:.1}", run.as_secs_f64() * 1000.0))
+                .collect();
+            println!("{label}: {} ms", ms.join(", "));
+        }
+    }
+
+    /// The scrub app as the drag tests build it, standing at `clock_ticks`
+    /// with its simulation caught up to it: exactly what the window holds
+    /// between a drag move and the release. The catch-up of the warm-up frame
+    /// (the whole `clock_ticks` for a backward case) stays outside the timed
+    /// update.
+    fn catch_up_app(dir: &std::path::Path, map_ref: MapRef, clock_ticks: u64) -> App {
+        let game = Game::open(dir).unwrap();
+        let mut sim = CreatureSim::default();
+        sim.sim = game.simulation(map_ref, SIM_SEED).ok();
+        sim.initial_pixels = sim.sim.as_ref().unwrap().initial_pixels();
+        let mut app = scrub_app(Some((game, map_ref)));
+        *app.world_mut().resource_mut::<CreatureSim>() = sim;
+        app.world_mut().resource_mut::<Clock>().ticks = clock_ticks;
+        app.update();
+        app
+    }
+
     #[test]
     fn depth_boundaries_stay_monotonic_on_every_map() {
         // The flame on rus map 1 used to invert a boundary: the fire's bottom
@@ -3169,6 +3965,701 @@ mod tests {
             judged += 1;
         }
         assert!(judged > 0, "the edition must give maps to judge");
+    }
+
+    // --- Scene lighting -------------------------------------------------------
+
+    /// The k1 mapping into the render contract: the ground window gates the
+    /// terrain blend, the plain ambient passes through always. Night at tick
+    /// 11000 sits inside the window; day at tick 900 outside it.
+    #[test]
+    fn the_lighting_state_follows_the_ground_window() {
+        let night = lighting::params(11000, SIM_SEED);
+        assert!(
+            night.ground_window,
+            "tick 11000 is inside the ground window"
+        );
+        let state = lighting_state(night);
+        assert_eq!(
+            state.terrain_blend,
+            Vec3::from(night.ground_ambient.expect("window open")),
+            "the terrain carries the ground ambient while the window is open"
+        );
+        assert_eq!(state.ambient_blend, Vec3::from(night.ambient));
+        assert_eq!(state.light_color, Vec3::from(night.ground_light));
+
+        let day = lighting::params(900, SIM_SEED);
+        assert!(!day.ground_window, "tick 900 is outside the ground window");
+        let state = lighting_state(day);
+        assert_eq!(
+            state.terrain_blend,
+            Vec3::ZERO,
+            "a closed window must leave the terrain at the shader's no-op"
+        );
+        assert_eq!(state.ambient_blend, Vec3::from(day.ambient));
+        assert_eq!(state.light_color, Vec3::from(day.ground_light));
+    }
+
+    /// The moving-creature lighting regression: a creature in a dark cell
+    /// carries the ambient material, stepping into a lit cell drops it —
+    /// the same entity, animator untouched, nothing respawned — and stepping
+    /// back out restores it.
+    ///
+    /// The lit patch is placed on a cell the creature provably walks through:
+    /// a dry run of the deterministic simulation (same seed) records its
+    /// cells, the grid lights exactly one of them, and the replayed app walks
+    /// the same route cell for cell.
+    #[test]
+    fn a_moving_creature_gains_and_loses_its_lighting_material_with_its_cell() {
+        use bevy::sprite_render::SpriteMaterial;
+        use kn_game::movement::grid::{FINE_HEIGHT, FINE_WIDTH};
+        use kn_render::KonungLightMaterial;
+        #[allow(unused_imports)]
+        use kn_render::update_creature_lighting;
+
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let scene = game.scene(map_ref, &SceneOptions::ALL).unwrap();
+
+        // The dry run: every creature's cell at every tick of the window.
+        let mut probe = game.simulation(map_ref, SIM_SEED).unwrap();
+        let mut per_tick: Vec<Vec<(usize, (u32, u32))>> = Vec::new();
+        for _ in 0..=90 {
+            per_tick.push(probe.states().iter().map(|s| (s.id, s.cell)).collect());
+            probe.tick();
+        }
+
+        // The real pipeline, exactly as the viewer window runs it.
+        let mut cache = TextureCache::default();
+        let mut images = Assets::<Image>::default();
+        let (anim, report) = build_creature_anim(
+            &game,
+            map_ref,
+            None,
+            &scene.creature_pieces,
+            &mut cache,
+            &mut images,
+        );
+        assert!(
+            report.error.is_none(),
+            "clips must build: {:?}",
+            report.error
+        );
+        let mut sim_resource = CreatureSim::default();
+        sim_resource.sim = game.simulation(map_ref, SIM_SEED).ok();
+        sim_resource.initial_pixels = sim_resource.sim.as_ref().unwrap().initial_pixels();
+        let spawns = build_creature_spawns(&scene, &cache, &anim, &sim_resource.initial_pixels);
+        assert!(!spawns.plans.is_empty(), "the map must give creatures");
+        let depth = build_depth_map(&scene, &cache);
+
+        let mut materials = Assets::<KonungLightMaterial>::default();
+        // No tile masks needed: only the plain ambient material is asserted.
+        let pool = LightingMaterials::new(&mut images, &mut materials, &[]);
+        let ambient = pool.ambient();
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::transform::TransformPlugin,
+            AnimPlugin::new(TICK_MS as f32),
+            CreatureAnimationPlugin,
+        ))
+        .insert_resource(GameResource(game))
+        .insert_resource(images)
+        .init_resource::<TextureCache>()
+        .insert_resource(sim_resource)
+        .insert_resource(CreatureDepth { map: depth })
+        .insert_resource(CreatureMotion {
+            map: Some(map_ref),
+            seed: SIM_SEED,
+            ..Default::default()
+        })
+        .insert_resource(anim)
+        .insert_resource(spawns)
+        .insert_resource(pool)
+        // The system under test, at the place the plugin runs it.
+        .add_systems(Update, update_creature_lighting.after(CreatureSet::Nodes));
+        app.world_mut()
+            .resource_mut::<Clock>()
+            .goto(PlayState::Paused);
+        app.update();
+        // Body sprite of every creature the pipeline spawned (layer 0, body).
+        let mut bodies: HashMap<usize, Entity> = HashMap::new();
+        let mut query = app.world_mut().query::<(Entity, &CreatureSprite)>();
+        for (entity, tag) in query.iter(app.world()) {
+            if !tag.is_shadow && tag.layer == 0 {
+                bodies.insert(tag.creature_id, entity);
+            }
+        }
+        let mut node_query = app.world_mut().query::<&CreatureNode>();
+        let node_count = node_query.iter(app.world()).count();
+        let mut sprite_query = app.world_mut().query::<&CreatureSprite>();
+        let sprite_count = sprite_query.iter(app.world()).count();
+        assert!(node_count > 0, "the map must give creature nodes");
+
+        // A creature with a body sprite that enters and leaves a cell within
+        // the window: on at `t`, dark before and after, not its home cell.
+        let cell_at = |id: usize, t: usize| {
+            per_tick[t]
+                .iter()
+                .find(|(other, _)| *other == id)
+                .map(|(_, cell)| *cell)
+        };
+        // A stay, not a single tick: a creature that arrives at `t` (cell
+        // changed) and departs at `leave` (cell changes again) stands on the
+        // cell for [arrive, leave), and the material must follow exactly that.
+        let mut picked = None;
+        'outer: for &id in bodies.keys() {
+            let home = cell_at(id, 0).expect("every creature has a cell");
+            for arrive in 2..per_tick.len() - 2 {
+                let on = cell_at(id, arrive).expect("in range");
+                if on == cell_at(id, arrive - 1).expect("in range") || on == home {
+                    continue;
+                }
+                for leave in arrive + 1..per_tick.len() {
+                    if cell_at(id, leave) != Some(on) {
+                        picked = Some((id, on, arrive, leave));
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        let Some((id, lit_cell, lit_tick, lit_leave)) = picked else {
+            panic!("ни одно существо не вошло и не вышло из клетки за 90 тиков");
+        };
+
+        // The whole grid dark except the cell the creature walks through.
+        let mut fine = vec![vec![0u8; FINE_WIDTH as usize]; FINE_HEIGHT as usize];
+        fine[lit_cell.1 as usize][lit_cell.0 as usize] = 7;
+        app.insert_resource(FineLightGrid(Some(fine)));
+
+        let body = bodies[&id];
+        let mut samples: Vec<(bool, bool)> = Vec::new();
+        for tick in 0..per_tick.len() as u64 {
+            app.world_mut().resource_mut::<Clock>().ticks = tick;
+            app.update();
+            let world = app.world();
+            let state = world
+                .resource::<CreatureSim>()
+                .sim
+                .as_ref()
+                .unwrap()
+                .states()
+                .into_iter()
+                .find(|state| state.id == id)
+                .expect("the creature keeps its state");
+            let tick = tick as usize;
+            if (lit_tick..lit_leave).contains(&tick) {
+                assert_eq!(
+                    state.cell, lit_cell,
+                    "the replay stands on the lit cell for the whole stay"
+                );
+            }
+            assert!(
+                world.get_entity(body).is_ok(),
+                "the body sprite is never despawned"
+            );
+            samples.push((
+                world
+                    .get::<SpriteMaterial<KonungLightMaterial>>(body)
+                    .is_some(),
+                world.get::<Animator>(body).is_some(),
+            ));
+        }
+        let world = app.world();
+
+        // Dark at home: the ambient material from the very first frame.
+        assert!(
+            samples[0].0,
+            "a creature in a dark cell must carry the ambient material"
+        );
+        assert_eq!(
+            world
+                .get::<SpriteMaterial<KonungLightMaterial>>(body)
+                .map(|material| &material.0),
+            Some(&ambient),
+            "the material is the pool's plain ambient one"
+        );
+        // On the lit cell: the material is gone — without a respawn.
+        assert!(
+            !samples[lit_tick].0,
+            "a creature on a lit cell must drop the material"
+        );
+        // Back on a dark cell: the material returns.
+        assert!(
+            samples[lit_leave].0,
+            "back in the dark the material is restored"
+        );
+        for (tick, (has_material, has_animator)) in samples.iter().enumerate() {
+            assert!(
+                *has_animator,
+                "tick {tick}: the animator must stay on the sprite"
+            );
+            let want_material = !(lit_tick..lit_leave).contains(&tick);
+            assert_eq!(
+                *has_material, want_material,
+                "tick {tick}: the material follows the stay on the cell"
+            );
+        }
+        // Nothing respawned: node and sprite counts are what spawn built.
+        let mut node_query = app.world_mut().query::<&CreatureNode>();
+        assert_eq!(
+            node_query.iter(app.world()).count(),
+            node_count,
+            "no creature node was respawned by the light changes"
+        );
+        let mut sprite_query = app.world_mut().query::<&CreatureSprite>();
+        assert_eq!(
+            sprite_query.iter(app.world()).count(),
+            sprite_count,
+            "no creature sprite was respawned by the light changes"
+        );
+    }
+
+    // --- Time-of-day scrub ----------------------------------------------------
+
+    /// A headless scrub app: the lighting writer and the scrub systems in the
+    /// chained order the window runs them. `Some((game, map_ref))` arms the
+    /// shared catch-up's backward branch (its seed replay needs the map).
+    fn scrub_app(live: Option<(Game, MapRef)>) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Clock::new(TICK_MS as f32))
+            .insert_resource(CreatureSim::default())
+            .insert_resource(LightingState::default())
+            .init_resource::<ScrubState>()
+            .add_observer(change_scrub)
+            .add_observer(jump_to_preset)
+            // The window's chain runs the scrub before the lighting read; the
+            // shared catch-up lands between the settle and the next frame.
+            .add_systems(
+                Update,
+                (apply_scrub, sync_scrub_slider, update_lighting_state).chain(),
+            );
+        if let Some((game, map_ref)) = live {
+            app.insert_resource(GameResource(game))
+                .insert_resource(CreatureMotion {
+                    map: Some(map_ref),
+                    seed: SIM_SEED,
+                    ..Default::default()
+                })
+                .add_systems(Update, advance_creature_sim.after(apply_scrub));
+        }
+        app
+    }
+
+    /// The panel's slider, headless: the range and step of the template change
+    /// nothing the handlers read.
+    fn spawn_scrub_slider(app: &mut App) -> Entity {
+        app.world_mut().spawn((ScrubSlider, SliderValue(0.0))).id()
+    }
+
+    /// Drives the slider the way the widget does: a drag move holds `Pressed`
+    /// and arrives unfinished, a release (or a keyboard step) drops it and
+    /// arrives final. One frame runs after the event, as in the window.
+    fn scrub_to(app: &mut App, slider: Entity, position: f32, finished: bool) {
+        {
+            let mut held = app.world_mut().entity_mut(slider);
+            if finished {
+                held.remove::<Pressed>();
+            } else {
+                held.insert(Pressed);
+            }
+        }
+        app.world_mut().trigger(ValueChange {
+            source: slider,
+            value: position,
+            is_final: finished,
+        });
+        app.update();
+    }
+
+    fn scrub_clock(app: &App) -> u64 {
+        app.world().resource::<Clock>().ticks
+    }
+
+    fn scrub_lighting(app: &App) -> LightingState {
+        *app.world().resource::<LightingState>()
+    }
+
+    fn scrub_thumb(app: &App, slider: Entity) -> f32 {
+        app.world().entity(slider).get::<SliderValue>().unwrap().0
+    }
+
+    /// Scrubbing forward and back lights exactly the scrubbed tick, and the
+    /// same position lights the same way however it was reached — the state is
+    /// the pure `params(clock.ticks, seed)` of the single time source.
+    #[test]
+    fn a_scrub_lights_the_scrubbed_tick_forward_and_back() {
+        let mut app = scrub_app(None);
+        let slider = spawn_scrub_slider(&mut app);
+        for position in [900u64, 2700, 11000, 18960, 2700, 900] {
+            scrub_to(&mut app, slider, position as f32, false);
+            let ticks = scrub_clock(&app);
+            assert_eq!(ticks, position, "a drag move reaches the Clock at once");
+            let want = lighting_state(lighting::params(ticks, SIM_SEED));
+            assert_eq!(scrub_lighting(&app), want, "at {position}");
+        }
+    }
+
+    /// A scrub inside a day keeps that day: the night palette — a function of
+    /// the absolute day — stays the day's, so the same cycle position lights
+    /// differently on two days whose coin flips differ.
+    #[test]
+    fn a_scrub_keeps_the_day_of_the_night_palette() {
+        // Window 9 (tick 11950) is where the palettes differ in the ambient.
+        let position = 11950u64;
+        let (green_day, deep_day) = (2..32u64)
+            .find_map(|deep| {
+                (1..deep).find_map(|green| {
+                    ((lighting::night_palette(green, SIM_SEED)
+                        == k1_game::time_of_day::NightPalette::Green)
+                        && (lighting::night_palette(deep, SIM_SEED)
+                            == k1_game::time_of_day::NightPalette::Deep))
+                        .then_some((green, deep))
+                })
+            })
+            .expect("both palettes occur within 32 days");
+
+        let mut app = scrub_app(None);
+        let slider = spawn_scrub_slider(&mut app);
+        app.world_mut().resource_mut::<Clock>().ticks = deep_day * CYCLE_TICKS + 5000;
+        scrub_to(&mut app, slider, position as f32, true);
+        assert_eq!(
+            scrub_clock(&app),
+            deep_day * CYCLE_TICKS + position,
+            "the scrub moves the cycle position, never the day"
+        );
+        let deep = scrub_lighting(&app);
+        assert_eq!(
+            deep,
+            lighting_state(lighting::params(
+                deep_day * CYCLE_TICKS + position,
+                SIM_SEED
+            )),
+            "the deep day lights as its own full tick"
+        );
+
+        // The same position on the green day: a different palette, still its
+        // own day's.
+        app.world_mut().resource_mut::<Clock>().ticks = green_day * CYCLE_TICKS + 5000;
+        scrub_to(&mut app, slider, position as f32, true);
+        let green = scrub_lighting(&app);
+        assert_eq!(
+            green,
+            lighting_state(lighting::params(
+                green_day * CYCLE_TICKS + position,
+                SIM_SEED
+            )),
+            "the green day lights as its own full tick"
+        );
+        assert_ne!(
+            deep.ambient_blend, green.ambient_blend,
+            "the palette must follow the scrubbed day, not reset to day 0"
+        );
+    }
+
+    /// The release walks the simulation to the Clock through the shared
+    /// catch-up: `tick_number == clock.ticks` and the creatures stand exactly
+    /// where a forward run to that tick stands — forward by catch-up, backward
+    /// by the shared seed replay — while the held slider moves no creature.
+    #[test]
+    fn a_released_scrub_walks_the_simulation_to_the_clock() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        // Forward-run references for both targets: one simulation, two stops.
+        let mut reference = game.simulation(map_ref, SIM_SEED).unwrap();
+        for _ in 0..700 {
+            reference.tick();
+        }
+        let at_700 = home(&reference);
+        for _ in 0..200 {
+            reference.tick();
+        }
+        let at_900 = home(&reference);
+
+        let mut sim = CreatureSim::default();
+        sim.sim = game.simulation(map_ref, SIM_SEED).ok();
+        sim.initial_pixels = sim.sim.as_ref().unwrap().initial_pixels();
+        let mut app = scrub_app(Some((game, map_ref)));
+        *app.world_mut().resource_mut::<CreatureSim>() = sim;
+        let slider = spawn_scrub_slider(&mut app);
+
+        scrub_to(&mut app, slider, 300.0, false);
+        let simulation = app.world().resource::<CreatureSim>().sim.as_ref().unwrap();
+        assert_eq!(
+            simulation.tick_number(),
+            0,
+            "a held slider freezes the simulation"
+        );
+        assert_eq!(scrub_clock(&app), 300, "the Clock follows the held slider");
+
+        // Released at 900: plain forward catch-up.
+        scrub_to(&mut app, slider, 900.0, true);
+        assert_eq!(scrub_clock(&app), 900);
+        let simulation = app.world().resource::<CreatureSim>().sim.as_ref().unwrap();
+        assert_eq!(
+            simulation.tick_number(),
+            900,
+            "the release brings the simulation to the clock"
+        );
+        assert_eq!(
+            home(simulation),
+            at_900,
+            "creatures stand on the scrubbed tick's positions"
+        );
+
+        // Released at 700: no reverse tick — the seed replay lands the same.
+        scrub_to(&mut app, slider, 700.0, true);
+        assert_eq!(scrub_clock(&app), 700);
+        let simulation = app.world().resource::<CreatureSim>().sim.as_ref().unwrap();
+        assert_eq!(simulation.tick_number(), 700);
+        assert_eq!(
+            home(simulation),
+            at_700,
+            "the backward scrub replays to the forward run's positions"
+        );
+    }
+
+    /// Play on, slider held still: the session pins the Clock to
+    /// `day * CYCLE_TICKS + target` every frame — `advance_clock` keeps
+    /// ticking underneath while playback runs, and without the per-frame hold
+    /// the light would drift off the scrubbed tick between value changes
+    /// (review #106). On release the hold lifts, Play resumes from the target
+    /// and the shared catch-up lands the simulation on the Clock, at the
+    /// forward run's positions. `Clock::advance` with a large delta stands in
+    /// for the `AnimSet::Clock` pass the real frame runs first: a
+    /// deterministic way to hand the clock ticks it did not have.
+    #[test]
+    fn a_held_slider_pins_the_clock_under_playback_until_release() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        // The settle after the release catches the simulation up to the
+        // absolute tick, day included: the reference run stops one `advance`
+        // past the held position.
+        const HELD: u64 = CYCLE_TICKS + 300;
+        const FINAL: u64 = HELD + 10;
+        let mut reference = game.simulation(map_ref, SIM_SEED).unwrap();
+        for _ in 0..FINAL {
+            reference.tick();
+        }
+        let expected = home(&reference);
+
+        let mut sim = CreatureSim::default();
+        sim.sim = game.simulation(map_ref, SIM_SEED).ok();
+        sim.initial_pixels = sim.sim.as_ref().unwrap().initial_pixels();
+        let mut app = scrub_app(Some((game, map_ref)));
+        *app.world_mut().resource_mut::<CreatureSim>() = sim;
+        // `PlayState::Playing` is the Clock's own default: playback runs.
+        let slider = spawn_scrub_slider(&mut app);
+
+        app.world_mut().resource_mut::<Clock>().ticks = CYCLE_TICKS + 5000;
+        scrub_to(&mut app, slider, 300.0, false);
+        assert_eq!(
+            scrub_clock(&app),
+            HELD,
+            "the drag pins the captured day's cycle position"
+        );
+
+        // Held still, playback on, zero new value changes: every frame ends
+        // on the target however many ticks the playing clock gained, the
+        // light follows that tick, and no creature moves.
+        for _ in 0..5 {
+            app.world_mut().resource_mut::<Clock>().advance(1.0);
+            app.update();
+            assert_eq!(scrub_clock(&app), HELD, "the hold beats the playing clock");
+            assert_eq!(
+                scrub_lighting(&app),
+                lighting_state(lighting::params(HELD, SIM_SEED)),
+                "the light follows the held tick"
+            );
+            let simulation = app.world().resource::<CreatureSim>().sim.as_ref().unwrap();
+            assert_eq!(
+                simulation.tick_number(),
+                0,
+                "a held slider freezes the simulation"
+            );
+        }
+
+        // Released: the hold lifts, Play resumes from the target and the
+        // settle brings the simulation to the Clock.
+        scrub_to(&mut app, slider, 300.0, true);
+        assert_eq!(scrub_clock(&app), HELD);
+        // 0.6 s at the 60 ms tick: ten ticks of play past the held position.
+        app.world_mut().resource_mut::<Clock>().advance(0.6);
+        app.update();
+        assert_eq!(
+            scrub_clock(&app),
+            FINAL,
+            "the clock ticks on in play from the target"
+        );
+        let simulation = app.world().resource::<CreatureSim>().sim.as_ref().unwrap();
+        assert_eq!(
+            simulation.tick_number(),
+            FINAL,
+            "the simulation sits on the clock after the settle"
+        );
+        assert_eq!(home(simulation), expected, "the forward run's positions");
+    }
+
+    /// The Clock alone is the source: moved directly, no widget involved, it
+    /// lights exactly what the same scrub would — there is no second time to
+    /// disagree with.
+    #[test]
+    fn the_clock_alone_moves_the_lighting() {
+        let mut app = scrub_app(None);
+        let _slider = spawn_scrub_slider(&mut app);
+        for ticks in [900u64, 2 * CYCLE_TICKS + 11000] {
+            app.world_mut().resource_mut::<Clock>().ticks = ticks;
+            app.update();
+            let want = lighting_state(lighting::params(ticks, SIM_SEED));
+            assert_eq!(scrub_lighting(&app), want, "at {ticks}");
+        }
+    }
+
+    /// The uniforms read the state in the frame the Clock moves: the frontend
+    /// writes [`LightingState`] before the plugin's `update_lighting_uniforms`
+    /// runs, so a day change reaches every material of the pool in the same
+    /// `update` — never a frame late (review #106). The wiring mirrors
+    /// `run_viewer`'s: the chained frontend systems pinned before the writer
+    /// that the plugin owns.
+    #[test]
+    fn the_uniforms_apply_the_new_tick_in_the_same_frame() {
+        let mut images = Assets::<Image>::default();
+        let mut materials = Assets::<KonungLightMaterial>::default();
+        // One mask so both material kinds are judged: masked and plain terrain
+        // take the ground blend, the ambient one the plain blend.
+        let pool = LightingMaterials::new(&mut images, &mut materials, &[(vec![1u8; 4], 2, 2)]);
+        let handles = (pool.terrain(Some(0)), pool.terrain(None), pool.ambient());
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
+            // The stores a real window's AssetPlugin/RenderPlugin/SpritePlugin
+            // provide, that the plugin's own systems and the embedded shader
+            // load read: `init_asset` replaces whatever stands in the way, so
+            // the pool's stores land after the plugins.
+            .init_asset::<bevy::shader::Shader>()
+            .init_asset::<Mesh>()
+            .init_asset::<TextureAtlasLayout>()
+            .add_plugins(KonungLightingPlugin)
+            .insert_resource(images)
+            .insert_resource(materials)
+            .insert_resource(pool)
+            .insert_resource(Clock::new(TICK_MS as f32))
+            .insert_resource(CreatureSim::default())
+            .init_resource::<ScrubState>()
+            .add_systems(
+                Update,
+                (apply_scrub, sync_scrub_slider, update_lighting_state)
+                    .chain()
+                    .before(update_lighting_uniforms),
+            );
+
+        // Night first: the pool carries the open-window ground blend.
+        app.world_mut().resource_mut::<Clock>().ticks = 11000;
+        app.update();
+        let night = lighting_state(lighting::params(11000, SIM_SEED));
+        {
+            let materials = app.world().resource::<Assets<KonungLightMaterial>>();
+            let material = materials.get(&handles.0).expect("pool material alive");
+            assert_eq!(
+                material.blend(),
+                night.terrain_blend,
+                "masked terrain lights the night before the change"
+            );
+            assert_eq!(material.light_color(), night.light_color);
+        }
+
+        // Day arrives; ONE update must land it on every material of the pool.
+        app.world_mut().resource_mut::<Clock>().ticks = 900;
+        app.update();
+        let day = lighting_state(lighting::params(900, SIM_SEED));
+        let materials = app.world().resource::<Assets<KonungLightMaterial>>();
+        for (name, handle, blend) in [
+            ("masked terrain", &handles.0, day.terrain_blend),
+            ("plain terrain", &handles.1, day.terrain_blend),
+            ("ambient", &handles.2, day.ambient_blend),
+        ] {
+            let material = materials.get(handle).expect("pool material alive");
+            assert_eq!(material.blend(), blend, "{name} lags the day change");
+            assert_eq!(material.light_color(), day.light_color, "{name}");
+        }
+    }
+
+    /// While nobody holds the slider, the thumb rides the Clock's cycle
+    /// position; a held slider keeps the user's value, and the release hands
+    /// the mirror back.
+    #[test]
+    fn the_slider_rides_the_clock_until_someone_holds_it() {
+        let mut app = scrub_app(None);
+        let slider = spawn_scrub_slider(&mut app);
+        app.world_mut().resource_mut::<Clock>().ticks = 2 * CYCLE_TICKS + 317;
+        app.update();
+        assert_eq!(
+            scrub_thumb(&app, slider),
+            317.0,
+            "the thumb rides the cycle position of the clock"
+        );
+
+        scrub_to(&mut app, slider, 900.0, false);
+        app.world_mut().resource_mut::<Clock>().ticks = 15000;
+        app.update();
+        assert_eq!(
+            scrub_thumb(&app, slider),
+            900.0,
+            "a held slider keeps the user's value"
+        );
+
+        scrub_to(&mut app, slider, 900.0, true);
+        app.world_mut().resource_mut::<Clock>().ticks = 15200;
+        app.update();
+        assert_eq!(
+            scrub_thumb(&app, slider),
+            15200.0,
+            "the release hands the mirror back to the clock"
+        );
+    }
+
+    /// A preset is the jump without a drag: position, lighting and simulation
+    /// all land in the same frame.
+    #[test]
+    fn a_preset_jumps_the_whole_frame_at_once() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let mut reference = game.simulation(map_ref, SIM_SEED).unwrap();
+        for _ in 0..2700 {
+            reference.tick();
+        }
+        let at_2700 = home(&reference);
+
+        let mut sim = CreatureSim::default();
+        sim.sim = game.simulation(map_ref, SIM_SEED).ok();
+        sim.initial_pixels = sim.sim.as_ref().unwrap().initial_pixels();
+        let mut app = scrub_app(Some((game, map_ref)));
+        *app.world_mut().resource_mut::<CreatureSim>() = sim;
+        let button = app.world_mut().spawn(ScrubPreset(2700)).id();
+
+        app.world_mut().trigger(Activate { entity: button });
+        app.update();
+
+        assert_eq!(scrub_clock(&app), 2700);
+        let want = lighting_state(lighting::params(2700, SIM_SEED));
+        assert_eq!(scrub_lighting(&app), want);
+        let simulation = app.world().resource::<CreatureSim>().sim.as_ref().unwrap();
+        assert_eq!(
+            simulation.tick_number(),
+            2700,
+            "the preset settles the simulation in the same frame"
+        );
+        assert_eq!(home(simulation), at_2700);
     }
 
     fn fire_reset(mut commands: Commands, buttons: Query<Entity, With<ResetPositions>>) {
