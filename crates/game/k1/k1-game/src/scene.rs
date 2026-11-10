@@ -84,6 +84,10 @@ pub struct DrawAnimation {
 pub enum PieceGroup {
     /// Земля и верхний слой тайлов
     Terrain,
+    /// LIGHTS.N light masks: on the ground, above the terrain tiles and below
+    /// everything drawn later — the original lights only the ground tiles'
+    /// pixels (Slavik `game.cpp:996-1003`)
+    Lights,
     /// Декорации из GRAPH.RES
     Decorations,
     /// Общие тени карты — под спрайтами
@@ -94,8 +98,6 @@ pub enum PieceGroup {
     Characters,
     /// Тени персонажей: без персонажей их показывать нечего
     CharacterShadows,
-    /// Маски света `LIGHTS.N`
-    Lights,
     /// Проходимость мелкой сетки
     Foot,
     /// Маркеры `Game.N`: отряды, клады, переходы, точки
@@ -107,12 +109,12 @@ impl PieceGroup {
     /// каждую и в этом же порядке раскладывает по ним куски.
     pub const ALL: [PieceGroup; 9] = [
         PieceGroup::Terrain,
+        PieceGroup::Lights,
         PieceGroup::Decorations,
         PieceGroup::Shadows,
         PieceGroup::Objects,
         PieceGroup::Characters,
         PieceGroup::CharacterShadows,
-        PieceGroup::Lights,
         PieceGroup::Foot,
         PieceGroup::Markers,
     ];
@@ -292,12 +294,13 @@ pub type SortKey = (i32, i32, usize);
 /// то, что идёт в список отрисовки одним блоком.
 type Stack = (SortKey, Vec<DrawPiece>);
 
-/// Какие отладочные оверлеи добавить поверх карты.
+/// Debug overlays: foot and markers go on top of the map, the light masks
+/// onto the ground, under decorations and objects.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Overlays {
     /// Проходимость мелкой сетки (красный — непроходимо, синий — застревают стрелы)
     pub foot: bool,
-    /// Маски света LIGHTS.N поверх карты
+    /// LIGHTS.N light masks on the ground, under decorations and objects
     pub lights: bool,
     /// Маркеры Game.N: отряды, клады, переходы, рабочие места, точка старта
     pub markers: bool,
@@ -523,6 +526,12 @@ pub fn map_scene(
         }
     }
 
+    // Light lies on the ground only: the masks are drawn before decorations
+    // and objects, which the original never lights (Slavik `game.cpp:996-1003`).
+    if input.overlays.lights {
+        light_pieces(input, &mut background);
+    }
+
     // Декорации: сырые (тайл вне GRAPH.RES) не нарисовать — пропускаем
     for decoration in &input.map.decorations {
         if decoration.tile >= 0 && graph.tile(decoration.tile as usize).is_some() {
@@ -551,9 +560,6 @@ pub fn map_scene(
     }
 
     let mut overlays = Vec::new();
-    if input.overlays.lights {
-        light_pieces(input, &mut overlays);
-    }
     if input.overlays.foot {
         foot_pieces(input.map, &mut overlays);
     }
