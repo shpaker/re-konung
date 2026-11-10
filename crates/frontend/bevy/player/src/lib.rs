@@ -217,13 +217,14 @@ fn map_fine_lights(game: &Game, map_ref: MapRef) -> Option<Vec<Vec<u8>>> {
 }
 
 /// The k1 reading of `k1_game::lighting::params` into the render contract —
-/// the same mapping the viewer applies: the ground ambient only inside the
-/// ground-light window, the plain ambient always, the ground tile-light colour.
+/// the same mapping the viewer applies: the ambient fade for every surface,
+/// the ground tile-light colour and its window gate.
 fn lighting_state(params: lighting::LightingParams) -> LightingState {
     LightingState {
-        terrain_blend: params.ground_ambient.map_or(Vec3::ZERO, Vec3::from),
+        terrain_blend: Vec3::from(params.ambient),
         ambient_blend: Vec3::from(params.ambient),
         light_color: Vec3::from(params.ground_light),
+        light_gain: if params.ground_window { 1.0 } else { 0.0 },
     }
 }
 

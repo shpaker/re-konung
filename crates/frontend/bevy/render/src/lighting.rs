@@ -60,6 +60,13 @@ pub struct KonungLightMaterial {
     /// Unused where the mask is zero — every plain ambient sprite.
     #[uniform(20)]
     light_color: Vec3,
+    /// The ground-light window gate: 1.0 while the window is open, 0.0 outside.
+    /// Scales the sampled mask brightness, so a closed window leaves the mask
+    /// inert — no light colour, no cancellation — while the ambient blend keeps
+    /// following the phase for every surface (the original gates only the tile
+    /// light, never the fade; rus 0x425354).
+    #[uniform(20)]
+    light_gain: f32,
     /// LIGHTS.RES tile mask; brightness in `.r`. A sprite without a mask gets
     /// a 1×1 zero texture, so `lightning` stays 0 and the formula reduces to
     /// the plain ambient blend.
@@ -88,6 +95,11 @@ impl KonungLightMaterial {
     pub fn light_color(&self) -> Vec3 {
         self.light_color
     }
+
+    /// The ground-light window gate (1.0 open, 0.0 closed).
+    pub fn light_gain(&self) -> f32 {
+        self.light_gain
+    }
 }
 
 /// The lighting time contract, written by the frontend once per frame from its
@@ -99,14 +111,18 @@ impl KonungLightMaterial {
 /// speaks up.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct LightingState {
-    /// Ambient for terrain and decorations: the ground ambient inside the
-    /// ground-light window, zero outside it — the shader no-ops there.
+    /// Ambient for terrain and decorations: the phase value, window or not —
+    /// the original fades the ground together with everything on it.
     pub terrain_blend: Vec3,
-    /// Ambient for objects and characters: applied always, window or not.
+    /// Ambient for objects and characters: the same phase value.
     pub ambient_blend: Vec3,
     /// Tile-light colour /200, added toward white where a terrain mask is
     /// bright.
     pub light_color: Vec3,
+    /// The ground-light window gate for the tile light: 1.0 while the window
+    /// (ticks 8100..18900) is open, 0.0 outside — the masks and the light
+    /// colour switch with it, the ambient blend never does.
+    pub light_gain: f32,
 }
 
 impl Default for LightingState {
@@ -115,6 +131,7 @@ impl Default for LightingState {
             terrain_blend: Vec3::ZERO,
             ambient_blend: Vec3::ZERO,
             light_color: Vec3::ZERO,
+            light_gain: 0.0,
         }
     }
 }
@@ -146,14 +163,14 @@ impl FineLightGrid {
 /// surface rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceLighting {
-    /// Terrain with a LIGHTS.N tile mask: the masked material, uniforms gated
-    /// by the ground window.
+    /// Terrain with a LIGHTS.N tile mask: the masked material. The mask's
+    /// contribution is gated by the ground window (`light_gain`); the ambient
+    /// blend follows the phase like every surface.
     TerrainMasked(usize),
-    /// Terrain without a mask and decorations: the plain material with the
-    /// same ground-window gating (a zero mask makes the formula uniform).
+    /// Terrain without a mask and decorations: the plain material — the phase
+    /// ambient only (a zero mask makes the formula uniform).
     TerrainPlain,
-    /// Static objects: the plain material driven by the plain ambient, which
-    /// applies outside the ground window too.
+    /// Static objects: the plain material with the same phase ambient.
     Ambient,
     /// No material: flames and self-lit objects are drawn with `SetFade(false)`,
     /// and so are shadows and every overlay group.
@@ -250,6 +267,7 @@ impl LightingMaterials {
             materials.add(KonungLightMaterial {
                 blend: Vec3::ZERO,
                 light_color: Vec3::ZERO,
+                light_gain: 0.0,
                 mask,
             })
         };
@@ -297,8 +315,10 @@ impl LightingMaterials {
 /// single place the render layer touches the uniforms, so both frontends get
 /// identical behaviour by inserting their state into one resource.
 ///
-/// Runs only when the state changed: a rewritten asset is re-extracted for the
-/// GPU, and lighting shifts a few times a minute, not every frame.
+/// Runs when the state changed or the pool is new: a fresh pool starts with
+/// zero uniforms and must be lit by the state that is already standing — a map
+/// switch mid-phase would otherwise render unlit until the state moves (on a
+/// plateau that is up to the next flicker block, ~a second).
 pub fn update_lighting_uniforms(
     state: Res<LightingState>,
     pool: Option<Res<LightingMaterials>>,
@@ -307,15 +327,19 @@ pub fn update_lighting_uniforms(
     let Some(pool) = pool else {
         return;
     };
-    if !state.is_changed() {
+    if !state.is_changed() && !pool.is_changed() {
         return;
     }
     let mut write = |handle: &Handle<KonungLightMaterial>, blend: Vec3| {
         if let Some(mut material) = materials.get_mut(handle) {
             material.blend = blend;
             material.light_color = state.light_color;
+            material.light_gain = state.light_gain;
         }
     };
+    // Every material of the pool carries the window gate: the masked ones read
+    // it through their LIGHTS.RES sample, the plain ones are inert to it (a
+    // zero mask), and writing uniformly keeps the pool single-sourced.
     for handle in pool
         .masks
         .iter()
@@ -430,6 +454,29 @@ fn mask_image(data: Vec<u8>, width: u32, height: u32) -> Image {
 mod tests {
     use super::*;
 
+    /// The WESL transcription stays in step with the CPU reference: the gate
+    /// scales the sampled mask, the sign branches and the constants of
+    /// `k1_game::lighting::apply_channel` are all present. A structural check,
+    /// not a proof — the CPU reference and its own tests carry the formula.
+    #[test]
+    fn the_shader_transcribes_the_reference_formula() {
+        let wesl = include_str!("shaders/terrain_light_material.wesl");
+        // The window gate scales the sampled mask brightness.
+        assert!(
+            wesl.contains(
+                "textureSample(mask_texture, mask_sampler, input.uv).r * terrain_light.light_gain"
+            ),
+            "the mask sample must be scaled by the window gate"
+        );
+        assert!(wesl.contains("light_gain: f32"), "the uniform struct field");
+        // The per-channel constants of the reference.
+        assert!(wesl.contains(">= 0.01"));
+        assert!(wesl.contains("clamp(terrain_light.blend.r + lightning, -1.0, 0.0)"));
+        assert!(wesl.contains("clamp(terrain_light.blend.g + lightning, -1.0, 0.0)"));
+        // Blue multiplies raw, without the light term.
+        assert!(wesl.contains("rgb.b = rgb.b * (1.0 + terrain_light.blend.b)"));
+    }
+
     fn piece(group: PieceGroup) -> Piece {
         Piece {
             texture: None,
@@ -509,7 +556,7 @@ mod tests {
             surface_lighting(PieceGroup::Terrain, None, false, false),
             SurfaceLighting::TerrainPlain
         );
-        // Decorations share the terrain gating, never a mask.
+        // Decorations take the plain terrain material, never a mask.
         assert_eq!(
             surface_lighting(PieceGroup::Decorations, Some(3), false, false),
             SurfaceLighting::TerrainPlain
@@ -564,6 +611,7 @@ mod tests {
                 terrain_blend: Vec3::ZERO,
                 ambient_blend: Vec3::ZERO,
                 light_color: Vec3::ZERO,
+                light_gain: 0.0,
             }
         );
     }
@@ -578,6 +626,54 @@ mod tests {
         assert_eq!(grid.value((9, 9)), 0);
         assert_eq!(FineLightGrid(None).value((0, 0)), 0);
         assert_eq!(FineLightGrid(Some(Vec::new())).value((0, 0)), 0);
+    }
+
+    /// A pool that appears while the state is already standing gets lit by it
+    /// without waiting for the state to move: a map switch mid-phase must not
+    /// render unlit up to the next flicker block.
+    #[test]
+    fn a_new_pool_is_lit_by_the_standing_state() {
+        let masks: Vec<(Vec<u8>, u32, u32)> = (0..2).map(|_| (vec![1u8; 4], 2, 2)).collect();
+        let mut app = App::new();
+        app.insert_resource(LightingState {
+            terrain_blend: Vec3::new(-0.3, -0.6, -0.2),
+            ambient_blend: Vec3::new(-0.3, -0.6, -0.2),
+            light_color: Vec3::new(0.1, 0.05, 0.0),
+            light_gain: 1.0,
+        });
+        app.insert_resource(Assets::<Image>::default());
+        app.insert_resource(Assets::<KonungLightMaterial>::default());
+        app.add_systems(Update, update_lighting_uniforms);
+        // The state settles first, without any pool to receive it.
+        app.update();
+
+        // The pool arrives afterwards (a map switch): built against its own
+        // fresh asset stores, then installed — the next update writes the
+        // standing state into it.
+        let mut images = Assets::<Image>::default();
+        let mut materials = Assets::<KonungLightMaterial>::default();
+        let pool = LightingMaterials::new(&mut images, &mut materials, &masks);
+        let handles: Vec<Handle<KonungLightMaterial>> = pool
+            .masks
+            .iter()
+            .chain([&pool.terrain_plain, &pool.ambient_plain])
+            .cloned()
+            .collect();
+        app.insert_resource(images);
+        app.insert_resource(materials);
+        app.insert_resource(pool);
+        app.update();
+
+        let materials = app.world().resource::<Assets<KonungLightMaterial>>();
+        for (index, handle) in handles.iter().enumerate() {
+            let material = materials.get(handle).expect("pool material alive");
+            assert_eq!(
+                material.blend,
+                Vec3::new(-0.3, -0.6, -0.2),
+                "material #{index} lit by the standing state"
+            );
+            assert_eq!(material.light_gain, 1.0, "material #{index} gate");
+        }
     }
 
     /// The uniform writer drives every material of the pool from one state:
@@ -602,6 +698,7 @@ mod tests {
             terrain_blend: Vec3::new(-0.6, -0.5, -0.7),
             ambient_blend: Vec3::new(-0.3, -0.2, -0.4),
             light_color: Vec3::new(0.1, 0.05, 0.0),
+            light_gain: 1.0,
         });
         app.add_systems(Update, update_lighting_uniforms);
 
@@ -617,15 +714,17 @@ mod tests {
                 };
                 assert_eq!(material.blend, want, "material #{index}");
                 assert_eq!(material.light_color, Vec3::new(0.1, 0.05, 0.0));
+                assert_eq!(material.light_gain, 1.0, "the gate reaches #{index}");
             }
         }
 
-        // A new state — day, the ground window closed — rewrites them all, and
-        // the terrain blends land exactly on zero, the shader's no-op.
+        // A new state — day, the ground window closed — rewrites them all: the
+        // blends follow the phase, the gate closes for every material at once.
         app.insert_resource(LightingState {
             terrain_blend: Vec3::ZERO,
             ambient_blend: Vec3::new(0.1, 0.05, 0.0),
             light_color: Vec3::ZERO,
+            light_gain: 0.0,
         });
         app.update();
         let materials = app.world().resource::<Assets<KonungLightMaterial>>();
@@ -637,6 +736,7 @@ mod tests {
                 Vec3::ZERO
             };
             assert_eq!(material.blend, want, "material #{index} after the change");
+            assert_eq!(material.light_gain, 0.0, "the gate closes for #{index}");
         }
     }
 
