@@ -1,8 +1,13 @@
-//! Bevy frontend of the «Князь» player: window, camera, start-map loading.
+//! Bevy frontend of the «Князь» player: window, camera and the app flow.
 //!
-//! The app crate (`kn-player`) parses CLI, opens the game, resolves the hero
-//! and hands over a concrete [`PlayerConfig`]; this crate builds the Bevy App
-//! and runs it.
+//! The app crate (`kn-player`) parses CLI, loads the settings, opens the game,
+//! resolves the hero and hands over a concrete [`PlayerConfig`]; this crate
+//! builds the Bevy App and runs it. The application core is the Bevy-free
+//! `kn-app` reducer — [`flow`] adapts it to `Update`, [`session`] builds and
+//! tears down the game session it asks for.
+
+pub mod flow;
+pub mod session;
 
 use std::path::PathBuf;
 
@@ -10,210 +15,115 @@ use bevy::{
     input::mouse::{AccumulatedMouseMotion, MouseWheel},
     picking::hover::Hovered,
     prelude::*,
+    window::{MonitorSelection, PresentMode, VideoModeSelection, WindowMode},
 };
-use k1_data::repo::{GAME_FILES, GameDir};
 use k1_game::lighting;
-use kn_game::{Game, MapRef, Scene, SceneOptions, TICK_MS};
+use kn_game::TICK_MS;
 use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
-    AnimPlugin, CameraInput, CameraState, CreatureAnimationPlugin, CreatureMotion, CreatureSim,
-    FineLightGrid, GameResource, KonungLightMaterial, KonungLightingPlugin, LightingMaterials,
-    LightingState, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, TextureCache, load_scene,
+    AnimPlugin, CameraInput, CameraState, CreatureAnimationPlugin, CreatureSim, GameResource,
+    KonungLightingPlugin, LightingState, MapCamera, MapCameraPlugin, PAN_SPEED, TextureCache,
     ortho_scale, update_lighting_uniforms,
 };
-use kn_ui::pointer_over_ui;
+use kn_settings::Settings;
+use kn_ui::{KonungUiPlugin, pointer_over_ui};
+
+use flow::{PlayerFlowPlugin, screen_is_playing};
+use session::NewGame;
+pub use session::START_SEED;
 
 /// Everything the player window needs to start.
 pub struct PlayerConfig {
-    pub game: Game,
+    pub game: kn_game::Game,
     pub game_dir: PathBuf,
     pub hero: u32,
+    /// The settings the startup loaded (defaults on a missing or unreadable
+    /// file); the window is born already in their video mode.
+    pub settings: Settings,
+    /// Where setting changes persist; `None` — saving will fail with a typed
+    /// error (see [`flow::SettingsPath`]).
+    pub settings_path: Option<PathBuf>,
+    /// Whether the first frame goes through the main menu or straight into a
+    /// session (`--new-game`: the menu never renders).
+    pub start: StartMode,
 }
 
-/// Seed of the creature simulation of the start map: fixed, so two runs of the
-/// same hero walk the same routes, and the same value the viewer uses for its
-/// "Reset positions" — one map, one reproducible spawn in either window.
-pub const START_SEED: u64 = 42;
+/// Where the player starts.
+pub enum StartMode {
+    /// The main menu; a session is built only through the AppFlow pipeline.
+    Menu,
+    /// Straight into the session: the frontend seeds the flow with
+    /// `MainMenuAction::NewGame` before the first frame.
+    NewGame,
+}
 
 /// Runs the player window until the user closes it.
 pub fn run_player(config: PlayerConfig) {
-    App::new()
-        .add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: format!("re-konung — {}", config.game_dir.display()),
-                        resolution: (1280, 800).into(),
-                        ..default()
-                    }),
+    let fullscreen = config.settings.video.fullscreen;
+    let vsync = config.settings.video.vsync;
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: format!("re-konung — {}", config.game_dir.display()),
+                    resolution: (1280, 800).into(),
+                    mode: if fullscreen {
+                        WindowMode::Fullscreen(
+                            MonitorSelection::Current,
+                            VideoModeSelection::Current,
+                        )
+                    } else {
+                        WindowMode::Windowed
+                    },
+                    present_mode: if vsync {
+                        PresentMode::AutoVsync
+                    } else {
+                        PresentMode::AutoNoVsync
+                    },
                     ..default()
-                })
-                .set(ImagePlugin::default_nearest()),
-        )
-        .add_plugins((
-            MapCameraPlugin,
-            // The same clock and the same creature subsystem as the viewer: the
-            // picture of a creature is built in one place (issue #70).
-            AnimPlugin::new(TICK_MS as f32),
-            CreatureAnimationPlugin,
-            // The same scene lighting as the viewer: uniforms from the
-            // simulation tick, one writer in kn-render.
-            KonungLightingPlugin,
-        ))
-        .insert_resource(GameResource(config.game))
-        .init_resource::<TextureCache>()
-        .insert_resource(NewGame { hero: config.hero })
-        .add_systems(Startup, load_start_map)
-        .add_systems(
-            Update,
-            (
-                camera_control.in_set(CameraInput),
-                // The state is written before the plugin's uniform writer
-                // reads it, or a day change reaches the GPU a frame late
-                // (review #106).
-                update_lighting_state.before(update_lighting_uniforms),
-            ),
-        )
-        .run();
-}
-
-/// Hero for the new game: the start map and the on-map position depend on it.
-#[derive(Resource)]
-struct NewGame {
-    hero: u32,
-}
-
-/// Asks the shared creature subsystem for the hero's start map.
-///
-/// The player's whole creature wiring is this request plus the plugin that
-/// answers it: the subsystem builds the simulation, the clips, the depth map and
-/// the composite nodes, and drives them off the scene clock. Nothing here
-/// decides a creature's state — the game layer does, and the special of a
-/// state-4 creature plays once into idle on its own (issue #70).
-///
-/// Returns the map it asked for together with the scene it built, so the caller
-/// draws the same scene it handed over, or `None` when the scene did not build.
-pub fn request_start_creatures(
-    game: &Game,
-    hero: u32,
-    motion: &mut CreatureMotion,
-) -> Option<(MapRef, Scene)> {
-    let map_ref = game.start_map(hero);
-    let options = SceneOptions {
-        characters: true,
-        hero: Some(hero),
-        ..SceneOptions::default()
-    };
-    let scene = match game.scene(map_ref, &options) {
-        Ok(scene) => scene,
-        Err(error) => {
-            error!("не собралась карта {}: {error}", map_ref.number);
-            return None;
-        }
-    };
-    motion.request(map_ref, START_SEED, Some(hero), scene.clone());
-    Some((map_ref, scene))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn load_start_map(
-    new_game: Res<NewGame>,
-    game: Res<GameResource>,
-    mut cache: ResMut<TextureCache>,
-    mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<KonungLightMaterial>>,
-    mut commands: Commands,
-    mut pending: ResMut<PendingFrame>,
-    mut motion: ResMut<CreatureMotion>,
-) {
-    let Some((map_ref, scene)) = request_start_creatures(&game.0, new_game.hero, &mut motion)
-    else {
-        return;
-    };
-    // The lighting of the start map: the pool from LIGHTS.RES and this map's
-    // fine grid, the same resources the viewer provides. Uniforms arrive every
-    // frame from the simulation tick through `update_lighting_state`.
-    let pool = LightingMaterials::new(&mut images, &mut materials, &lights_res_masks(&game.0));
-    commands.insert_resource(FineLightGrid(map_fine_lights(&game.0, map_ref)));
-    let loaded = load_scene(
-        &game.0,
-        &scene,
-        |_| true,
-        &mut cache,
-        &mut images,
-        Some(&pool),
-        &mut commands,
-        &mut pending,
-    );
-    commands.insert_resource(pool);
-    match loaded {
-        Ok(loaded) => {
-            for problem in &loaded.problems {
-                warn!("карта {}: {problem}", map_ref.number);
-            }
-        }
-        Err(error) => {
-            error!("не загрузились текстуры: {error}");
-        }
+                }),
+                ..default()
+            })
+            .set(ImagePlugin::default_nearest()),
+    )
+    .add_plugins((
+        KonungUiPlugin,
+        MapCameraPlugin,
+        // The same clock and the same creature subsystem as the viewer: the
+        // picture of a creature is built in one place (issue #70).
+        AnimPlugin::new(TICK_MS as f32),
+        CreatureAnimationPlugin,
+        // The same scene lighting as the viewer: uniforms from the
+        // simulation tick, one writer in kn-render.
+        KonungLightingPlugin,
+    ))
+    .insert_resource(GameResource(config.game))
+    .init_resource::<TextureCache>()
+    .insert_resource(NewGame { hero: config.hero })
+    .add_plugins(PlayerFlowPlugin {
+        settings: config.settings,
+        settings_path: config.settings_path,
+    });
+    if matches!(config.start, StartMode::NewGame)
+        && let Some(mut app_flow) = app.world_mut().get_resource_mut::<flow::AppFlow>()
+    {
+        // Reduced by the first frame's flush, so the menu root is never
+        // spawned and the session build starts immediately.
+        app_flow.submit(kn_app::Action::MainMenu(kn_app::MainMenuAction::NewGame));
     }
-}
-
-/// The LIGHTS.RES tile masks of the opened game: raw brightness bytes with
-/// their pixel size, ready for [`LightingMaterials::new`]. A game without a
-/// readable LIGHTS.RES gets an empty pool — the scene still lights, the tiles
-/// just carry no tile mask. Every way the file can fail warns with its path
-/// and reason: an empty pool reached silently reads as a broken night scene
-/// (review #106).
-fn lights_res_masks(game: &Game) -> Vec<(Vec<u8>, u32, u32)> {
-    let Some(path) = k1_game::resources::find_named(game.root(), "lights.res") else {
-        warn!(
-            "LIGHTS.RES not found in {}; the scene lights without tile masks",
-            game.root().display()
-        );
-        return Vec::new();
-    };
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            warn!(
-                "LIGHTS.RES unreadable at {}: {error}; the scene lights without tile masks",
-                path.display()
-            );
-            return Vec::new();
-        }
-    };
-    let res = match k1_data::lights_res::parse(&bytes) {
-        Ok(res) => res,
-        Err(error) => {
-            warn!(
-                "LIGHTS.RES unparsable at {}: {error}; the scene lights without tile masks",
-                path.display()
-            );
-            return Vec::new();
-        }
-    };
-    res.tiles
-        .into_iter()
-        .map(|mask| {
-            (
-                mask,
-                k1_data::lights_res::TILE_MASK_WIDTH as u32,
-                k1_data::lights_res::TILE_MASK_HEIGHT as u32,
-            )
-        })
-        .collect()
-}
-
-/// The map's LIGHTS.N fine grid — the tile-light index per fine cell, what the
-/// creature lighting reads to tell a lit patch from a dark one. `None` when
-/// the map has no LIGHTS.N: every cell counts as dark.
-fn map_fine_lights(game: &Game, map_ref: MapRef) -> Option<Vec<Vec<u8>>> {
-    let bytes = GameDir::new(game.root())
-        .lights_bytes(map_ref.number, GAME_FILES)
-        .ok()??;
-    k1_data::map::parse_lights(&bytes)
-        .ok()
-        .map(|lights| lights.fine)
+    app.add_systems(
+        Update,
+        (
+            // Camera input only on the game screen, never over a menu.
+            camera_control.in_set(CameraInput).run_if(screen_is_playing),
+            // The state is written before the plugin's uniform writer
+            // reads it, or a day change reaches the GPU a frame late
+            // (review #106).
+            update_lighting_state.before(update_lighting_uniforms),
+        ),
+    );
+    app.run();
 }
 
 /// The k1 reading of `k1_game::lighting::params` into the render contract —

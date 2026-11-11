@@ -3,18 +3,21 @@ name = "kn-fe-player"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "Bevy frontend of the «Князь» player: window, camera, start-map loading"
+description = "Bevy frontend of the «Князь» player: window, camera, app flow, session build"
 
 [dependencies]
 kn-game = { path = "../../../game/kn-game" }
 kn-render = { path = "../../bevy/render" }
 kn-input = { path = "../../bevy/input" }
 kn-ui = { path = "../../bevy/ui" }
+kn-app = { path = "../../../apps/kn-app" }
+kn-settings = { path = "../../../apps/kn-settings" }
 # The lighting of the scene is K1 knowledge: the LIGHTS.RES masks, the map's
 # LIGHTS.N fine grid and the per-tick light params all come from the K1 layer
 k1-data = { path = "../../../game/k1/k1-data" }
 k1-game = { path = "../../../game/k1/k1-game" }
-bevy = { workspace = true }
+# bevy_feathers: KonungUiPlugin (kn-ui) brings up the Feathers design system
+bevy = { workspace = true, features = ["bevy_feathers"] }
 
 [features]
 dynamic = ["bevy/dynamic_linking"]

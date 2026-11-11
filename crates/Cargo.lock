@@ -3433,9 +3433,11 @@ dependencies = [
  "bevy",
  "k1-data",
  "k1-game",
+ "kn-app",
  "kn-game",
  "kn-input",
  "kn-render",
+ "kn-settings",
  "kn-ui",
 ]
 
@@ -3478,6 +3480,7 @@ dependencies = [
  "clap",
  "kn-fe-player",
  "kn-game",
+ "kn-settings",
 ]
 
 [[package]]
