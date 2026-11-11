@@ -1,5 +1,5 @@
 [workspace]
-members = ["game/k1/k1-data", "game/k1/k1-game", "game/kn-game", "frontend/bevy/input", "frontend/bevy/render", "frontend/bevy/ui", "frontend/bevy/viewer", "frontend/bevy/player", "apps/viewer", "apps/player"]
+members = ["game/k1/k1-data", "game/k1/k1-game", "game/kn-game", "frontend/bevy/input", "frontend/bevy/render", "frontend/bevy/ui", "frontend/bevy/viewer", "frontend/bevy/player", "apps/viewer", "apps/player", "apps/kn-app", "apps/kn-settings"]
 resolver = "3"
 
 # One Bevy feature set for the whole workspace: everything the 2D sprite scene,
