@@ -4,10 +4,14 @@
 //! resolves the hero and hands over a concrete [`PlayerConfig`]; this crate
 //! builds the Bevy App and runs it. The application core is the Bevy-free
 //! `kn-app` reducer — [`flow`] adapts it to `Update`, [`session`] builds and
-//! tears down the game session it asks for.
+//! tears down the game session it asks for, [`screens`] renders each screen
+//! and [`i18n`] speaks the two languages the settings offer.
 
 pub mod flow;
+pub mod i18n;
 pub mod session;
+
+mod screens;
 
 use std::path::PathBuf;
 

@@ -18,8 +18,10 @@ The game-layer crates are grouped under `crates/game/` (`game/k1/k1-data`, `game
 | `kn-render` | Bevy: кэш текстур (`textures`), куски сцены → спрайты по узлам групп (`scene`), покадровая анимация (`animation`), камера без ввода (`camera`) | Bevy 0.20, окно и GPU нужны только для запуска, не для тестов; оверлей — `Visibility` узла группы, а не пересборка карты; `animation` не знает ни о K1, ни о форматах |
 | `kn-fe-viewer` | Bevy frontend of the viewer: state (`Viewer`), the Feathers panel, overlays, playback, diagnostics, the camera binding and the App assembly; receives a `ViewerConfig` and knows no CLI | the map is built with all layers at once; toggling an overlay changes group visibility, not a rebuild |
 | `kn-viewer` | app `re-konung-viewer`: CLI, startup resolution, headless `check` | `check` creates no Bevy App, window or GPU context and returns a nonzero code on failure; bevy is linked only transitively |
-| `kn-fe-player` | Bevy frontend of the player: window, camera binding, start-map loading; receives a `PlayerConfig` | no CLI, no game rules — only the display pipeline and the App assembly |
-| `kn-player` | app `re-konung`: CLI, game opening, hero resolution | thin `main`: opens `Game`, resolves the hero, calls `run_player` |
+| `kn-fe-player` | Bevy frontend of the player: window, camera binding, the AppFlow pipeline over `kn-app` (flush → effects → results → screens; `session_watch` reports readiness only when observed), session build/teardown of the start map, the menu/settings/loading screens, the two-language text (`i18n`) | no CLI, no game rules — only the display pipeline and the App assembly; the app core decides, the frontend executes |
+| `kn-app` | the player's application core in pure Rust: `Screen`/`Action`/`Effect`, the pure `AppController` reducer with its transition table, typed session/persist errors | no Bevy, no `kn-game` — the game is reached only through effects the frontend executes; result actions never emit effects, so the frame pipeline has no feedback loops; 22 headless tests pin the whole table |
+| `kn-settings` | the player's settings in pure Rust: the model (`Language`, `VideoSettings`), defaults, versioned JSON persistence | `load` never writes; `save` is loss-proof — `tmp`+rename, a `.bak` of anything corrupt or newer before replacing, rollback of the backup on a failed rename; no Bevy |
+| `kn-player` | app `re-konung`: CLI (`--game-dir`, `--new-game`, `--settings`), settings bootstrap, game opening, hero resolution | thin `main`: settings load first (typed errors, defaults on a bad file, the file never touched), then `Game`, the hero, `run_player` |
 
 Будущие крейты: `k2-data`, `k2-game`. Общее выделяется, когда общность подтверждена, а не заранее, — та же логика, что в [games.md](games.md) про проверку общности движка на K2. Исключение сделано для перемещения: его механика в K1 и K2 предположительно почти одинакова (заметное отличие — бег), поэтому общий движок сразу строится в `kn-game`, а специфика части остаётся в `k1-game`.
 
@@ -1121,6 +1123,30 @@ Two decisions that are not visible from the outside:
   the konung palette; identity beyond colors — radii, row heights, paddings —
   is not fightable inside Feathers and comes from the kn-ui tokens applied in
   our own BSN styles.
+
+### Player application flow (`kn-app`, `kn-fe-player`)
+
+The player is an MVU loop over a pure core. `kn-app::AppController` holds the
+whole application state (`Screen`, applied settings, the settings draft, the
+last session error) and reduces queued typed `Action`s into it, returning
+`Effect`s; the frontend (`flow.rs`) wires that into `Update` as one chained
+pipeline per frame: `app_flush` (drain actions → effects) → `apply_effects`
+(the only executor: session build, apply-and-persist settings, exit) →
+`app_flush` again (result actions; the reducer guarantees they emit no
+effects, so the chain cannot loop) → `sync_screens` (the view of the new
+screen). A session is never built at startup: the menu loads nothing, and
+«New game» is `StartSession`, executed as `session::init` — the old startup
+loader, now all-or-nothing — with `session_watch` reporting `Succeeded` only
+when the simulation exists, the request is consumed and the map tree is in
+the world (`CreatureMotion::request` is a queue, not a build). A failure
+tears the half-built session down (`session::teardown`, idempotent) and the
+menu shows the typed reason until the next attempt. `kn-player` boots
+settings-first (typed load errors, a bad file left untouched), then the game
+and the hero, and `--new-game` seeds the flow before the first frame. The
+idle pipeline is two exclusive world systems over an empty queue — the flush
+allocates only when effects exist; no per-frame cost is claimed beyond that
+qualitative statement, and a measurement lands when a screen does work worth
+measuring.
 
 ## Проверки
 

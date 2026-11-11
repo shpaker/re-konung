@@ -71,10 +71,11 @@ pub struct SettingsPath(pub Option<PathBuf>);
 #[derive(Resource, Default)]
 struct LastScreen(Option<Screen>);
 
-/// Placeholder root of the current screen. Task II-4 replaces the bare node
-/// with the screen's real view (and will carry the screen on it again).
-#[derive(Component)]
-struct ScreenRoot;
+/// Marks the root of the current screen's view: [`sync_screens`] despawns
+/// the marked tree when the screen changes, and every view in
+/// [`crate::screens`] composes this marker onto its root.
+#[derive(Component, Clone, Default)]
+pub(crate) struct ScreenRoot;
 
 /// The flush→apply→flush→screens chain of one frame.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -105,6 +106,12 @@ impl Plugin for PlayerFlowPlugin {
                 (app_flush, apply_effects, app_flush, sync_screens)
                     .chain()
                     .in_set(FlowSet),
+            )
+            .add_systems(
+                Update,
+                // The settings widgets mirror the draft after the chain has
+                // reduced this frame's actions into it.
+                crate::screens::settings::sync.after(FlowSet),
             )
             .add_systems(
                 Update,
@@ -209,9 +216,9 @@ fn apply_video(world: &mut World, video: VideoSettings) {
     }
 }
 
-/// Moves the screen root when the screen changed. In this task the roots are
-/// bare placeholder nodes: the menu has no view yet (task II-4), so the window
-/// shows the cleared background.
+/// Moves the screen root when the screen changed: the old root dies with its
+/// whole tree, the new screen's view spawns fresh from the current state.
+/// `Playing` has no root — the world is the view.
 fn sync_screens(world: &mut World) {
     let screen = world.resource::<AppFlow>().state().screen;
     {
@@ -226,7 +233,12 @@ fn sync_screens(world: &mut World) {
     for root in old {
         world.despawn(root);
     }
-    world.spawn((Node::default(), ScreenRoot));
+    match screen {
+        Screen::MainMenu => crate::screens::main_menu::spawn(world),
+        Screen::Settings => crate::screens::settings::spawn(world),
+        Screen::Loading => crate::screens::loading::spawn(world),
+        Screen::Playing => {}
+    }
 }
 
 /// Reports the session build's outcome once it is observable: `Succeeded` when
