@@ -14,7 +14,6 @@ use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     ecs::schedule::common_conditions::resource_exists,
     feathers::{
-        FeathersPlugins,
         controls::{
             FeathersButton, FeathersCheckbox, FeathersSelect, FeathersSlider, OptionIndex,
             list_rows_from_strings,
@@ -50,7 +49,7 @@ use kn_render::{
     ScenePiece, Sequence, TextureCache, clear_scene, load_scene, ortho_scale, piece_center,
     piece_size, reset_creature_animations, reset_creature_positions, update_lighting_uniforms,
 };
-use kn_ui::{dark_theme, pointer_over_ui, sync_checked};
+use kn_ui::{KonungUiPlugin, pointer_over_ui, sync_checked};
 
 /// Отладочный оверлей, который включает просмотрщик.
 ///
@@ -788,7 +787,7 @@ pub fn run_viewer(config: ViewerConfig) {
             .set(ImagePlugin::default_nearest()),
     )
     .add_plugins((
-        FeathersPlugins,
+        KonungUiPlugin,
         MapCameraPlugin,
         // Тик игры: на нём меняются кадры объектов, персонажей и огней
         AnimPlugin::new(TICK_MS as f32),
@@ -799,7 +798,6 @@ pub fn run_viewer(config: ViewerConfig) {
         KonungLightingPlugin,
         FrameTimeDiagnosticsPlugin::default(),
     ))
-    .insert_resource(dark_theme())
     .insert_resource(GameResource(config.game))
     .init_resource::<TextureCache>()
     .init_resource::<ActiveRoot>()

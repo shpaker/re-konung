@@ -3,7 +3,7 @@ name = "kn-ui"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "Shared Bevy UI mechanics for the «Князь» frontends: Feathers theme, checkbox mirroring, pointer capture. No rendering, no input bindings, no game rules"
+description = "Shared Bevy UI design system for the «Князь» frontends: konung theme and tokens over Feathers, bundled PT Sans fonts, BSN widget helpers"
 
 [dependencies]
 bevy = { workspace = true, features = ["bevy_feathers"] }

@@ -57,6 +57,10 @@ game:
 game-release:
     cargo run --release --manifest-path crates/Cargo.toml -p kn-player -- --game-dir "{{game_dir}}"
 
+# kn-ui showcase: just ui-showcase — design tokens, theme, bundled fonts, widget helpers
+ui-showcase:
+    cargo run --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-ui --example showcase
+
 # Расширение Tiled «konung» — в папку расширений Tiled; запущенный Tiled подхватит его сам
 [windows]
 tiled-install:

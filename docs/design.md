@@ -83,6 +83,32 @@ everything Baldur's Gate 3 has:
   stepwise, pixel-exact wheel zoom of the viewer is the existing example of that
   shared behavior.
 
+## The UI foundation
+
+Both programs are skinned by one design system — the crate
+[`kn-ui`](../crates/frontend/bevy/ui) — so the viewer a developer opens and the
+game a player runs look like the same engine. What it fixes:
+
+- **Palette.** Dark, warm-neutral surfaces with a single muted amber accent;
+  the values live in kn-ui's `palette` and are not duplicated elsewhere.
+- **Type.** PT Sans, bundled with the crate: one family covering full Cyrillic
+  and Latin, setting every screen — the viewer's dev panel included, since
+  `KonungUiPlugin` rewrites every control font (composite interiors Feathers
+  composes itself among them) to PT Sans; the viewer's captions stay English
+  because it is a development tool.
+- **Scales.** Spacing and typography steps come from kn-ui, not from
+  per-panel improvisation.
+- **Controls.** Feathers widgets composed through kn-ui helpers — adopted, not
+  re-implemented — with explicit states (hover, pressed, disabled, checked,
+  focus ring) and keyboard navigation as first-class.
+- **Minimalism.** No decorative noise: compact panels, flat surfaces, screen
+  space belongs to the world.
+
+The UI is deliberately **not** a copy of the original Konung interface — the
+stance of [../AGENTS.md](../AGENTS.md), "Priority: modern experience". The
+original supplies the game's rules, content and visual identity, which stays
+2D isometric pixel art; the interface follows the modern reference above.
+
 ## Applying them
 
 When a new game interface or control is designed, name the reference the decision
