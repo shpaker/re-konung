@@ -92,9 +92,10 @@ game a player runs look like the same engine. What it fixes:
 - **Palette.** Dark, warm-neutral surfaces with a single muted amber accent;
   the values live in kn-ui's `palette` and are not duplicated elsewhere.
 - **Type.** PT Sans, bundled with the crate: one family covering full Cyrillic
-  and Latin, setting every player screen. The viewer's dev panel shares the
-  theme colors but keeps Feathers' embedded font for its English captions —
-  fonts are not themeable and are patched per control by the kn-ui helpers.
+  and Latin, setting every screen — the viewer's dev panel included, since
+  `KonungUiPlugin` rewrites every control font (composite interiors Feathers
+  composes itself among them) to PT Sans; the viewer's captions stay English
+  because it is a development tool.
 - **Scales.** Spacing and typography steps come from kn-ui, not from
   per-panel improvisation.
 - **Controls.** Feathers widgets composed through kn-ui helpers — adopted, not

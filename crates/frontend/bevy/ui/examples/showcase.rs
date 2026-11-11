@@ -3,7 +3,10 @@
 //! without a game scene. This is the visual acceptance surface for kn-ui.
 //!
 //! What to verify by hand:
-//! * Palette and typography (ru + en, PT Sans carries the Cyrillic).
+//! * Palette and typography (ru + en, PT Sans carries the Cyrillic) — also
+//!   inside the composite controls: the select's trigger and options and the
+//!   slider's numeric readout are interiors Feathers composes itself,
+//!   normalized to PT Sans by `KonungUiPlugin`.
 //! * Buttons: hover and pressed recolor live under the pointer; the disabled
 //!   one shows the "not allowed" cursor and never activates; the primary
 //!   variant rides the accent fill.
@@ -53,7 +56,7 @@ fn main() {
         .add_observer(toggle_live_checkbox)
         .add_observer(toggle_music)
         .add_observer(readout_slider)
-        .add_observer(pick_resolution)
+        .add_observer(pick_window_mode)
         .add_systems(Startup, (spawn_camera, build_showcase))
         .run();
 }
@@ -349,48 +352,35 @@ fn slider_section(fonts: &KonungFonts) -> impl Scene {
                 align_items: AlignItems::FlexStart,
             }
             Children [
-                Node {
-                    width: px(300.0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: spacing::SPACE_4,
-                }
-                InheritableThemeTextColor(tokens::TEXT_DIM)
-                Children [
-                    @caption("Живой — Live")
-                    --
-                    // Built inline, not through widgets::slider_row: the step,
-                    // the marker and the observers belong to the slider
-                    // entity, and the helper wraps it in a caption column
+                // The step, the marker and the observers are composed onto
+                // the FeathersSlider entity the helper embeds
+                @widgets::slider_row(fonts, "Громкость — Volume", bsn! {
                     @FeathersSlider { @min: 0.0, @max: 100.0 }
                     SliderValue(40.0)
                     SliderStep(5.0)
                     LiveSlider
                     on(slider_self_update)
                     on(readout_slider)
-                    --
-                    @caption("Громкость — volume: 40 %") SliderReadout
-                ]
+                })
+                Node { width: px(300.0) }
                 --
-                Node {
-                    width: px(300.0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: spacing::SPACE_4,
-                }
-                InheritableThemeTextColor(tokens::TEXT_DIM)
-                Children [
-                    @caption("Неактивный — Disabled")
-                    --
-                    @FeathersSlider { @min: 0.0, @max: 100.0 }
-                    SliderValue(70.0)
+                @widgets::slider_row(fonts, "Время дня — Time of day", bsn! {
+                    @FeathersSlider { @min: 0.0, @max: 24.0 }
+                    SliderValue(12.0)
                     InteractionDisabled
-                ]
+                })
+                Node { width: px(300.0) }
             ]
+            --
+            @caption("Громкость — volume: 40 %") SliderReadout
         },
     )
 }
 
-/// Options of the select: period-appropriate resolutions.
-const RESOLUTIONS: [&str; 4] = ["640×480", "800×600", "1024×768", "1280×800"];
+/// Options of the select: window modes, in Russian — the options and the
+/// trigger are composite interiors Feathers composes itself, so they are the
+/// visual check that the whole control renders in the bundled PT Sans.
+const WINDOW_MODES: [&str; 2] = ["Окно", "Полный экран"];
 
 fn select_section(fonts: &KonungFonts) -> impl Scene {
     section(
@@ -400,12 +390,12 @@ fn select_section(fonts: &KonungFonts) -> impl Scene {
             {EntityScene(hint(fonts, "Кликните, чтобы открыть; выбор отражается в строке ниже. Click to open; the readout follows the picked option."))}
             --
             @FeathersSelect {
-                @options: list_rows_from_strings(RESOLUTIONS, Some(3)),
+                @options: list_rows_from_strings(WINDOW_MODES, Some(0)),
                 @max_visible: 4,
             }
             Node { width: px(220.0) }
             --
-            @caption("Выбрано — chosen: 1280×800") SelectReadout
+            @caption("Выбрано — chosen: Окно") SelectReadout
         },
     )
 }
@@ -424,19 +414,12 @@ fn panel_section(fonts: &KonungFonts) -> impl Scene {
                 MusicToggle
                 on(toggle_music)
                 --
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: spacing::SPACE_4,
-                }
-                InheritableThemeTextColor(tokens::TEXT_DIM)
-                Children [
-                    @caption("Громкость — Volume")
-                    --
+                @widgets::slider_row(fonts, "Громкость — Volume", bsn! {
                     @FeathersSlider { @min: 0.0, @max: 100.0 }
                     SliderValue(40.0)
                     SliderStep(1.0)
                     on(slider_self_update)
-                ]
+                })
                 --
                 Node {
                     flex_direction: FlexDirection::Row,
@@ -547,7 +530,7 @@ fn readout_slider(
 }
 
 /// Reads the picked select option by its [`OptionIndex`] into the readout.
-fn pick_resolution(
+fn pick_window_mode(
     change: On<ValueChange<Entity>>,
     options: Query<&OptionIndex>,
     mut readout: Query<&mut Text, With<SelectReadout>>,
@@ -556,6 +539,6 @@ fn pick_resolution(
         return;
     };
     if let Ok(mut text) = readout.single_mut() {
-        text.0 = format!("Выбрано — chosen: {}", RESOLUTIONS[option.0]);
+        text.0 = format!("Выбрано — chosen: {}", WINDOW_MODES[option.0]);
     }
 }

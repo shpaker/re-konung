@@ -5,6 +5,14 @@
 //! [`KonungUiPlugin`] to bring it all up in one call. The pointer-capture
 //! check and checkbox mirroring stay from the pre-design-system era.
 //!
+//! One typeface everywhere: Feathers controls hardcode their embedded
+//! FiraSans on interior nodes of their own scenes, and every
+//! `InheritableFont` is a propagation barrier, so the plugin rewrites every
+//! added `InheritableFont`'s handle to the bundled PT Sans
+//! ([`normalize_control_fonts`]) — including the composites' interiors the
+//! per-control patches of [`widgets`] cannot reach. Icons are `ImageNode`s
+//! and never ride `InheritableFont`, so their glyphs survive.
+//!
 //! Consumers are the frontends (`kn-fe-viewer`, `kn-fe-player`). Nothing here
 //! knows about input bindings, rendering or game rules.
 
@@ -18,16 +26,18 @@ pub use theme::konung_theme;
 pub use typo::KonungFonts;
 
 use bevy::{
-    app::{App, Plugin},
+    app::{App, Plugin, PostUpdate, PropagateSet},
     asset::Assets,
-    feathers::FeathersPlugins,
-    prelude::{Commands, Entity},
-    text::Font,
+    ecs::schedule::IntoScheduleConfigs,
+    feathers::{FeathersPlugins, font_styles::InheritableFont},
+    prelude::{Added, Commands, Entity, Query, Res},
+    text::{Font, FontWeight, TextFont},
     ui::Checked,
 };
 
 /// Brings up the konung UI: Feathers, the konung [`UiTheme`](bevy::feathers::
-/// theme::UiTheme) and the bundled PT Sans fonts as [`KonungFonts`].
+/// theme::UiTheme), the bundled PT Sans fonts as [`KonungFonts`] and the
+/// font normalization that keeps every control interior in PT Sans.
 ///
 /// Requires the app to run `DefaultPlugins` (or at least initialize
 /// `Assets<Font>`) before its first frame; the frontends always do.
@@ -40,7 +50,45 @@ impl Plugin for KonungUiPlugin {
         let regular = font_assets.add(Font::from_bytes(typo::PT_SANS_REGULAR_BYTES.to_vec()));
         let bold = font_assets.add(Font::from_bytes(typo::PT_SANS_BOLD_BYTES.to_vec()));
         app.insert_resource(KonungFonts { regular, bold })
-            .insert_resource(konung_theme());
+            .insert_resource(konung_theme())
+            // Before the propagation set, so the rewritten handle reaches the
+            // text spans in the same frame it is spawned.
+            .add_systems(
+                PostUpdate,
+                normalize_control_fonts.before(PropagateSet::<TextFont>::default()),
+            );
+    }
+}
+
+/// Rewrites the font handle of every added [`InheritableFont`] to the bundled
+/// PT Sans, picked by the component's weight; size and weight stay untouched.
+///
+/// Feathers composites keep their own `InheritableFont` on interior nodes
+/// (the select's trigger and list rows, the slider's numeric readout), and
+/// the component requires `PropagateOver<TextFont>` — a barrier no patch
+/// composed on the control root can cross. Re-inserting the component here
+/// re-fires Feathers' own insert observer, which re-propagates the PT Sans
+/// handle into that node's subtree; propagation is change-driven, so the
+/// rewritten value is what survives. Handles already pointing at PT Sans
+/// (the kn-ui patches) are left alone.
+fn normalize_control_fonts(
+    fonts: Res<KonungFonts>,
+    added: Query<(Entity, &InheritableFont), Added<InheritableFont>>,
+    mut commands: Commands,
+) {
+    for (entity, font) in &added {
+        if font.font == fonts.regular || font.font == fonts.bold {
+            continue;
+        }
+        let face = if font.weight >= FontWeight::MEDIUM {
+            fonts.bold.clone()
+        } else {
+            fonts.regular.clone()
+        };
+        commands.entity(entity).insert(InheritableFont {
+            font: face,
+            ..font.clone()
+        });
     }
 }
 
@@ -72,7 +120,12 @@ pub fn sync_checked(commands: &mut Commands, widget: Entity, checked: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        InheritableFont, KonungFonts, konung_theme, normalize_control_fonts, pointer_over_ui, typo,
+    };
+    use bevy::feathers::controls::FeathersSlider;
+    use bevy::prelude::*;
+    use bevy::scene::{ScenePlugin, WorldSceneExt};
 
     #[test]
     fn widgets_without_the_cursor_are_not_the_ui_under_it() {
@@ -84,8 +137,69 @@ mod tests {
         assert!(pointer_over_ui([false, true, false].into_iter()));
     }
 
-    // KonungUiPlugin itself is not headless-testable: Feathers embeds a Shader
-    // asset, whose registration needs the render asset registry
-    // (`init_asset::<Shader>()`), i.e. the render plugin graph. The showcase
-    // example exercises the plugin under a real app.
+    /// A headless app that can spawn Feathers scenes: assets for the embedded
+    /// font paths, the scene machinery and a theme the controls read at
+    /// spawn. `KonungUiPlugin` itself needs the render registry (Feathers
+    /// registers a Shader asset), so the normalization system is added by
+    /// hand — it has no such requirement.
+    pub(crate) fn headless_ui_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins((AssetPlugin::default(), ScenePlugin))
+            .init_asset::<Font>()
+            .insert_resource(konung_theme());
+        let mut font_assets = app.world_mut().resource_mut::<Assets<Font>>();
+        let regular = font_assets.add(Font::from_bytes(typo::PT_SANS_REGULAR_BYTES.to_vec()));
+        let bold = font_assets.add(Font::from_bytes(typo::PT_SANS_BOLD_BYTES.to_vec()));
+        app.insert_resource(KonungFonts { regular, bold })
+            .add_systems(PostUpdate, normalize_control_fonts);
+        app
+    }
+
+    /// The composite interior Feathers hides from outside patching — the
+    /// slider's readout node with its embedded FiraMono — comes out in PT
+    /// Sans, size and weight untouched.
+    #[test]
+    fn feathers_interiors_are_normalized_to_pt_sans() {
+        let mut app = headless_ui_app();
+        let fonts = app.world().resource::<KonungFonts>().clone();
+        app.world_mut()
+            .spawn_scene_list(bsn! {
+                @FeathersSlider { @min: 0.0, @max: 100.0 }
+            })
+            .expect("the slider scene spawns");
+        app.update();
+
+        // The readout container is the only InheritableFont in the subtree
+        let mut inheritable = app.world_mut().query::<&InheritableFont>();
+        let font = inheritable.single(app.world()).unwrap().clone();
+        assert_eq!(
+            font.font, fonts.regular,
+            "the readout's FiraMono is rewritten, not left to tofu on Cyrillic"
+        );
+        assert_eq!(
+            font.font_size,
+            bevy::text::FontSize::Px(12.0),
+            "the readout keeps its own size"
+        );
+        assert_eq!(font.weight, FontWeight::NORMAL);
+    }
+
+    /// A weight the family answers with its bold face; everything Feathers
+    /// ships today is NORMAL, this pins the mapping for the day one is not.
+    #[test]
+    fn bold_weight_normalizes_to_the_bold_face() {
+        let mut app = headless_ui_app();
+        let fonts = app.world().resource::<KonungFonts>().clone();
+        app.world_mut().spawn(InheritableFont {
+            font: Default::default(),
+            font_size: typo::BODY,
+            weight: FontWeight::BOLD,
+        });
+        app.update();
+
+        let mut inheritable = app.world_mut().query::<&InheritableFont>();
+        let font = inheritable.single(app.world()).unwrap();
+        assert_eq!(font.font, fonts.bold);
+    }
 }

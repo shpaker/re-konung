@@ -17,10 +17,11 @@
 //! swapped for [`crate::palette`]: surfaces, border, text, accent, focus ring,
 //! and the neutral button/field/item fills re-mapped onto warm palette steps
 //! (the cool Feathers grays would clash with the warm surfaces). Fonts travel
-//! outside the theme: [`crate::KonungUiPlugin`] embeds PT Sans, and the
-//! [`crate::widgets`] helpers patch `InheritableFont` over each control — BSN
-//! applies later components on the same entity as field-level patches over the
-//! scene's own.
+//! outside the theme: [`crate::KonungUiPlugin`] embeds PT Sans, the
+//! [`crate::widgets`] helpers patch `InheritableFont` over each control root
+//! they build, and the plugin's font normalization reaches the interiors
+//! Feathers composes itself — every `InheritableFont` is a propagation
+//! barrier, so a root patch alone cannot recolor a composite control.
 //!
 //! What is deliberately not fought: border radii (4/6 px literals inside
 //! Feathers controls), row heights and paddings. Identity in those dimensions
@@ -181,13 +182,15 @@ pub fn konung_theme() -> UiTheme {
 
     // Feathers lifts fills on raised surfaces (its `semantic_overrides` use
     // cool grays); the same correction with the warm steps keeps controls
-    // readable on SURFACE_RAISED groups and dialogs.
+    // readable on SURFACE_RAISED groups and dialogs. Missing level maps are
+    // created, not unwrapped: the theme must build against future Feathers
+    // changes, not panic on them.
     for level in [
         SurfaceLevel::Highest,
         SurfaceLevel::Higher,
         SurfaceLevel::Floating,
     ] {
-        let overrides = props.semantic_overrides.get_mut(&level).unwrap();
+        let overrides = props.semantic_overrides.entry(level).or_default();
         overrides.insert(
             tokens::semantic::FILL_SOLID_DEFAULT.clone(),
             palette::BORDER,
@@ -243,5 +246,64 @@ mod tests {
     #[test]
     fn the_panel_border_token_resolves_to_the_konung_border() {
         assert_eq!(konung_theme().color(&PANEL_BORDER), palette::BORDER);
+    }
+
+    #[test]
+    fn disabled_and_pressed_states_resolve_to_the_konung_values() {
+        let theme = konung_theme();
+        assert_eq!(
+            theme.color(&tokens::BUTTON_BG_DISABLED),
+            palette::SURFACE_RAISED.with_alpha(0.7),
+            "solid fill disabled"
+        );
+        assert_eq!(
+            theme.color(&tokens::BUTTON_BG_PRESSED),
+            palette::BORDER.lighter(0.05),
+            "solid fill pressed"
+        );
+        assert_eq!(
+            theme.color(&tokens::BUTTON_PRIMARY_BG_PRESSED),
+            palette::ACCENT_HOVER.lighter(0.05),
+            "accent fill pressed"
+        );
+        assert_eq!(
+            theme.color(&tokens::BUTTON_TEXT_DISABLED),
+            palette::TEXT.with_alpha(0.4),
+            "text disabled"
+        );
+    }
+
+    #[test]
+    fn elevated_surfaces_lift_the_solid_fills_to_the_konung_steps() {
+        let theme = konung_theme();
+        for level in [
+            SurfaceLevel::Highest,
+            SurfaceLevel::Higher,
+            SurfaceLevel::Floating,
+        ] {
+            assert_eq!(
+                theme.context_color(&tokens::BUTTON_BG, level),
+                palette::BORDER,
+                "solid fill default at {level:?}"
+            );
+            assert_eq!(
+                theme.context_color(&tokens::BUTTON_BG_HOVER, level),
+                palette::BORDER.lighter(0.05),
+                "solid fill hover at {level:?}"
+            );
+            assert_eq!(
+                theme.context_color(&tokens::BUTTON_BG_PRESSED, level),
+                palette::BORDER.lighter(0.1),
+                "solid fill pressed at {level:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_base_surface_keeps_its_unlifted_solid_fill() {
+        assert_eq!(
+            konung_theme().context_color(&tokens::BUTTON_BG, SurfaceLevel::Base),
+            palette::SURFACE_RAISED,
+        );
     }
 }

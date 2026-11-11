@@ -33,8 +33,9 @@ pub(crate) const PT_SANS_BOLD_BYTES: &[u8] = include_bytes!("../assets/fonts/PT_
 ///
 /// Scene-building code (BSN helpers, screens) reads this resource and passes
 /// the handles into [`bevy::feathers::font_styles::InheritableFont`] — Feathers
-/// themes cannot carry fonts, so every control's hardcoded FiraSans is patched
-/// with these handles instead.
+/// themes cannot carry fonts, so the kn-ui helpers patch every control root
+/// with these handles, and the plugin's font normalization rewrites the
+/// composites' interiors that no root patch reaches.
 #[derive(Clone, Resource)]
 pub struct KonungFonts {
     /// PT Sans Regular.
