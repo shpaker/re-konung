@@ -46,10 +46,11 @@ pub struct KonungUiPlugin;
 impl Plugin for KonungUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(FeathersPlugins);
-        let mut font_assets = app.world_mut().resource_mut::<Assets<Font>>();
-        let regular = font_assets.add(Font::from_bytes(typo::PT_SANS_REGULAR_BYTES.to_vec()));
-        let bold = font_assets.add(Font::from_bytes(typo::PT_SANS_BOLD_BYTES.to_vec()));
-        app.insert_resource(KonungFonts { regular, bold })
+        let fonts = {
+            let mut font_assets = app.world_mut().resource_mut::<Assets<Font>>();
+            konung_fonts(&mut font_assets)
+        };
+        app.insert_resource(fonts)
             .insert_resource(konung_theme())
             // Before the propagation set, so the rewritten handle reaches the
             // text spans in the same frame it is spawned.
@@ -57,6 +58,17 @@ impl Plugin for KonungUiPlugin {
                 PostUpdate,
                 normalize_control_fonts.before(PropagateSet::<TextFont>::default()),
             );
+    }
+}
+
+/// The bundled PT Sans faces added to the asset store and returned as
+/// [`KonungFonts`]. [`KonungUiPlugin`] uses this; headless setups that cannot
+/// run the plugin (its Shader asset needs the render registry) build the same
+/// resource with it.
+pub fn konung_fonts(fonts: &mut Assets<Font>) -> KonungFonts {
+    KonungFonts {
+        regular: fonts.add(Font::from_bytes(typo::PT_SANS_REGULAR_BYTES.to_vec())),
+        bold: fonts.add(Font::from_bytes(typo::PT_SANS_BOLD_BYTES.to_vec())),
     }
 }
 

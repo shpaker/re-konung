@@ -42,7 +42,7 @@ pub use scene::{
     MapRoot, SceneGroup, SceneLoad, ScenePiece, Z_STEP, clear_scene, load_scene, piece_center,
     piece_sequence, piece_size, piece_transform, scene_bounds, spawn_scene,
 };
-pub use textures::{TextureCache, TextureEntry};
+pub use textures::{TextureCache, TextureEntry, TextureProblem};
 
 use bevy::prelude::*;
 

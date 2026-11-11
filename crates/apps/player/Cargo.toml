@@ -3,7 +3,7 @@ name = "kn-player"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "Player app for «Князь»: CLI, game opening; the window itself is kn-fe-player"
+description = "Player app for «Князь»: CLI, settings bootstrap, game opening; the window itself is kn-fe-player"
 
 [[bin]]
 name = "re-konung"
@@ -12,4 +12,5 @@ path = "src/main.rs"
 [dependencies]
 kn-fe-player = { path = "../../frontend/bevy/player" }
 kn-game = { path = "../../game/kn-game" }
+kn-settings = { path = "../kn-settings" }
 clap = { version = "4", features = ["derive"] }

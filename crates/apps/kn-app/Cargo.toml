@@ -1,0 +1,9 @@
+[package]
+name = "kn-app"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Bevy-free application layer of the player: screens, typed actions, pure transitions, effects"
+
+[dependencies]
+kn-settings = { path = "../kn-settings" }

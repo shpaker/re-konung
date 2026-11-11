@@ -1,59 +1,31 @@
-//! The player window shows living creatures: the same request the window makes
-//! and the same subsystem the viewer runs must put composite sprites on screen
-//! and play a state-4 creature's special once into idle (issue #70 AC4).
+//! The player window shows living creatures, built only through the AppFlow
+//! pipeline: the main menu loads nothing, «New game» builds the session, and
+//! readiness is what promotes `Loading` to `Playing` — never the request
+//! itself. A failed session tears down completely and a retry starts clean.
 //!
 //! Tests on real data skip when `original/` is absent (docs/k1/editions.md).
 
-use std::path::PathBuf;
+mod common;
+
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use kn_fe_player::{START_SEED, request_start_creatures};
-use kn_game::{Game, MapRef, MapSource, SceneOptions, TICK_MS};
+use common::{first_hero, game_dir, player_app};
+use kn_app::{Action, LoadingAction, MainMenuAction, Screen, SessionError};
+use kn_fe_player::START_SEED;
+use kn_fe_player::flow::AppFlow;
+use kn_fe_player::session;
+use kn_game::{Game, MapRef, SceneOptions};
 use kn_render::{
-    AnimPlugin, Clock, CreatureAnimationPlugin, CreatureMotion, CreatureNode, CreatureSim,
-    CreatureSprite, GameResource, PlayState, Sequence, TextureCache,
+    Clock, CreatureMotion, CreatureNode, CreatureRoot, CreatureSim, FineLightGrid,
+    LightingMaterials, MapRoot, PlayState, Sequence,
 };
-
-/// First edition directory with data, or `None` to skip.
-fn game_dir() -> Option<PathBuf> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../original/k1");
-    for edition in ["rus", "eng"] {
-        let dir = root.join(edition).join("game");
-        if dir.is_dir() {
-            return Some(dir);
-        }
-    }
-    eprintln!("skip: no original/k1/{{rus,eng}}/game (docs/k1/editions.md)");
-    None
-}
-
-/// The app the window runs, minus the window: the shared subsystem, its clock
-/// and the resources any window drawing this game provides anyway.
-fn app(game: Game, motion: CreatureMotion) -> App {
-    let mut app = App::new();
-    app.add_plugins((
-        MinimalPlugins,
-        AnimPlugin::new(TICK_MS as f32),
-        CreatureAnimationPlugin,
-    ))
-    .insert_resource(GameResource(game))
-    .init_resource::<TextureCache>()
-    .insert_resource(Assets::<Image>::default())
-    .insert_resource(motion);
-    // The clock moves only through the test: the subsystem has no clock of its
-    // own and must stand still while the test is not stepping it.
-    app.world_mut()
-        .resource_mut::<Clock>()
-        .goto(PlayState::Paused);
-    app
-}
 
 /// The sequence the body sprite of `creature` draws right now.
 fn shown_sequence(app: &mut App, creature: usize) -> Arc<Sequence> {
     let mut query = app
         .world_mut()
-        .query::<(&CreatureSprite, &kn_render::Animator)>();
+        .query::<(&kn_render::CreatureSprite, &kn_render::Animator)>();
     let world = app.world();
     let (_, animator) = query
         .iter(world)
@@ -77,34 +49,136 @@ fn special_sequence(app: &App, creature: usize) -> Arc<Sequence> {
     Arc::clone(&clip.sequence)
 }
 
+/// Drives the flow to `Playing` through legal actions only: one update to
+/// reduce «New game» and build, one more for the watcher's readiness report.
+fn play_to_playing(app: &mut App) {
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::MainMenu(MainMenuAction::NewGame));
+    app.update();
+    assert_eq!(
+        app.world().resource::<AppFlow>().state().screen,
+        Screen::Loading,
+        "the session build is in flight"
+    );
+    app.update();
+    assert_eq!(
+        app.world().resource::<AppFlow>().state().screen,
+        Screen::Playing,
+        "the watcher must report readiness on the next frame"
+    );
+}
+
 #[test]
-fn the_player_window_asks_for_creatures_and_draws_them() {
+fn the_menu_loads_nothing_and_new_game_reaches_playing_only_when_ready() {
     let Some(dir) = game_dir() else {
         return;
     };
     let game = Game::open(&dir).unwrap();
-    let hero = game.heroes(MapSource::Game).unwrap()[0];
+    let hero = first_hero(&game);
+    let mut app = player_app(game, hero);
 
-    let mut motion = CreatureMotion::default();
-    let Some((map_ref, _)) = request_start_creatures(&game, hero, &mut motion) else {
-        panic!("the hero's start map must build");
-    };
-    assert_eq!(motion.seed, START_SEED, "the window's own seed is used");
-    assert!(motion.rebuild, "the request is pending for the subsystem");
-
-    let mut app = app(game, motion);
+    // The menu frame: no session of any kind — the old startup loader's map
+    // is gone, and nothing ticks behind the menu.
     app.update();
+    let flow = app.world().resource::<AppFlow>();
+    assert_eq!(flow.state().screen, Screen::MainMenu);
+    let mut maps = app.world_mut().query_filtered::<(), With<MapRoot>>();
+    assert!(
+        maps.iter(app.world()).next().is_none(),
+        "no map behind the menu"
+    );
+    let sim = app.world().get_resource::<CreatureSim>();
+    assert!(
+        sim.is_none_or(|sim| sim.sim.is_none()),
+        "no simulation behind the menu"
+    );
 
-    // The scene's pieces carry the creatures and `spawn_scene` skips them:
-    // without the subsystem the window would show an empty map.
+    play_to_playing(&mut app);
+
+    // The request the window itself makes: the fixed seed, the hero's start
+    // map, creatures drawn through the shared subsystem.
+    let motion = app.world().resource::<CreatureMotion>();
+    assert_eq!(motion.seed, START_SEED, "the window's own seed is used");
     let mut nodes = app.world_mut().query_filtered::<(), With<CreatureNode>>();
     assert!(
         nodes.iter(app.world()).next().is_some(),
-        "start map {map_ref:?} must put creature nodes on screen"
+        "the start map must put creature nodes on screen"
     );
     let sim = app.world().resource::<CreatureSim>();
     assert!(sim.sim.is_some(), "the window's map must simulate");
     assert_eq!(sim.error, None, "no reason to be without creatures");
+}
+
+#[test]
+fn a_failed_session_tears_down_and_a_retry_succeeds() {
+    let Some(dir) = game_dir() else {
+        return;
+    };
+    let game = Game::open(&dir).unwrap();
+    let hero = first_hero(&game);
+    let mut app = player_app(game, hero);
+    app.update();
+
+    // The failure report of a build that died inside the subsystem: reported
+    // while still Loading — the watcher's failure branch — and reduced back
+    // to the menu with the typed reason, exactly as the table says.
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::MainMenu(MainMenuAction::NewGame));
+    app.update();
+    assert_eq!(
+        app.world().resource::<AppFlow>().state().screen,
+        Screen::Loading
+    );
+    session::teardown(app.world_mut());
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::Loading(LoadingAction::Failed(SessionError::Map)));
+    app.update();
+    let flow = app.world().resource::<AppFlow>();
+    assert_eq!(flow.state().screen, Screen::MainMenu);
+    assert_eq!(flow.state().session_error, Some(SessionError::Map));
+
+    // The retry from the failed state: a full session over the cleaned world,
+    // the typed reason cleared by the new attempt.
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::MainMenu(MainMenuAction::NewGame));
+    app.update();
+    assert_eq!(
+        app.world().resource::<AppFlow>().state().screen,
+        Screen::Loading
+    );
+    app.update();
+    let flow = app.world().resource::<AppFlow>();
+    assert_eq!(flow.state().screen, Screen::Playing);
+    assert_eq!(flow.state().session_error, None);
+    let playing_entities = app.world().iter_entities().count();
+
+    // Teardown is the exact inverse of the build and idempotent: a second run
+    // finds nothing and changes nothing.
+    session::teardown(app.world_mut());
+    let torn_down = app.world().iter_entities().count();
+    assert!(
+        torn_down < playing_entities,
+        "teardown must remove entities"
+    );
+    session::teardown(app.world_mut());
+    assert_eq!(
+        app.world().iter_entities().count(),
+        torn_down,
+        "a second teardown must change nothing"
+    );
+    let mut maps = app
+        .world_mut()
+        .query_filtered::<(), Or<(With<MapRoot>, With<CreatureRoot>)>>();
+    assert!(maps.iter(app.world()).next().is_none());
+    assert!(
+        app.world().get_resource::<FineLightGrid>().is_none()
+            && app.world().get_resource::<LightingMaterials>().is_none()
+            && app.world().get_resource::<session::SessionInit>().is_none()
+    );
 }
 
 #[test]
@@ -118,6 +192,9 @@ fn a_state_four_creature_plays_its_special_once_into_idle_on_screen() {
     let (map_ref, creature) =
         special_creature(&game).expect("an edition map must have state-4 creatures");
 
+    // The subsystem alone, without the flow: the clip machine is the
+    // creature subsystem's own, and this test pins its on-screen behaviour,
+    // not the pipeline that asks for it.
     let mut motion = CreatureMotion::default();
     motion.request(
         map_ref,
@@ -125,7 +202,19 @@ fn a_state_four_creature_plays_its_special_once_into_idle_on_screen() {
         None,
         game.scene(map_ref, &SceneOptions::ALL).unwrap(),
     );
-    let mut app = app(game, motion);
+    let mut app = App::new();
+    app.add_plugins((
+        MinimalPlugins,
+        kn_render::AnimPlugin::new(kn_game::TICK_MS as f32),
+        kn_render::CreatureAnimationPlugin,
+    ))
+    .insert_resource(kn_render::GameResource(game))
+    .init_resource::<kn_render::TextureCache>()
+    .insert_resource(Assets::<Image>::default())
+    .insert_resource(motion);
+    app.world_mut()
+        .resource_mut::<Clock>()
+        .goto(PlayState::Paused);
     app.update();
 
     let special = special_sequence(&app, creature);

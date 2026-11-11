@@ -16,7 +16,7 @@ use kn_game::{Game, Piece, PieceGroup, Scene, TextureId};
 use crate::animation::{Animator, Frame, Sequence};
 use crate::camera::{PendingFrame, frame_scene};
 use crate::lighting::{LightingMaterials, SurfaceLighting, piece_surface_lighting};
-use crate::textures::{TextureCache, TextureEntry};
+use crate::textures::{TextureCache, TextureEntry, TextureProblem};
 
 /// Шаг z между соседними кусками сцены.
 pub const Z_STEP: f32 = 0.01;
@@ -355,7 +355,20 @@ pub fn scene_bounds(
 pub struct SceneLoad {
     pub root: Entity,
     pub unique_textures: usize,
-    pub problems: Vec<String>,
+    /// Why some keys gave no picture. `TextureProblem::Decode` entries mean
+    /// the scene would draw with holes — a session caller must treat that as
+    /// a failed load, while `EmptySlot` gaps are expected in the data.
+    pub problems: Vec<TextureProblem>,
+}
+
+impl SceneLoad {
+    /// Whether any texture failed to decode: the scene is incomplete in a
+    /// way the original data does not intend.
+    pub fn has_decode_errors(&self) -> bool {
+        self.problems
+            .iter()
+            .any(|problem| matches!(problem, TextureProblem::Decode(..)))
+    }
 }
 
 /// Shared scene-display pipeline: textures → sprites → camera frame.

@@ -53,15 +53,24 @@ Double box = component/crate; single box = subsystem
 Arrows indicate logical layers, not exact Cargo dependencies.
 
 ┌──────────────────────────────────────────────────────────────────────────────────────────────┐
-│   01  APPLICATIONS                                                           CLI / BINARIES  │
+│   01  APPLICATIONS                                       CLI / BINARIES + APP CORE (PURE RUST)  │
 ├──────────────────────────────────────────────────────────────────────────────────────────────┤
 │  ╔══════════════════════════════════════════╗  ╔══════════════════════════════════════════╗  │
 │  ║              [X] kn-player               ║  ║              [X] kn-viewer               ║  │
 │  ╠══════════════════════════════════════════╣  ╠══════════════════════════════════════════╣  │
 │  ║ Binary: re-konung                        ║  ║ Binary: re-konung-viewer                 ║  │
 │  ║ [X] CLI / game directory / hero          ║  ║ [X] Map / scene inspection               ║  │
-│  ║ [~] Game session bootstrap               ║  ║ [X] Headless checks / diagnostics        ║  │
+│  ║ [X] Settings bootstrap (--new-game)      ║  ║ [X] Headless checks / diagnostics        ║  │
 │  ║ [ ] Full playable loop                   ║  ║ Read-only: no editing                    ║  │
+│  ╚══════════════════════════════════════════╝  ╚══════════════════════════════════════════╝  │
+│                                                                                              │
+│  ╔══════════════════════════════════════════╗  ╔══════════════════════════════════════════╗  │
+│  ║               [X] kn-app                 ║  ║             [X] kn-settings              ║  │
+│  ╠══════════════════════════════════════════╣  ╠══════════════════════════════════════════╣  │
+│  ║ Player application core, no Bevy         ║  ║ Player settings, no Bevy                  ║  │
+│  ║ [X] Screens / actions / pure reducer     ║  ║ [X] Model / defaults / validation         ║  │
+│  ║ [X] Session lifecycle / typed effects    ║  ║ [X] Versioned JSON, loss-proof save       ║  │
+│  ║ [ ] Pause menu / save-load / launcher    ║  ║ Language of the interface (ru/en)        ║  │
 │  ╚══════════════════════════════════════════╝  ╚══════════════════════════════════════════╝  │
 └──────────────────────────────────────────────────────────────────────────────────────────────┘
                                                 │
@@ -71,9 +80,9 @@ Arrows indicate logical layers, not exact Cargo dependencies.
 ├──────────────────────────────────────────────────────────────────────────────────────────────┤
 │  ╔══════════════════════════════════════════╗  ╔══════════════════════════════════════════╗  │
 │  ║             [X] kn-fe-player             ║  ║             [X] kn-fe-viewer             ║  │
-│  ╠══════════════════════════════════════════╣  ╠══════════════════════════════════════════╣  │
-│  ║ [X] Window / camera / initial map        ║  ║ [X] Feathers panel / map selector        ║  │
-│  ║ [ ] Gameplay input / HUD / menus         ║  ║ [X] Overlays / animation / camera        ║  │
+│  ╠══════════════════════════════════════════╣  ╠══════════════════════════════════════════╣  ║
+│  ║ [X] Window / camera / start map          ║  ║ [X] Feathers panel / map selector        ║  │
+│  ║ [~] Menu / settings screens (AppFlow)    ║  ║ [X] Overlays / animation / camera        ║  │
 │  ║ [ ] Dialogue / inventory UI              ║  ║ [X] Inspection / diagnostics             ║  │
 │  ╚══════════════════════════════════════════╝  ║ Read-only: no editing                    ║  │
 │                                                ╚══════════════════════════════════════════╝  │
@@ -211,9 +220,11 @@ Arrows indicate logical layers, not exact Cargo dependencies.
 
 | Layer | Component | Path | Owns | Must not know |
 |---|---|---|---|---|
-| 01 | `kn-player` | `crates/apps/player` | Binary `re-konung`: CLI, opening the game directory, resolving the hero from the starting state, handing a `PlayerConfig` to the frontend | Bevy, K1 formats |
+| 01 | `kn-player` | `crates/apps/player` | Binary `re-konung`: CLI (`--game-dir`, `--new-game`, `--settings`), settings bootstrap (typed load errors, defaults on a bad file, the file never touched), opening the game directory, resolving the hero, handing a `PlayerConfig` to the frontend | Bevy, K1 formats |
+| 01 | `kn-app` | `crates/apps/kn-app` | The player's application core in pure Rust: screens, typed actions, the pure `AppController` reducer and its transition table, typed effects and session/persist errors. Tested headless, no Bevy | Bevy, `kn-game`, formats, any frontend |
+| 01 | `kn-settings` | `crates/apps/kn-settings` | The player's settings model in pure Rust: defaults, validation, the interface `Language`, and versioned JSON persistence — a load that never writes and a save that never loses the previous file (`tmp`+rename, `.bak` for corrupt or newer files) | Bevy, the game, the window |
 | 01 | `kn-viewer` | `crates/apps/viewer` | Binary `re-konung-viewer` plus a library: CLI, startup resolution, headless `check` (JSON report, nonzero exit on failure) — no window, no GPU context | Bevy app construction (linked only transitively) |
-| 02 | `kn-fe-player` | `crates/frontend/bevy/player` | Bevy `App` assembly of the player: window, camera binding, start-map loading, and the one request that asks `kn-render` to animate the creatures of the map it loaded | CLI, game rules, formats |
+| 02 | `kn-fe-player` | `crates/frontend/bevy/player` | Bevy `App` assembly of the player: window, camera binding, the AppFlow pipeline over `kn-app` (flush → effects → results → screens, one `session_watch` that reports readiness only when observed), session build/teardown of the start map, the menu/settings/loading screens, and the two-language interface text | CLI, game rules, formats |
 | 02 | `kn-fe-viewer` | `crates/frontend/bevy/viewer` | Bevy `App` assembly of the viewer: viewer state, Feathers panel, map selector, overlay toggles, playback, creature id labels, frame diagnostics, scene rebuild policy | CLI, formats, game rules |
 | 03 | `kn-render` | `crates/frontend/bevy/render` | Scene pieces → sprites in z-order, texture cache keyed by `TextureId`, per-frame animation, camera state. The creature animation subsystem too — one plugin both frontends add, owning the simulation catch-up, the composite clips, the depth slot and the composite nodes; it draws frames, it never decides a creature's state. An overlay is the `Visibility` of a piece-group node, never a map rebuild | K1, formats, game rules, input bindings |
 | 03 | `kn-input` | `crates/frontend/bevy/input` | Input mechanisms only: keyboard pan direction, mouse drag delta, wheel accumulation into zoom steps | Camera types, UI, game rules |
@@ -264,10 +275,12 @@ The edges below are what the `Cargo.toml` files actually declare today (workspac
 
 | Crate | Declared path dependencies | External |
 |---|---|---|
-| `kn-player` | `kn-fe-player`, `kn-game` | `clap` |
+| `kn-player` | `kn-fe-player`, `kn-game`, `kn-settings` | `clap` |
 | `kn-viewer` | `kn-fe-viewer`, `kn-game` | `clap`, `serde_json`, `thiserror` |
-| `kn-fe-player` | `kn-game`, `kn-render`, `kn-input`, `kn-ui` | `bevy` |
-| `kn-fe-viewer` | `kn-game`, `kn-render`, `kn-input`, `kn-ui` | `bevy` (`bevy_feathers`) |
+| `kn-app` | `kn-settings` | — |
+| `kn-settings` | — | `dirs`, `serde`, `serde_json` |
+| `kn-fe-player` | `kn-app`, `kn-settings`, `kn-game`, `kn-render`, `kn-input`, `kn-ui`, `k1-data`, `k1-game` | `bevy` (`bevy_feathers`) |
+| `kn-fe-viewer` | `kn-game`, `kn-render`, `kn-input`, `kn-ui`, `k1-data`, `k1-game` | `bevy` (`bevy_feathers`) |
 | `kn-render` | `kn-game` | `bevy`, `thiserror` |
 | `kn-input` | — | `bevy` |
 | `kn-ui` | — | `bevy` (`bevy_feathers`) |
@@ -283,9 +296,11 @@ Rules that hold today:
 - Dependencies point down the stack; nothing in layers 03–06 names a K1 type except inside the K1
   crates and `kn-game`'s facade.
 - `kn-input` and `kn-ui` are leaves: `bevy` and nothing else.
-- No Bevy dependency in `k1-data`, `k1-game`, `kn-game`; their tests run headless, and
-  `kn-viewer check` creates no window or GPU context.
-- The workspace has ten members and no `k2-*` or `kn-data` crate.
+- No Bevy dependency in `k1-data`, `k1-game`, `kn-game`, `kn-app`, `kn-settings`; their tests run
+  headless, and `kn-viewer check` creates no window or GPU context.
+- The workspace has twelve members and no `k2-*` or `kn-data` crate.
+- `kn-app` talks to the game only through typed effects executed by `kn-fe-player`; the game
+  domain (`kn-game` and below) knows nothing of the application core above it.
 
 ## Multi-game Support
 
@@ -316,6 +331,12 @@ Hypotheses are kept apart from decisions:
 Adding a part is meant to be additive: `kn-game` keeps one API and a second backend (`k2-game` +
 `k2-data`) appears beside the K1 one, with the game selected at the application edge. Today the
 facade hardwires K1 (see the next section) — that is the known gap, not an oversight of the model.
+
+The application edge now physically exists: `kn-app` is the player's application core, and a game
+session starts only through its `StartSession` effect — the slot a second game will be selected
+into. The core itself knows no part: everything game-specific stays below `kn-game`, executed by
+the frontend. A launcher that picks a game directory from the UI (no `--game-dir` at launch) is a
+separate future task; the current CLI opens exactly one game at bootstrap.
 
 ## Current vs Target Architecture
 

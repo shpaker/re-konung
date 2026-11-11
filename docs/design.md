@@ -109,6 +109,25 @@ stance of [../AGENTS.md](../AGENTS.md), "Priority: modern experience". The
 original supplies the game's rules, content and visual identity, which stays
 2D isometric pixel art; the interface follows the modern reference above.
 
+### Menus and settings — the first customers
+
+The player's shell (main menu, settings, loading) is where the foundation
+meets the product:
+
+- **Two languages from the first day.** Russian and English — the editions
+  the project studies — set in PT Sans everywhere, native names in the
+  language picker, and the settings screen previews the draft language live
+  while the rest of the interface keeps the applied one until a save lands.
+- **Settings hold only what works.** Language, fullscreen, vsync — each is
+  really applied and really persisted; nothing decorative. Saving is honest:
+  a failure keeps the draft for a retry, rolls the runtime back, and says
+  what happened in one line.
+- **The menu is a door, not a lobby.** The game's own name, three actions,
+  one line of failure if the last session did not build; the world gets the
+  screen back the moment a session exists.
+- **The player is not the viewer.** The viewer gains none of this: it stays a
+  read-only development tool sharing only the design system.
+
 ## Applying them
 
 When a new game interface or control is designed, name the reference the decision
