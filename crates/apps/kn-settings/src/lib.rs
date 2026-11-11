@@ -10,11 +10,16 @@
 //! Loss-proofing of [`save`]: the new content first lands in `<name>.tmp`,
 //! and the previous file is renamed to `<name>.bak` before being replaced
 //! when it is unreadable (corrupt) or newer than this format — data worth
-//! keeping is never silently destroyed. At every step the old content sits at
-//! `path` or at `path.bak`; the crash states a human may find afterwards are
-//! only `path.tmp` (the old file is intact) or `path.tmp` + `path.bak` (copy
-//! the `.bak` back by hand). On success the `.bak` stays as the rescued copy
-//! until the next backup replaces it.
+//! keeping is never silently destroyed. An existing `.bak` is rotated aside
+//! (`<name>.bak.old`) *before* being replaced, so a failed rename never
+//! costs the last good backup. Each step is one `rename` — atomic on one
+//! volume — but the save as a whole is not a transaction: a crash mid-save
+//! may leave `path.tmp` (the previous file intact), `path.tmp` + `path.bak`
+//! (copy the `.bak` back), or — only during a rotation — additionally
+//! `path.bak.old` (the newest previous content is `.bak`, `.bak.old` is the
+//! one before it). On success the `.bak` stays as the rescued copy until the
+//! next rotation replaces it; `.bak.old` is removed best-effort and may be
+//! left behind by a crash — it is never read back.
 //!
 //! The crate knows no Bevy, no window and no game rule: applying `Settings`
 //! to a running app is the frontend's job.
@@ -142,6 +147,7 @@ pub fn save(path: &Path, settings: &Settings) -> Result<(), SaveError> {
 
     let tmp = sibling(path, ".tmp");
     let bak = sibling(path, ".bak");
+    let bak_old = sibling(path, ".bak.old");
     let write = || -> std::io::Result<()> {
         use std::io::Write;
         let mut file = std::fs::File::create(&tmp)?;
@@ -154,19 +160,45 @@ pub fn save(path: &Path, settings: &Settings) -> Result<(), SaveError> {
     }
 
     let backed_up = needs_backup(path);
+    let mut rotated = false;
     if backed_up {
-        let _ = std::fs::remove_file(&bak);
+        // Rotate the previous backup aside before replacing it: if the rename
+        // below failed after an unconditional remove, the last good backup
+        // would be lost. With the rotation, every failure path leaves the
+        // old backup where it was (or restored).
+        if bak.exists() {
+            if let Err(error) = std::fs::rename(&bak, &bak_old) {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(SaveError::Replace(error));
+            }
+            rotated = true;
+        }
         if let Err(error) = std::fs::rename(path, &bak) {
-            // The old file is still at `path`; nothing was overwritten.
+            if rotated {
+                // Put the previous backup back where it was.
+                let _ = std::fs::rename(&bak_old, &bak);
+            }
+            let _ = std::fs::remove_file(&tmp);
             return Err(SaveError::Replace(error));
         }
     }
     match std::fs::rename(&tmp, path) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            if rotated {
+                // The rotated copy is superseded by the fresh `.bak`; left
+                // behind only when this removal fails or the process dies.
+                let _ = std::fs::remove_file(&bak_old);
+            }
+            Ok(())
+        }
         Err(error) => {
             if backed_up {
-                // Best effort: put the rescued file back where it was.
+                // Best effort: put the rescued file back where it was, and
+                // the rotated one behind it.
                 let _ = std::fs::rename(&bak, path);
+                if rotated {
+                    let _ = std::fs::rename(&bak_old, &bak);
+                }
             }
             Err(SaveError::Replace(error))
         }
@@ -353,6 +385,58 @@ mod tests {
         save(&path, &defaults()).unwrap();
         assert_eq!(std::fs::read(path.with_extension("json.bak")).unwrap(), old);
         assert_eq!(load(&path).unwrap(), defaults());
+    }
+
+    #[test]
+    fn repeated_saves_rotate_the_backup_keeping_the_newest_previous_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = path(&dir, "settings.json");
+        let first = b"first corrupt file";
+        let second = b"second corrupt file";
+        std::fs::write(&path, first).unwrap();
+        save(&path, &defaults()).unwrap();
+        std::fs::write(&path, second).unwrap();
+        save(&path, &defaults()).unwrap();
+        // The fresh backup is the newest replaced content; the rotated one is
+        // gone — superseded, not kept.
+        assert_eq!(
+            std::fs::read(path.with_extension("json.bak")).unwrap(),
+            second
+        );
+        assert!(!path.with_extension("json.bak.old").exists());
+        assert_eq!(load(&path).unwrap(), defaults());
+    }
+
+    #[test]
+    fn a_failed_rotation_keeps_the_previous_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = path(&dir, "settings.json");
+        let corrupt = b"corrupt current file";
+        let previous_backup = b"the last good backup";
+        std::fs::write(&path, corrupt).unwrap();
+        std::fs::write(path.with_extension("json.bak"), previous_backup).unwrap();
+        // A non-empty directory where the rotated backup would land makes the
+        // rotation rename fail portably (ENOTEMPTY / ERROR_DIR_NOT_EMPTY),
+        // which is the step that used to run after an unconditional remove
+        // and could cost the old backup.
+        let blocked = path.with_extension("json.bak.old");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(blocked.join("occupied"), b"x").unwrap();
+
+        assert!(matches!(
+            save(&path, &defaults()),
+            Err(SaveError::Replace(_))
+        ));
+
+        // Nothing was lost: the current file, the previous backup and the
+        // blocker are all untouched; no tmp leftovers.
+        assert_eq!(std::fs::read(&path).unwrap(), corrupt);
+        assert_eq!(
+            std::fs::read(path.with_extension("json.bak")).unwrap(),
+            previous_backup
+        );
+        assert!(blocked.join("occupied").exists());
+        assert!(!path.with_extension("json.tmp").exists());
     }
 
     #[test]

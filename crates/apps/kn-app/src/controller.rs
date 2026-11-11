@@ -30,6 +30,7 @@ impl AppController {
                 screen: Screen::MainMenu,
                 applied,
                 settings_screen: None,
+                saving: None,
                 session_error: None,
             },
             queue: VecDeque::new(),
@@ -97,14 +98,27 @@ impl AppController {
             (Screen::Settings, Action::Settings(SettingsAction::Save)) => {
                 if let Some(settings_screen) = self.state.settings_screen.as_ref() {
                     if settings_screen.draft != self.state.applied {
-                        // The screen stays open until the Persisted report.
-                        effects.push(Effect::ApplyAndPersist(settings_screen.draft));
+                        if self.state.saving.is_none() {
+                            // Freeze the snapshot the effect carries: by the
+                            // time the report arrives the draft may have
+                            // moved on, and `applied` must become what the
+                            // file actually holds — never the newer draft.
+                            let snapshot = settings_screen.draft;
+                            self.state.saving = Some(snapshot);
+                            // The screen stays open until the Persisted report.
+                            effects.push(Effect::ApplyAndPersist(snapshot));
+                        }
+                        // A save is already in flight: a second Save is a
+                        // no-op until its report lands.
                     } else {
                         self.close_settings();
                     }
                 }
             }
             (Screen::Settings, Action::Settings(SettingsAction::Cancel)) => {
+                // The draft is discarded, but a save already in flight keeps
+                // going: its report still advances `applied` to what the file
+                // will hold, wherever the screen is by then.
                 self.close_settings();
             }
             (Screen::Loading, Action::Loading(LoadingAction::Succeeded)) => {
@@ -115,15 +129,26 @@ impl AppController {
                 self.state.session_error = Some(error);
             }
             (Screen::Settings, Action::Persisted(PersistOutcome::Saved)) => {
-                if let Some(settings_screen) = self.state.settings_screen.take() {
-                    self.state.applied = settings_screen.draft;
-                    self.state.screen = Screen::MainMenu;
-                }
+                self.apply_persisted_saved();
+            }
+            (Screen::MainMenu, Action::Persisted(PersistOutcome::Saved)) => {
+                // The screen was cancelled (or closed) while the save was in
+                // flight; the file still holds the snapshot, so `applied`
+                // follows it — without this, the file and the state would
+                // disagree until the next successful save.
+                self.apply_persisted_saved();
             }
             (Screen::Settings, Action::Persisted(PersistOutcome::SaveFailed(error))) => {
+                self.state.saving = None;
                 if let Some(settings_screen) = self.state.settings_screen.as_mut() {
                     settings_screen.status = SaveStatus::Failed(error);
                 }
+            }
+            (Screen::MainMenu, Action::Persisted(PersistOutcome::SaveFailed(_))) => {
+                // A cancelled screen's failed save: nowhere to show it — the
+                // frontend has already logged the io detail and rolled the
+                // runtime back. Clear the flight so a future Save can go.
+                self.state.saving = None;
             }
             _ => {}
         }
@@ -134,6 +159,18 @@ impl AppController {
     fn close_settings(&mut self) {
         self.state.screen = Screen::MainMenu;
         self.state.settings_screen = None;
+    }
+
+    /// A persisted save: `applied` advances to the frozen snapshot — the one
+    /// the file actually received — and an open settings screen closes. A
+    /// report with no save in flight is a stray and changes nothing.
+    fn apply_persisted_saved(&mut self) {
+        if let Some(snapshot) = self.state.saving.take() {
+            self.state.applied = snapshot;
+            if self.state.settings_screen.take().is_some() {
+                self.state.screen = Screen::MainMenu;
+            }
+        }
     }
 }
 
@@ -622,5 +659,177 @@ mod tests {
         assert_eq!(effects, vec![Effect::StartSession]);
         assert_eq!(controller.state().screen, Screen::Loading);
         assert_eq!(controller.state().session_error, None);
+    }
+
+    // Save-sequencing: `applied` must become exactly what the file received —
+    // the frozen snapshot, never the draft of a later moment.
+
+    /// Save → Change → Saved: the edit made while the save was in flight
+    /// stays unsaved; `applied` is the snapshot the effect carried.
+    #[test]
+    fn save_change_saved_applies_the_persisted_snapshot_not_the_later_draft() {
+        let mut controller = controller();
+        submit_all(
+            &mut controller,
+            [
+                Action::MainMenu(MainMenuAction::OpenSettings),
+                Action::Settings(SettingsAction::Change(SettingsField::Language(
+                    Language::English,
+                ))),
+                Action::Settings(SettingsAction::Save),
+            ],
+        );
+        // The draft moves on while the save flies.
+        submit_all(
+            &mut controller,
+            [Action::Settings(SettingsAction::Change(
+                SettingsField::Fullscreen(true),
+            ))],
+        );
+        submit_all(&mut controller, [Action::Persisted(PersistOutcome::Saved)]);
+        assert_eq!(controller.state().applied, english_only());
+        assert_eq!(controller.state().saving, None);
+        assert_eq!(controller.state().screen, Screen::MainMenu);
+        assert_eq!(controller.state().settings_screen, None);
+    }
+
+    /// Save → Cancel → Saved: the write is already in flight, so the report
+    /// still advances `applied` — the file and the state must not disagree.
+    #[test]
+    fn save_cancel_saved_still_applies_the_in_flight_snapshot() {
+        let mut controller = controller();
+        submit_all(
+            &mut controller,
+            [
+                Action::MainMenu(MainMenuAction::OpenSettings),
+                Action::Settings(SettingsAction::Change(SettingsField::Language(
+                    Language::English,
+                ))),
+                Action::Settings(SettingsAction::Save),
+                Action::Settings(SettingsAction::Cancel),
+            ],
+        );
+        assert_eq!(controller.state().screen, Screen::MainMenu);
+        assert_eq!(controller.state().applied, Settings::default());
+        let effects = submit_all(&mut controller, [Action::Persisted(PersistOutcome::Saved)]);
+        assert!(effects.is_empty());
+        assert_eq!(controller.state().applied, english_only());
+        assert_eq!(controller.state().saving, None);
+        assert_eq!(controller.state().screen, Screen::MainMenu);
+    }
+
+    /// Save → Save: one save in flight; the second press emits nothing.
+    #[test]
+    fn double_save_while_in_flight_emits_one_persist() {
+        let mut controller = controller();
+        submit_all(
+            &mut controller,
+            [
+                Action::MainMenu(MainMenuAction::OpenSettings),
+                Action::Settings(SettingsAction::Change(SettingsField::Language(
+                    Language::English,
+                ))),
+            ],
+        );
+        let effects = submit_all(
+            &mut controller,
+            [
+                Action::Settings(SettingsAction::Save),
+                Action::Settings(SettingsAction::Save),
+            ],
+        );
+        assert_eq!(
+            effects,
+            vec![Effect::ApplyAndPersist(english_only())],
+            "the second Save must be a no-op while the first is in flight"
+        );
+        // And the report resolves the flight: the next Save can go again.
+        submit_all(&mut controller, [Action::Persisted(PersistOutcome::Saved)]);
+        assert_eq!(controller.state().saving, None);
+    }
+
+    /// Save → Failed → Save: the retry freezes a fresh snapshot of the
+    /// current draft and its report applies that one.
+    #[test]
+    fn save_failed_retry_resaves_with_a_fresh_snapshot() {
+        let mut controller = controller();
+        submit_all(
+            &mut controller,
+            [
+                Action::MainMenu(MainMenuAction::OpenSettings),
+                Action::Settings(SettingsAction::Change(SettingsField::Language(
+                    Language::English,
+                ))),
+                Action::Settings(SettingsAction::Save),
+            ],
+        );
+        // The player edits further, then learns the save failed.
+        submit_all(
+            &mut controller,
+            [Action::Settings(SettingsAction::Change(
+                SettingsField::Fullscreen(true),
+            ))],
+        );
+        submit_all(
+            &mut controller,
+            [Action::Persisted(PersistOutcome::SaveFailed(
+                SaveError::Write,
+            ))],
+        );
+        assert_eq!(controller.state().saving, None);
+        // The retry carries the full current draft, not the stale snapshot.
+        let effects = submit_all(&mut controller, [Action::Settings(SettingsAction::Save)]);
+        assert_eq!(effects, vec![Effect::ApplyAndPersist(english_fullscreen())]);
+        submit_all(&mut controller, [Action::Persisted(PersistOutcome::Saved)]);
+        assert_eq!(controller.state().applied, english_fullscreen());
+        assert_eq!(controller.state().screen, Screen::MainMenu);
+    }
+
+    /// A Saved report with no save in flight changes nothing.
+    #[test]
+    fn a_stray_saved_report_is_a_no_op() {
+        let mut controller = controller();
+        submit_all(
+            &mut controller,
+            [Action::MainMenu(MainMenuAction::OpenSettings)],
+        );
+        let applied = controller.state().applied;
+        submit_all(&mut controller, [Action::Persisted(PersistOutcome::Saved)]);
+        assert_eq!(controller.state().applied, applied);
+        assert_eq!(controller.state().screen, Screen::Settings);
+        assert_eq!(
+            controller.state().settings_screen.as_ref().unwrap().draft,
+            applied
+        );
+    }
+
+    /// Reopening settings while a cancelled save is still in flight: the
+    /// blocked Save protects the one-flight invariant, and the late report
+    /// closes the reopened screen with the snapshot applied.
+    #[test]
+    fn reopen_during_a_flight_blocks_save_until_the_report_lands() {
+        let mut controller = controller();
+        submit_all(
+            &mut controller,
+            [
+                Action::MainMenu(MainMenuAction::OpenSettings),
+                Action::Settings(SettingsAction::Change(SettingsField::Language(
+                    Language::English,
+                ))),
+                Action::Settings(SettingsAction::Save),
+                Action::Settings(SettingsAction::Cancel),
+                Action::MainMenu(MainMenuAction::OpenSettings),
+            ],
+        );
+        // The reopened draft is the applied settings; Save must not fire a
+        // second persist while the first is unresolved.
+        let effects = submit_all(&mut controller, [Action::Settings(SettingsAction::Save)]);
+        assert!(effects.is_empty());
+        assert!(controller.state().saving.is_some());
+        // The report lands and closes the reopened screen too.
+        submit_all(&mut controller, [Action::Persisted(PersistOutcome::Saved)]);
+        assert_eq!(controller.state().applied, english_only());
+        assert_eq!(controller.state().screen, Screen::MainMenu);
+        assert_eq!(controller.state().settings_screen, None);
     }
 }

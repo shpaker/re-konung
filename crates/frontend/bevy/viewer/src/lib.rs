@@ -164,7 +164,7 @@ pub struct Stats {
     pub animated_pieces: usize,
     pub animation_frames: usize,
     /// Ключи, по которым картинка не собралась: карта показана, но не целиком
-    pub problems: Vec<String>,
+    pub problems: Vec<kn_render::TextureProblem>,
     pub error: Option<String>,
 }
 

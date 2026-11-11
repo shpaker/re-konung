@@ -140,6 +140,18 @@ pub fn init(world: &mut World) -> Result<(), SessionError> {
     });
     match loaded {
         Ok(loaded) => {
+            // Decode failures mean the scene would draw with holes — the
+            // all-or-nothing rule fails the session here, before the watcher
+            // can call it ready. Empty slots are the data's expected gaps:
+            // a warning, not damage.
+            if loaded.has_decode_errors() {
+                for problem in &loaded.problems {
+                    error!("start map {map_ref:?}: {problem}");
+                }
+                error!("start map {map_ref:?}: undecodable textures fail the session");
+                teardown(world);
+                return Err(SessionError::Textures);
+            }
             for problem in &loaded.problems {
                 warn!("start map {map_ref:?}: {problem}");
             }

@@ -20,6 +20,26 @@ pub struct TextureEntry {
     pub size: UVec2,
 }
 
+/// Почему ключ не дал картинку. Класс важен потребителю: пустой слот —
+/// ожидаемая лакуна исходных данных, ошибка декодирования — битые данные,
+/// из-за которых кусок не нарисуется вовсе.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TextureProblem {
+    /// Слот есть, картинки в нём нет — так лежит в исходных данных.
+    EmptySlot(TextureId),
+    /// Данные слота не декодировались.
+    Decode(TextureId, String),
+}
+
+impl std::fmt::Display for TextureProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TextureProblem::EmptySlot(id) => write!(f, "{id:?}: пустой слот"),
+            TextureProblem::Decode(id, error) => write!(f, "{id:?}: {error}"),
+        }
+    }
+}
+
 /// Загруженные текстуры: ключ → ассет. Переиспользуется между картами.
 #[derive(Resource, Default)]
 pub struct TextureCache {
@@ -27,7 +47,7 @@ pub struct TextureCache {
 }
 
 impl TextureCache {
-    /// Докачивает недостающие ключи; возвращает текст проблем по тем, что не
+    /// Докачивает недостающие ключи; возвращает классифицированные проблемы
     /// собрались. Пустой список — все ключи дали картинку.
     ///
     /// Кусок с несобравшейся текстурой не рисуется, но причина остаётся
@@ -38,7 +58,7 @@ impl TextureCache {
         game: &Game,
         ids: &[TextureId],
         images: &mut Assets<Image>,
-    ) -> kn_game::Result<Vec<String>> {
+    ) -> kn_game::Result<Vec<TextureProblem>> {
         let missing: Vec<TextureId> = ids
             .iter()
             .copied()
@@ -56,8 +76,8 @@ impl TextureCache {
                     let handle = images.add(to_image(&rgba));
                     self.entries.insert(id, TextureEntry { handle, size });
                 }
-                Ok(None) => problems.push(format!("{id:?}: пустой слот")),
-                Err(error) => problems.push(format!("{id:?}: {error}")),
+                Ok(None) => problems.push(TextureProblem::EmptySlot(id)),
+                Err(error) => problems.push(TextureProblem::Decode(id, error.to_string())),
             }
         }
         Ok(problems)
@@ -94,6 +114,8 @@ fn to_image(rgba: &Rgba) -> Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene::SceneLoad;
+    use kn_game::TextureKey;
 
     #[test]
     fn image_size_matches_rgba() {
@@ -110,5 +132,49 @@ mod tests {
         let cache = TextureCache::default();
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn problem_classes_keep_their_log_text() {
+        // The strings reach logs and the viewer panel; the wording is part of
+        // the observable behavior.
+        let id = TextureId::from_key(TextureKey::Tile { index: 7 });
+        assert_eq!(
+            TextureProblem::EmptySlot(id).to_string(),
+            format!("{id:?}: пустой слот")
+        );
+        assert_eq!(
+            TextureProblem::Decode(id, "bad rle".into()).to_string(),
+            format!("{id:?}: bad rle")
+        );
+    }
+
+    #[test]
+    fn decode_problems_are_separate_from_expected_gaps() {
+        let tile = |index: usize| TextureId::from_key(TextureKey::Tile { index });
+        let load = SceneLoad {
+            root: Entity::PLACEHOLDER,
+            unique_textures: 2,
+            problems: vec![
+                TextureProblem::EmptySlot(tile(1)),
+                TextureProblem::Decode(tile(2), "truncated".into()),
+            ],
+        };
+        assert!(load.has_decode_errors());
+        let gapped = SceneLoad {
+            root: Entity::PLACEHOLDER,
+            unique_textures: 1,
+            problems: vec![TextureProblem::EmptySlot(tile(1))],
+        };
+        assert!(
+            !gapped.has_decode_errors(),
+            "an empty slot is the data's own gap, not damage"
+        );
+        let clean = SceneLoad {
+            root: Entity::PLACEHOLDER,
+            unique_textures: 0,
+            problems: Vec::new(),
+        };
+        assert!(!clean.has_decode_errors());
     }
 }

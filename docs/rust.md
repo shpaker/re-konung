@@ -1140,7 +1140,12 @@ loader, now all-or-nothing — with `session_watch` reporting `Succeeded` only
 when the simulation exists, the request is consumed and the map tree is in
 the world (`CreatureMotion::request` is a queue, not a build). A failure
 tears the half-built session down (`session::teardown`, idempotent) and the
-menu shows the typed reason until the next attempt. `kn-player` boots
+menu shows the typed reason until the next attempt. Both long effects —
+`StartSession` and `ApplyAndPersist` — execute synchronously on the main
+thread inside `apply_effects`: the loading screen is a static line shown
+between frames, not a progress indicator, and no async machinery exists
+behind it; making the build asynchronous is a candidate future issue, not a
+plan. `kn-player` boots
 settings-first (typed load errors, a bad file left untouched), then the game
 and the hero, and `--new-game` seeds the flow before the first frame. The
 idle pipeline is two exclusive world systems over an empty queue — the flush

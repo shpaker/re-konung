@@ -84,11 +84,20 @@ pub struct AppState {
     /// render in `applied.language`, the settings screen previews
     /// `draft.language`.
     ///
-    /// Advances only on `PersistOutcome::Saved`: while a save is in flight the
-    /// UI keeps rendering in the old language, and on failure nothing moves.
+    /// Advances only on `PersistOutcome::Saved`, and only to the snapshot a
+    /// `Save` froze — never to the current draft, which may have moved on
+    /// while the save was in flight.
     pub applied: Settings,
     /// `Some` exactly while `screen == Settings`.
     pub settings_screen: Option<SettingsScreen>,
+    /// The settings snapshot a `Save` sent to the frontend and whose
+    /// `Persisted` report has not arrived yet. `Some` blocks a second `Save`
+    /// (one save in flight at a time); `Persisted::Saved` applies this
+    /// snapshot — whatever the draft says by then — and `SaveFailed` clears
+    /// it, keeping the draft for a retry. Survives a `Cancel`: the write is
+    /// already in flight, so its report must still be able to advance
+    /// `applied` to what the file will actually hold.
+    pub saving: Option<Settings>,
     /// The failed session's error, shown in the main menu until the next
     /// `MainMenuAction::NewGame` clears it.
     pub session_error: Option<SessionError>,

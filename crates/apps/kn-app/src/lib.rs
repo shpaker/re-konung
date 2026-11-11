@@ -28,7 +28,11 @@
 //!   menu), so stale or duplicated input cannot corrupt the state.
 //! * `settings_screen` is `Some` exactly while the screen is
 //!   [`Screen::Settings`], and its `draft` is the only copy of unsaved
-//!   settings: `applied` advances only on [`PersistOutcome::Saved`].
+//!   settings. A `Save` freezes the snapshot into
+//!   [`AppState::saving`](crate::AppState::saving); [`PersistOutcome::Saved`]
+//!   advances `applied` to that snapshot — never to the current draft — and
+//!   one save is in flight at a time. The snapshot survives a `Cancel`, so
+//!   the file and the state never disagree.
 
 mod action;
 mod controller;

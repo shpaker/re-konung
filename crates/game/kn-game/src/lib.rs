@@ -27,12 +27,12 @@ use k1_data::{
     map,
     repo::{FileSet, GAME_FILES, GameDir, TUTORIAL_FILES},
 };
-use k1_game::{resources::Resources, scene::SceneInput, textures::TextureKey};
+use k1_game::{resources::Resources, scene::SceneInput};
 
 pub use k1_data::characters::LayerKey;
 pub use k1_data::objects_res::TICK_MS;
 pub use k1_game::scene::{PieceGroup, PoseKind};
-pub use k1_game::textures::{Rgba, TextureError};
+pub use k1_game::textures::{Rgba, TextureError, TextureKey};
 pub use k1_game::time_of_day::{DayPhase, GameTime};
 
 pub type Result<T> = std::result::Result<T, GameError>;
@@ -56,6 +56,14 @@ pub enum GameError {
 /// Ключ текстуры сцены: для потребителя непрозрачен, рендер кэширует по нему.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TextureId(TextureKey);
+
+impl TextureId {
+    /// Собирает id из сырого ключа. Сцены получают ключи из данных, а не
+    /// руками; путь нужен тестам рендера и диагностическим инструментам.
+    pub fn from_key(key: TextureKey) -> Self {
+        Self(key)
+    }
+}
 
 /// Кусок сцены: textured quad в пикселях карты.
 /// `w`/`h` — None: размер текстуры; Some: растянуть.
