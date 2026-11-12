@@ -44,6 +44,17 @@ viewer map="" source="game":
 viewer-release map="" source="game":
     cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- --game-dir "{{game_dir}}" --source "{{source}}" {{ if map == "" { "" } else { "--map " + map } }}
 
+# Frame-time gate (#98): 60-second release runs on the reference maps 17 and
+# 19, both editions, playback playing, day/night lighting on. One BENCH and
+# one GATE line per run; the gate reads avg_ms and p95_ms against 33.3 ms.
+# The editions' paths are the protocol's, not {{game_dir}}: the gate always
+# compares both, see docs/rust.md, "Frame time gate"
+viewer-gate:
+    cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- --game-dir original/k1/rus/game --map 17 --benchmark-secs 60
+    cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- --game-dir original/k1/rus/game --map 19 --benchmark-secs 60
+    cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- --game-dir original/k1/eng/game --map 17 --benchmark-secs 60
+    cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- --game-dir original/k1/eng/game --map 19 --benchmark-secs 60
+
 # Headless-диагностика без окна и GPU: just check-maps [source] — все карты источника.
 # Release: the parser is CPU-bound; checking every map in dev-runtime is ten times slower
 check-maps source="game":

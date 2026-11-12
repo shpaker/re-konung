@@ -68,6 +68,7 @@ pub fn viewer_config(cli: &Cli) -> Result<ViewerConfig, ViewerError> {
         constant_day: cli.constant_day,
         screenshot: cli.screenshot.clone(),
         benchmark: cli.benchmark,
+        benchmark_secs: cli.benchmark_secs,
     })
 }
 
@@ -405,6 +406,7 @@ mod tests {
             constant_day: false,
             screenshot: None,
             benchmark: None,
+            benchmark_secs: None,
             command: None,
         };
         assert!(matches!(

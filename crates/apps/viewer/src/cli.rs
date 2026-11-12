@@ -46,6 +46,18 @@ pub struct Cli {
     )]
     pub benchmark: Option<u32>,
 
+    /// Run the measured window until SECS seconds of frame time have
+    /// accumulated, print one `BENCH …` line to stdout and exit; the frame
+    /// count becomes an output, so the 60-second protocol stays the same
+    /// recipe on any hardware. Never captures a screenshot
+    #[arg(
+        long = "benchmark-secs",
+        global = true,
+        value_parser = clap::value_parser!(u64).range(1..),
+        conflicts_with_all = ["benchmark", "screenshot"],
+    )]
+    pub benchmark_secs: Option<u64>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -252,6 +264,62 @@ mod tests {
         assert!(zero.is_err(), "--benchmark 0 is not a run");
         // The subcommands stay reachable with the flag present
         match cli(&["--game-dir", "g", "--benchmark", "10", "check", "--all"]).command {
+            Some(Command::Check { all, .. }) => assert!(all),
+            other => panic!("expected check, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn benchmark_secs_flag_parses_and_stays_separate() {
+        // The 60-second gate protocol (#98): one recipe, duration-bound, so
+        // the frame count is an output and not part of the command.
+        let parsed = cli(&["--game-dir", "g", "--map", "17", "--benchmark-secs", "60"]);
+        assert_eq!(parsed.benchmark_secs, Some(60));
+        // One bound per run: frames and seconds are alternatives
+        let both = Cli::try_parse_from([
+            "re-konung-viewer",
+            "--game-dir",
+            "g",
+            "--benchmark",
+            "600",
+            "--benchmark-secs",
+            "60",
+        ]);
+        assert!(both.is_err(), "--benchmark-secs conflicts with --benchmark");
+        // A benchmark run must not capture either
+        let capture = Cli::try_parse_from([
+            "re-konung-viewer",
+            "--game-dir",
+            "g",
+            "--benchmark-secs",
+            "60",
+            "--screenshot",
+            "out/x.png",
+        ]);
+        assert!(
+            capture.is_err(),
+            "--benchmark-secs conflicts with --screenshot"
+        );
+        // A window shorter than one frame measures nothing: rejected up front
+        let zero = Cli::try_parse_from([
+            "re-konung-viewer",
+            "--game-dir",
+            "g",
+            "--benchmark-secs",
+            "0",
+        ]);
+        assert!(zero.is_err(), "--benchmark-secs 0 is not a run");
+        // The subcommands stay reachable with the flag present
+        match cli(&[
+            "--game-dir",
+            "g",
+            "--benchmark-secs",
+            "60",
+            "check",
+            "--all",
+        ])
+        .command
+        {
             Some(Command::Check { all, .. }) => assert!(all),
             other => panic!("expected check, got {other:?}"),
         }

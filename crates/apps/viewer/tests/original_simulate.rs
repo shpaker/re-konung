@@ -51,6 +51,7 @@ fn cli(game_dir: PathBuf) -> Cli {
         constant_day: false,
         screenshot: None,
         benchmark: None,
+        benchmark_secs: None,
         command: None,
     }
 }
