@@ -757,36 +757,6 @@ pub fn map_labels(maps: &[MapRef]) -> Vec<String> {
         .collect()
 }
 
-/// Тексты подписей по номеру записи: `#<id> <имя>` (issues #38, #84). Имя
-/// собирается из текстов EXE (#34) через [`k1_data::executable::character_name`]:
-/// у монстра — название вида, у человека — имя и прозвище. Ни того, ни другого
-/// (пустые таблицы, номера вне таблиц) — подпись остаётся голым `#<id>`.
-///
-/// Тексты живут только в окне: ни фикстуры, ни отчёт CI их не содержат
-/// (issue #84 AC3), поэтому чистая функция проверяется синтетикой.
-pub fn creature_labels(
-    roster: &[k1_game::creatures::Creature],
-    texts: Option<&k1_data::executable::Texts>,
-) -> HashMap<usize, String> {
-    roster
-        .iter()
-        .map(|creature| {
-            let name = k1_data::executable::character_name(
-                texts,
-                creature.class_id,
-                creature.name_id,
-                creature.nick_id,
-            );
-            let text = if name.is_empty() {
-                format!("#{}", creature.id)
-            } else {
-                format!("#{} {}", creature.id, name)
-            };
-            (creature.id, text)
-        })
-        .collect()
-}
-
 /// Everything the viewer window needs. CLI types never cross into the frontend:
 /// the app resolves the arguments and hands over an opened game.
 pub struct ViewerConfig {
@@ -1568,7 +1538,6 @@ fn creature_debug() -> bool {
 
 fn spawn_creature_labels(
     sim: Res<CreatureSim>,
-    game: Res<GameResource>,
     fonts: Res<KonungFonts>,
     mut labels: ResMut<CreatureLabels>,
     viewer: Res<Viewer>,
@@ -1579,7 +1548,9 @@ fn spawn_creature_labels(
     }
     let simulation = sim.sim.as_ref().unwrap();
     let states = simulation.states();
-    let names = creature_labels(simulation.roster(), game.0.texts());
+    // Finished strings from the game layer (review #116): the names were built
+    // at simulation load out of the K1 texts; the frontend never reads them.
+    let names = simulation.labels();
     labels.labels_spawned = true;
     // Born with the Characters overlay's visibility, not a fixed one: a root
     // that were `Visible` would render for the frame before
@@ -2397,70 +2368,6 @@ mod tests {
                 },
             ]),
             ["Map 12", "Tutorial 4"]
-        );
-    }
-
-    #[test]
-    fn creature_labels_read_species_for_monsters_and_name_for_people() {
-        // Synthetic tables in the exact shape `parse_texts` returns: no game
-        // text in any fixture, headless and edition-independent (#84 AC2/AC3).
-        let texts = k1_data::executable::Texts {
-            monsters: (0..16).map(|index| format!("mon{index:03}")).collect(),
-            names: (0..8).map(|index| format!("name{index:03}")).collect(),
-            nicknames: (0..8).map(|index| format!("nick{index:03}")).collect(),
-            maps: (0..4).map(|index| format!("map{index:02}")).collect(),
-        };
-        let creature =
-            |id: usize, class_id: u8, name_id: u8, nick_id: u8| k1_game::creatures::Creature {
-                id,
-                cell: (0, 0),
-                direction: 0,
-                state: 0,
-                class_id,
-                group: 0,
-                group_kind: 0,
-                roaming: false,
-                spawn: k1_data::game_state::Rect {
-                    left: 0,
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
-                },
-                workplace: None,
-                name_id,
-                nick_id,
-                sprite_set: 0,
-            };
-        let roster = [
-            // A monster (class bit 0x40, below the first villager class):
-            // the label carries the species, the name numbers are unused.
-            creature(7, 0x41, 0, 0),
-            // A person: name and nickname joined with one space.
-            creature(9, 0x51, 2, 3),
-            // Nickname 0 — the game's "no nickname" marker.
-            creature(11, 0x51, 5, 0),
-            // Neither number lands in a table: the bare id stays.
-            creature(13, 0x51, 255, 255),
-        ];
-        assert_eq!(
-            creature_labels(&roster, Some(&texts)),
-            HashMap::from([
-                (7, "#7 mon000".to_owned()),
-                (9, "#9 name002 nick003".to_owned()),
-                (11, "#11 name005".to_owned()),
-                (13, "#13".to_owned()),
-            ])
-        );
-        // No texts at all (an EXE without a recognizable names block): every
-        // label falls back to the bare `#<id>` instead of inventing a name.
-        assert_eq!(
-            creature_labels(&roster, None),
-            HashMap::from([
-                (7, "#7".to_owned()),
-                (9, "#9".to_owned()),
-                (11, "#11".to_owned()),
-                (13, "#13".to_owned()),
-            ])
         );
     }
 
@@ -3706,9 +3613,8 @@ mod tests {
             // kn-ui headless setup does the same).
             .add_plugins(bevy::asset::AssetPlugin::default())
             .insert_resource(sim_resource)
-            // `spawn_creature_labels` names creatures out of the game's texts
-            // and draws them with the bundled face, like the window does.
-            .insert_resource(GameResource(game))
+            // `spawn_creature_labels` draws with the bundled face, like the
+            // window does.
             .init_asset::<Font>();
         let fonts = {
             let mut font_assets = app.world_mut().resource_mut::<Assets<Font>>();

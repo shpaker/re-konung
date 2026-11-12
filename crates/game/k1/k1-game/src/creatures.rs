@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use k1_data::characters::walk_frame_counts;
+use k1_data::executable::Texts;
 use k1_data::game_state::{self, Character, GameState, Group, MapEntities, Rect};
 use k1_data::graph_res::{DIRECTIONS, GraphRes};
 use k1_data::objects_res::ObjectsRes;
@@ -207,4 +208,101 @@ pub fn special_frame_counts(
                 .unwrap_or(0)
         })
         .collect()
+}
+
+/// Display label per record number: `#<id> <name>` (issues #38, #84). The name
+/// is [`k1_data::executable::character_name`]: the species for a monster, the
+/// name and the nickname for a person. A creature the tables cannot name
+/// (empty tables, numbers outside them) keeps the bare `#<id>`.
+///
+/// Game texts live only in a window: no fixture, no CI report carries them
+/// (issue #84 AC3), so the pure function is judged on synthetic tables. The
+/// frontend reads the finished strings off `kn_game::simulation::Simulation`
+/// and imports neither this module nor the name tables itself.
+pub fn labels(roster: &[Creature], texts: Option<&Texts>) -> HashMap<usize, String> {
+    roster
+        .iter()
+        .map(|creature| {
+            let name = k1_data::executable::character_name(
+                texts,
+                creature.class_id,
+                creature.name_id,
+                creature.nick_id,
+            );
+            let text = if name.is_empty() {
+                format!("#{}", creature.id)
+            } else {
+                format!("#{} {}", creature.id, name)
+            };
+            (creature.id, text)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labels_read_species_for_monsters_and_name_for_people() {
+        // Synthetic tables in the exact shape `parse_texts` returns: no game
+        // text in any fixture, headless and edition-independent (#84 AC2/AC3).
+        let texts = Texts {
+            monsters: (0..16).map(|index| format!("mon{index:03}")).collect(),
+            names: (0..8).map(|index| format!("name{index:03}")).collect(),
+            nicknames: (0..8).map(|index| format!("nick{index:03}")).collect(),
+            maps: (0..4).map(|index| format!("map{index:02}")).collect(),
+        };
+        let creature = |id: usize, class_id: u8, name_id: u8, nick_id: u8| Creature {
+            id,
+            cell: (0, 0),
+            direction: 0,
+            state: 0,
+            class_id,
+            group: 0,
+            group_kind: 0,
+            roaming: false,
+            spawn: Rect {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            workplace: None,
+            name_id,
+            nick_id,
+            sprite_set: 0,
+        };
+        let roster = [
+            // A monster (class bit 0x40, below the first villager class):
+            // the label carries the species, the name numbers are unused.
+            creature(7, 0x41, 0, 0),
+            // A person: name and nickname joined with one space.
+            creature(9, 0x51, 2, 3),
+            // Nickname 0 — the game's "no nickname" marker.
+            creature(11, 0x51, 5, 0),
+            // Neither number lands in a table: the bare id stays.
+            creature(13, 0x51, 255, 255),
+        ];
+        assert_eq!(
+            labels(&roster, Some(&texts)),
+            HashMap::from([
+                (7, "#7 mon000".to_owned()),
+                (9, "#9 name002 nick003".to_owned()),
+                (11, "#11 name005".to_owned()),
+                (13, "#13".to_owned()),
+            ])
+        );
+        // No texts at all (an EXE without a recognizable names block): every
+        // label falls back to the bare `#<id>` instead of inventing a name.
+        assert_eq!(
+            labels(&roster, None),
+            HashMap::from([
+                (7, "#7".to_owned()),
+                (9, "#9".to_owned()),
+                (11, "#11".to_owned()),
+                (13, "#13".to_owned()),
+            ])
+        );
+    }
 }

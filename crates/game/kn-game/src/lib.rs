@@ -431,14 +431,6 @@ impl Game {
         }
     }
 
-    /// The executable's game texts (#34): monster species, people names and
-    /// nicknames, map titles. `None` when the EXE carried no recognizable
-    /// names block — a consumer that names creatures falls back to bare ids
-    /// (the viewer's labels, issue #84).
-    pub fn texts(&self) -> Option<&k1_data::executable::Texts> {
-        self.resources.tables.texts.as_ref()
-    }
-
     /// Headless simulation of one map using the first available hero's state:
     /// creatures walk, rules decide, engine ticks.
     pub fn simulation(&self, map_ref: MapRef, seed: u64) -> Result<simulation::Simulation> {
@@ -486,6 +478,7 @@ impl Game {
             special_frames,
             jobs,
             seed,
+            self.resources.tables.texts.as_ref(),
         ))
     }
 
