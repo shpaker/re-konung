@@ -478,6 +478,7 @@ impl Game {
             special_frames,
             jobs,
             seed,
+            self.resources.tables.texts.as_ref(),
         ))
     }
 

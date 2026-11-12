@@ -4,8 +4,9 @@
 //! world → advance the engine. The viewer owns a [`Simulation`] per loaded
 //! map and calls [`Simulation::tick`] once per game tick (60 ms).
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
+use k1_data::executable::Texts;
 use k1_data::game_state::GameState;
 use k1_data::map::{self, KonungMap};
 
@@ -85,6 +86,12 @@ pub enum WalkState {
 pub struct Simulation {
     world: World<MapPassage, StepDurations>,
     roster: Vec<Creature>,
+    /// Ready `#<id> <name>` label per record number, built once at load from
+    /// the executable's texts (issue #84). The consumer — the viewer's label
+    /// layer — reads the finished strings from here and never touches the K1
+    /// name tables itself (review #116: the K1 knowledge stays in the game
+    /// layer). Labels exist for every placed creature's id.
+    labels: HashMap<usize, String>,
     ids: Vec<Option<CreatureId>>,
     jobs: Vec<Workplace>,
     rng: Rng,
@@ -161,12 +168,14 @@ impl Simulation {
         special_frames: Vec<u32>,
         jobs: Vec<Workplace>,
         seed: u64,
+        texts: Option<&Texts>,
     ) -> Simulation {
         let passage = MapPassage::from_map(map);
         let grid = Grid::new(FINE_WIDTH, FINE_HEIGHT);
         let pace = StepDurations::new(step_table);
 
         let roster = creatures::roster(state, map_number, hero);
+        let labels = creatures::labels(&roster, texts);
         // The confirmed load-time rule (docs/k1/creatures.md, «Roaming squad
         // placement on map load»): the game never leaves a roaming squad at
         // the cells its records carry — every member is re-placed near the
@@ -221,6 +230,7 @@ impl Simulation {
         Simulation {
             world,
             roster,
+            labels,
             ids,
             jobs,
             rng: Rng::new(seed ^ 0xDEAD_BEEF),
@@ -455,6 +465,14 @@ impl Simulation {
         (0..self.roster.len())
             .filter_map(|index| self.creature_state(index))
             .collect()
+    }
+
+    /// Ready `#<id> <name>` label per creature record number ([`Creature::id`]),
+    /// built once at load by [`k1_game::creatures::labels`] (issue #84). A
+    /// consumer — the viewer's label layer — reads the finished strings from
+    /// here and never touches the K1 name tables itself.
+    pub fn labels(&self) -> &HashMap<usize, String> {
+        &self.labels
     }
 
     /// The animation stage of one creature (issue #70): `Special { frame }`
@@ -784,6 +802,7 @@ mod tests {
             vec![0; creatures],
             jobs,
             7,
+            None,
         )
     }
 
@@ -1149,6 +1168,8 @@ mod tests {
             ),
             spawn,
             workplace,
+            name_id: 0,
+            nick_id: 0,
             sprite_set: 0,
         }
     }
@@ -1325,6 +1346,7 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
                 seed,
+                None,
             );
             (0..TICKS)
                 .map(|_| {
@@ -1345,6 +1367,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             RUN_SEED,
+            None,
         );
         for _ in 0..TICKS {
             replayed.tick();

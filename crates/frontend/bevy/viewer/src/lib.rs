@@ -49,7 +49,7 @@ use kn_render::{
     ScenePiece, Sequence, TextureCache, clear_scene, load_scene, ortho_scale, piece_center,
     piece_size, reset_creature_animations, reset_creature_positions, update_lighting_uniforms,
 };
-use kn_ui::{KonungUiPlugin, pointer_over_ui, sync_checked};
+use kn_ui::{KonungFonts, KonungUiPlugin, pointer_over_ui, sync_checked};
 
 /// Отладочный оверлей, который включает просмотрщик.
 ///
@@ -1509,6 +1509,13 @@ fn reset_animation(
 
 const LABEL_OFFSET_Y: f32 = 50.0;
 
+/// The label z: above every map piece (`z = draw order · kn_render::Z_STEP`,
+/// at most ~172 on the largest shipped map — 17 148 pieces on RUS 37) yet
+/// inside the 2D camera's clip range (±1000, `OrthographicProjection::default_2d`).
+/// The old 9999 sat beyond the far plane, so the whole label layer was
+/// silently clipped away — no label ever reached a pixel (issue #84).
+const LABEL_Z: f32 = 500.0;
+
 /// Temporary per-creature diagnostics for the movement/animation review: set
 /// `KN_CREATURE_DEBUG` in the environment to log, per creature id, the simulation
 /// tick, cell, step from/to, `step_elapsed`, the cell pixel the node sits on, the
@@ -1531,6 +1538,7 @@ fn creature_debug() -> bool {
 
 fn spawn_creature_labels(
     sim: Res<CreatureSim>,
+    fonts: Res<KonungFonts>,
     mut labels: ResMut<CreatureLabels>,
     viewer: Res<Viewer>,
     mut commands: Commands,
@@ -1538,7 +1546,11 @@ fn spawn_creature_labels(
     if labels.labels_spawned || sim.sim.is_none() {
         return;
     }
-    let states = sim.sim.as_ref().unwrap().states();
+    let simulation = sim.sim.as_ref().unwrap();
+    let states = simulation.states();
+    // Finished strings from the game layer (review #116): the names were built
+    // at simulation load out of the K1 texts; the frontend never reads them.
+    let names = simulation.labels();
     labels.labels_spawned = true;
     // Born with the Characters overlay's visibility, not a fixed one: a root
     // that were `Visible` would render for the frame before
@@ -1556,19 +1568,26 @@ fn spawn_creature_labels(
     let mut children = Vec::new();
     for state in &states {
         let (px, py) = state.pixel;
-        let text = format!("#{}", state.id);
+        let text = names
+            .get(&state.id)
+            .cloned()
+            .unwrap_or_else(|| format!("#{}", state.id));
         let label = commands
             .spawn((
                 CreatureLabel {
                     creature_id: state.id,
                 },
                 Text2d(text),
+                // The bundled PT Sans, not Bevy's embedded default: RUS names
+                // are Cyrillic and the default face draws boxes for them. The
+                // same face the panel renders with (issue #84 AC1).
                 TextFont {
+                    font: fonts.regular.clone().into(),
                     font_size: FontSize::Px(11.0),
                     ..default()
                 },
                 TextColor(Color::srgb(1.0, 1.0, 0.6)),
-                Transform::from_xyz(px as f32, -(py as f32) - LABEL_OFFSET_Y, 9999.0),
+                Transform::from_xyz(px as f32, -(py as f32) + LABEL_OFFSET_Y, LABEL_Z),
                 Visibility::Inherited,
             ))
             .id();
@@ -1638,7 +1657,9 @@ fn sync_creature_labels(
             continue;
         };
         transform.translation.x = x;
-        transform.translation.y = y - LABEL_OFFSET_Y;
+        // World y points up: the offset lifts the label over the body image
+        // on screen. A subtraction dropped it below the creature's feet.
+        transform.translation.y = y + LABEL_OFFSET_Y;
     }
     if !creature_debug() {
         return;
@@ -3587,7 +3608,19 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            // Assets for the bundled face: `init_asset` needs the asset
+            // machinery, which MinimalPlugins alone does not carry (the
+            // kn-ui headless setup does the same).
+            .add_plugins(bevy::asset::AssetPlugin::default())
             .insert_resource(sim_resource)
+            // `spawn_creature_labels` draws with the bundled face, like the
+            // window does.
+            .init_asset::<Font>();
+        let fonts = {
+            let mut font_assets = app.world_mut().resource_mut::<Assets<Font>>();
+            kn_ui::konung_fonts(&mut font_assets)
+        };
+        app.insert_resource(fonts)
             .init_resource::<CreatureSpawns>()
             .init_resource::<CreatureDepth>()
             .init_resource::<CreatureLabels>()
@@ -3978,44 +4011,53 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
+            // Assets for the bundled face the labels spawn with: `init_asset`
+            // needs the asset machinery (the kn-ui headless setup, ditto).
+            bevy::asset::AssetPlugin::default(),
             bevy::transform::TransformPlugin,
             AnimPlugin::new(TICK_MS as f32),
             // The pipeline the button must reset is the shared subsystem's.
             CreatureAnimationPlugin,
         ))
         .insert_resource(GameResource(game))
-        .insert_resource(Viewer {
-            maps: vec![map_ref],
-            selected: 0,
-            overlays: DEFAULT_OVERLAYS,
-            playback: PlayState::Paused,
-            constant_day: false,
-        })
-        .insert_resource(images)
-        .init_resource::<TextureCache>()
-        .insert_resource(sim_resource)
-        .insert_resource(CreatureDepth { map: depth })
-        .insert_resource(CreatureMotion {
-            map: Some(map_ref),
-            seed: SIM_SEED,
-            ..Default::default()
-        })
-        .insert_resource(anim)
-        .insert_resource(spawns)
-        .init_resource::<CreatureLabels>()
-        .add_systems(
-            Update,
-            (
-                spawn_creature_labels.after(CreatureSet::Spawn),
-                // The viewer's own pass over the finished frame, exactly as the
-                // window runs it: ids above the body images.
-                sync_creature_labels
-                    .after(CreatureSet::Swap)
-                    .after(AnimSet::Sprites)
-                    .after(CreatureSet::Nodes),
-            ),
-        )
-        .add_observer(reset_positions);
+        .init_asset::<Font>();
+        let fonts = {
+            let mut font_assets = app.world_mut().resource_mut::<Assets<Font>>();
+            kn_ui::konung_fonts(&mut font_assets)
+        };
+        app.insert_resource(fonts)
+            .insert_resource(Viewer {
+                maps: vec![map_ref],
+                selected: 0,
+                overlays: DEFAULT_OVERLAYS,
+                playback: PlayState::Paused,
+                constant_day: false,
+            })
+            .insert_resource(images)
+            .init_resource::<TextureCache>()
+            .insert_resource(sim_resource)
+            .insert_resource(CreatureDepth { map: depth })
+            .insert_resource(CreatureMotion {
+                map: Some(map_ref),
+                seed: SIM_SEED,
+                ..Default::default()
+            })
+            .insert_resource(anim)
+            .insert_resource(spawns)
+            .init_resource::<CreatureLabels>()
+            .add_systems(
+                Update,
+                (
+                    spawn_creature_labels.after(CreatureSet::Spawn),
+                    // The viewer's own pass over the finished frame, exactly as the
+                    // window runs it: ids above the body images.
+                    sync_creature_labels
+                        .after(CreatureSet::Swap)
+                        .after(AnimSet::Sprites)
+                        .after(CreatureSet::Nodes),
+                ),
+            )
+            .add_observer(reset_positions);
         let button = app.world_mut().spawn(ResetPositions).id();
         app.world_mut()
             .resource_mut::<Clock>()
@@ -4183,7 +4225,7 @@ mod tests {
             let body = global.translation();
             assert!(
                 (transform.translation.x - body.x).abs() < 1e-3
-                    && (transform.translation.y - (body.y - LABEL_OFFSET_Y)).abs() < 1e-3,
+                    && (transform.translation.y - (body.y + LABEL_OFFSET_Y)).abs() < 1e-3,
                 "label #{} left its body: label {:?}, body {:?}",
                 label.creature_id,
                 transform.translation,
