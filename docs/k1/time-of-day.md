@@ -7,10 +7,11 @@ ambient arithmetic and the gates are **confirmed** against our own byte-level re
 three binaries; the constant-light map list, the light-effects option and everything the
 coin flip means stay **hypothesis** or **by Slavik**, and are named as such where they
 appear. This page is the evidence base for the clock (#95), the rendered lighting (#96)
-and the switches (#97) under #87; of the three, the clock is implemented —
-`k1_game::time_of_day` derives the day from the simulation tick as this page describes,
-and its tests assert the interval trace, not the phase names (see "What the next tickets
-take" below).
+and the switches (#97) under #87; the clock and the rendered lighting are implemented,
+and #97 adds the day/night switch — `k1_game::time_of_day` derives the day from the
+simulation tick as this page describes, `k1_game::lighting` carries the ambient
+arithmetic and the day/night gate (`params_gated`), and the tests assert the interval
+trace, not the phase names (see "What the next tickets take" below).
 
 The tick itself is [movement.md](movement.md); the light masks that a phase lights up
 are `LIGHTS.N` and `LIGHTS.RES` ([formats/map.md](formats/map.md),
@@ -341,10 +342,11 @@ thing that is neither:
 | the palette flag (`[0x81D608]`) | which night palette windows 9–11 return | computed per day (coin flip) | our own read (write and three reads) |
 | the constant-light flag (`[0x81D5DC]`) | the whole phase computation, by returning early with the per-map colour | property of the current map | our own read (gate); its writer is not pinned |
 
-So "no tile light" has two different causes — the phase and the option — and #97 needs
-both switches; one control for both would misrepresent the original. And "day/night off"
-does **not** mean "the picture is always `(0,0,0)`": the constant-light maps bypass the
-gate.
+So "no tile light" has two different causes — the phase and the option — and the two
+switches answer different questions; one control for both would misrepresent the
+original. #97 ships only the day/night one. And "day/night off" does **not** mean "the
+picture is always `(0,0,0)`": the constant-light maps bypass the gate (ours does not
+reach that bypass — see the divergence bullet below).
 
 ## What the source gives: intervals, not day phases
 
@@ -521,6 +523,31 @@ Deliberate, recorded next to the facts they bend:
   another day and back, shows the same night; nothing depends on frame rate or on how
   many real seconds a cycle took.
 
+- **The day/night switch is a viewer session setting, not a saved option.** The original
+  reads the user's day/night option (`[0x81D5EC]`) inside the light routine: a flag from
+  the saved options — default unknown, above — which when off makes the routine return
+  the neutral triple with the ground-light flag left cleared, while the counter keeps
+  running: the two increment sites sit outside every option branch. Ours is the same
+  gate as a pure-function parameter, `k1_game::lighting::params_gated(tick, seed,
+  day_night)`, held by the viewer session (`Viewer::constant_day`): the `Constant day`
+  checkbox by the playback controls and the `N` hotkey write it, and only the lighting
+  input moves — the tick, the phase trace and the simulation stay the flag-on run's
+  (`kn-fe-viewer`'s tests hold both halves). Decisions recorded:
+  - **Default: the cycle on** (`DEFAULT_CONSTANT_DAY = false`). The original's default
+    is unconfirmed and the shipped settings table has not been read, so the switch
+    starts off until data says otherwise.
+  - **Reset semantics: a session setting, not simulation state.** A map switch rebuilds
+    the scene and installs a fresh simulation, and the switch survives it — it returns
+    to the cycle-on default only when the app restarts. Toggling never touches the
+    Clock, so switching back on resumes the visible cycle at the tick where it stands
+    (details in `docs/rust.md`, the playback notes).
+  - **The hotkey is `N`.** No original binding is recovered for the option; `N`
+    collides with nothing the viewer already binds (`Space`, `.`, `,`, WASD/arrows).
+  - **The switch ships in the viewer only.** The Player carries no control yet — this
+    ticket's scope, not a rule about the Player. And our gate reaches no constant-light
+    bypass: the maps with a constant colour are not implemented (the flag's writer is
+    not pinned), so with the switch on the ambient really is `(0,0,0)` everywhere.
+
 ## What the next tickets take from this page
 
 - **#95 — implemented.** The model is `k1_game::time_of_day`, derived from the simulation's
@@ -569,8 +596,16 @@ Deliberate, recorded next to the facts they bend:
   model reads window 7's red with the clone's `0.33` and carries the question at its
   declaration site (`time_of_day.rs`, the `ambient_value` docs); the render takes the
   model's numbers as they are.
-- **#97 — not implemented.** It takes the switches-and-flags table: both user switches,
-  both computed flags, and the constant-light bypass of the day/night gate.
+- **#97 — implemented: the day/night gate.** It takes the gate row of the
+  switches-and-flags table: off means the ambient result is `(0,0,0)` and the ground
+  light stays off while the counter keeps running. The model is
+  `k1_game::lighting::params_gated(tick, seed, day_night)` — a parameter, not stored
+  state, so the phase computation stays a pure function of the tick — driven by the
+  viewer's `Constant day` checkbox by the playback controls and the `N` hotkey, both
+  writing one `Viewer::constant_day`; the divergence bullet
+  [above](#where-we-will-differ-from-the-original) records our default, the reset
+  semantics and the hotkey choice. The light-effects switch and the constant-light
+  bypass stay out — not #97's scope.
 - **Neither #96 nor #97 owns the day.** Both read it from the running simulation —
   `Simulation::game_time()` — and change only how it is drawn or which part of the
   lighting computation runs. What the day does at a map change is none of their business:

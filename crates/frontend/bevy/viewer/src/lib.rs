@@ -74,6 +74,13 @@ pub const DEFAULT_OVERLAYS: [bool; 4] = [false, false, false, true];
 /// [panel]: виджет хранит состояние сам, а не читает его из [Viewer].
 pub const DEFAULT_PLAYBACK: PlayState = PlayState::Playing;
 
+/// The day/night cycle runs at startup (`false` — "constant day"). Agreed
+/// with the missing `Checked` on the `Constant day` checkbox in [panel]:
+/// the default is the cycle, because the original's saved-options default is
+/// unconfirmed (a `.bss` global whose writers copy from the settings table;
+/// see `docs/k1/time-of-day.md` and the divergence note below).
+pub const DEFAULT_CONSTANT_DAY: bool = false;
+
 /// Что показывает просмотрщик. Правится интерфейсом, читается системами.
 #[derive(Resource)]
 pub struct Viewer {
@@ -85,6 +92,13 @@ pub struct Viewer {
     /// единственный переключатель движения; выключение визуальной анимации
     /// движение не останавливает (одного `Play`/`Pause` вместо прежних двух).
     pub playback: PlayState,
+    /// "Constant day": `true` holds the lighting input at its constant day
+    /// value (`k1_game::lighting::params_gated`) while time keeps running —
+    /// the phase advances exactly as with the cycle on, as in the original,
+    /// whose counter no option ever gates. A viewer session setting, not
+    /// simulation state: it survives a map switch (which rebuilds the
+    /// simulation) and returns to the cycle-on default only on app restart.
+    pub constant_day: bool,
 }
 
 /// Часы под единственный переключатель `Play`: снятая галочка — пауза, а не
@@ -104,6 +118,13 @@ pub fn toggle_playback(playback: PlayState) -> PlayState {
         PlayState::Playing => PlayState::Paused,
         PlayState::Paused | PlayState::Off => PlayState::Playing,
     }
+}
+
+/// Hotkey `N`: the day/night cycle in one keypress — constant day on/off.
+/// Toggling never touches time: the phase keeps advancing, only the
+/// lighting input is gated.
+pub fn toggle_day_night(constant_day: bool) -> bool {
+    !constant_day
 }
 
 impl Viewer {
@@ -258,10 +279,14 @@ fn lighting_state(params: lighting::LightingParams) -> LightingState {
 /// Writes the lighting state for the scene clock — the single time source the
 /// scrub moves and the simulation is caught up to — or for the tick pinned by
 /// `--light-tick`, which holds a night scene up for screenshots and
-/// inspection. Writes only on change: a rewritten state re-extracts the
-/// uniforms for the GPU, and the day cycle shifts a few times a minute.
+/// inspection. The switch `Constant day` (`Viewer::constant_day`) gates only
+/// the lighting input (`params_gated`): the ambient holds its day value while
+/// the tick — pinned or the clock's — keeps moving through the cycle. Writes
+/// only on change: a rewritten state re-extracts the uniforms for the GPU, and
+/// the day cycle shifts a few times a minute.
 fn update_lighting_state(
     setup: Option<Res<LightingSetup>>,
+    viewer: Res<Viewer>,
     clock: Res<Clock>,
     mut state: ResMut<LightingState>,
 ) {
@@ -269,7 +294,7 @@ fn update_lighting_state(
         Some(tick) => tick,
         None => clock.ticks,
     };
-    let next = lighting_state(lighting::params(tick, SIM_SEED));
+    let next = lighting_state(lighting::params_gated(tick, SIM_SEED, !viewer.constant_day));
     if *state != next {
         *state = next;
     }
@@ -692,10 +717,15 @@ struct CreatureLabel {
 #[derive(Component)]
 struct LabelRoot;
 
-/// Единственный переключатель движения симуляции (`Play`): [sync_playboxes]
-/// находит по нему чекбокс, чтобы зеркалить в него [Viewer::playback].
+/// The single switch of the simulation's movement (`Play`): [sync_playboxes]
+/// finds the checkbox by it to mirror [Viewer::playback] into.
 #[derive(Component, Clone, Copy, Default)]
 struct PlaybackToggle;
+
+/// The `Constant day` switch: [sync_daynight_boxes] finds the checkbox by it
+/// to mirror [Viewer::constant_day] into.
+#[derive(Component, Clone, Copy, Default)]
+struct DayNightToggle;
 
 /// Кнопка "Reset positions": по ней [reset_positions] отличает свой `Activate`
 /// от активаций других кнопок (у выпадющего списка карт они тоже бывают).
@@ -737,6 +767,9 @@ pub struct ViewerConfig {
     /// Tick the lighting is pinned to (`--light-tick`); without it the lighting
     /// follows the scene clock every frame.
     pub lighting_tick: Option<u64>,
+    /// Open with the day/night cycle held at its day value (`--constant-day`);
+    /// the panel switch and `N` flip it live.
+    pub constant_day: bool,
     /// Capture a screenshot to this path and exit.
     pub screenshot: Option<PathBuf>,
     /// Run this many measured frames after the settle window, print one
@@ -811,6 +844,7 @@ pub fn run_viewer(config: ViewerConfig) {
         selected,
         overlays: DEFAULT_OVERLAYS,
         playback: DEFAULT_PLAYBACK,
+        constant_day: config.constant_day,
     })
     .add_systems(Startup, move |world: &mut World| {
         if let Err(error) = world.spawn_scene_list(panel_list(labels.clone(), selected)) {
@@ -822,8 +856,10 @@ pub fn run_viewer(config: ViewerConfig) {
         Update,
         (
             playback_hotkeys,
+            day_night_hotkey,
             apply_playback,
             sync_playboxes,
+            sync_daynight_boxes,
             apply_scrub,
             sync_scrub_slider,
             update_lighting_state,
@@ -998,6 +1034,12 @@ fn panel(labels: Vec<String>, selected: usize) -> impl Scene {
             PlaybackToggle
             on(change_playback)
             --
+            @FeathersCheckbox {
+                @caption: bsn! { @caption("Constant day") }
+            }
+            DayNightToggle
+            on(change_day_night)
+            --
             @FeathersButton {
                 @caption: bsn! { @caption("Reset positions") }
             }
@@ -1109,10 +1151,31 @@ fn change_playback(
     viewer.playback = playback_for(change.value);
 }
 
+/// The `Constant day` switch writes state only — like `Play`: the scene is
+/// not rebuilt (`Rebuild` stays down), the clock does not move, time runs.
+/// The checkbox is mirrored by [sync_daynight_boxes] — otherwise the `N`
+/// hotkey would not reach the panel.
+fn change_day_night(
+    change: On<ValueChange<bool>>,
+    toggles: Query<&DayNightToggle>,
+    mut viewer: ResMut<Viewer>,
+) {
+    if toggles.get(change.source).is_err() {
+        return;
+    }
+    viewer.constant_day = change.value;
+}
+
 /// Отмечен ли единственный переключатель при этом состоянии: галочка стоит,
 /// пока симуляция идёт.
 fn playback_checked(viewer: &Viewer) -> bool {
     viewer.playback == PlayState::Playing
+}
+
+/// Whether the `Constant day` switch is checked at this state: the box is
+/// checked while the cycle is held off.
+fn constant_day_checked(viewer: &Viewer) -> bool {
+    viewer.constant_day
 }
 
 /// Зеркалит ход симуляции в чекбокс `Play`.
@@ -1127,6 +1190,22 @@ fn sync_playboxes(
 ) {
     for (entity, _, checked) in &boxes {
         let want = playback_checked(&viewer);
+        if want != checked {
+            sync_checked(&mut commands, entity, want);
+        }
+    }
+}
+
+/// Mirrors the constant-day flag into the `Constant day` checkbox — the same
+/// pattern as [sync_playboxes]: a `Checkbox` never writes `Checked` itself,
+/// and both the click and the `N` hotkey write the state.
+fn sync_daynight_boxes(
+    viewer: Res<Viewer>,
+    boxes: Query<(Entity, &DayNightToggle, Has<Checked>)>,
+    mut commands: Commands,
+) {
+    for (entity, _, checked) in &boxes {
+        let want = constant_day_checked(&viewer);
         if want != checked {
             sync_checked(&mut commands, entity, want);
         }
@@ -1150,6 +1229,14 @@ fn playback_hotkeys(
         // поэтому он ставит паузу
         viewer.playback = PlayState::Paused;
         clock.step(steps);
+    }
+}
+
+/// Key `N` — constant day on/off. Panning (WASD and the arrows), `Space`,
+/// `.` and `,` never use it.
+fn day_night_hotkey(keys: Res<ButtonInput<KeyCode>>, mut viewer: ResMut<Viewer>) {
+    if keys.just_pressed(KeyCode::KeyN) {
+        viewer.constant_day = toggle_day_night(viewer.constant_day);
     }
 }
 
@@ -2269,6 +2356,7 @@ mod tests {
             selected: 0,
             overlays,
             playback: DEFAULT_PLAYBACK,
+            constant_day: DEFAULT_CONSTANT_DAY,
         }
     }
 
@@ -2337,6 +2425,53 @@ mod tests {
         let viewer = viewer(DEFAULT_OVERLAYS);
         assert_eq!(viewer.playback, PlayState::Playing);
         assert!(playback_checked(&viewer));
+    }
+
+    // --- Constant day (#97) ---------------------------------------------------
+
+    #[test]
+    fn default_constant_day_is_off() {
+        // Agreed with the missing `Checked` on the Constant day checkbox in
+        // panel(): the default is the cycle on, the original's saved-options
+        // default is unconfirmed (docs/k1/time-of-day.md, "The four globals").
+        let state = viewer(DEFAULT_OVERLAYS);
+        assert!(!state.constant_day);
+        assert!(!constant_day_checked(&state));
+        let mut on = viewer(DEFAULT_OVERLAYS);
+        on.constant_day = true;
+        assert!(constant_day_checked(&on));
+    }
+
+    #[test]
+    fn n_toggles_the_day_night_cycle_both_ways() {
+        assert!(toggle_day_night(false));
+        assert!(!toggle_day_night(true));
+    }
+
+    /// The checkbox is written by the state mirror, not by the widget or the
+    /// handler: a Bevy `Checkbox` never sets `Checked` itself, and both the
+    /// click and the `N` hotkey write the state — the `Play` checkbox's
+    /// pattern.
+    #[test]
+    fn the_constant_day_checkbox_mirrors_the_state() {
+        let mut app = App::new();
+        app.insert_resource(viewer([false; 4]));
+        let box_entity = app.world_mut().spawn(DayNightToggle).id();
+        app.add_systems(Update, sync_daynight_boxes);
+
+        app.update();
+        assert!(
+            app.world().entity(box_entity).get::<Checked>().is_none(),
+            "the default is the cycle: no check"
+        );
+
+        app.world_mut().resource_mut::<Viewer>().constant_day = true;
+        app.update();
+        assert!(app.world().entity(box_entity).get::<Checked>().is_some());
+
+        app.world_mut().resource_mut::<Viewer>().constant_day = false;
+        app.update();
+        assert!(app.world().entity(box_entity).get::<Checked>().is_none());
     }
 
     /// Узлы групп и их видимость после [`sync_groups`] при этих переключателях.
@@ -2597,6 +2732,7 @@ mod tests {
                 selected: 0,
                 overlays,
                 playback: PlayState::Paused,
+                constant_day: false,
             })
             .insert_resource(Rebuild { map: false })
             .insert_resource(clock)
@@ -2709,6 +2845,7 @@ mod tests {
                 selected: 0,
                 overlays: DEFAULT_OVERLAYS,
                 playback: PlayState::Paused,
+                constant_day: false,
             })
             .insert_resource(CreatureSim {
                 sim: simulation,
@@ -2839,6 +2976,7 @@ mod tests {
                 selected: 0,
                 overlays: DEFAULT_OVERLAYS,
                 playback: PlayState::Paused,
+                constant_day: false,
             })
             .insert_resource(sim_resource)
             .insert_resource(Clock::new(TICK_MS as f32))
@@ -2961,6 +3099,209 @@ mod tests {
         );
     }
 
+    // --- Constant day (#97) ---------------------------------------------------
+
+    /// The click path: the observer writes the state only — no `Rebuild`, no
+    /// Clock move; the lighting input flips on the next read (#97 AC1: no
+    /// rebuild, so the map's entity count is unchanged), and the checkbox
+    /// mirrors the new state through the sync system.
+    #[test]
+    fn the_day_night_click_writes_state_without_a_rebuild() {
+        let mut app = scrub_app(None);
+        app.world_mut().resource_mut::<Clock>().ticks = 11000;
+        let box_entity = app.world_mut().spawn(DayNightToggle).id();
+        app.update();
+
+        app.world_mut().trigger(ValueChange {
+            source: box_entity,
+            value: true,
+            is_final: true,
+        });
+        app.update();
+        assert!(
+            app.world().resource::<Viewer>().constant_day,
+            "the click wrote the state"
+        );
+        assert!(
+            app.world().entity(box_entity).get::<Checked>().is_some(),
+            "the checkbox mirrors the state it wrote"
+        );
+        assert_eq!(
+            scrub_lighting(&app),
+            LightingState::default(),
+            "the ambient holds the day value at a night tick"
+        );
+        assert_eq!(scrub_clock(&app), 11000, "the clock did not move");
+        assert!(!app.world().resource::<Rebuild>().map, "no rebuild asked");
+    }
+
+    /// The hotkey path: `N` flips the same state the click writes, and the
+    /// checkbox follows through the sync system, not the widget.
+    #[test]
+    fn the_n_hotkey_flips_the_switch_and_the_checkbox_follows() {
+        let mut app = scrub_app(None);
+        let box_entity = app.world_mut().spawn(DayNightToggle).id();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.add_systems(Update, day_night_hotkey.before(sync_daynight_boxes));
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyN);
+        app.update();
+        assert!(app.world().resource::<Viewer>().constant_day);
+        assert!(app.world().entity(box_entity).get::<Checked>().is_some());
+
+        // MinimalPlugins runs no input clearing: release the key by hand, the
+        // next frame must not toggle it again.
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.update();
+        assert!(
+            app.world().resource::<Viewer>().constant_day,
+            "a held key toggles once, not every frame"
+        );
+    }
+
+    /// #97 AC2 headless: with the switch on the ambient snapshot at a night
+    /// boundary equals the one at a day boundary — one constant-day state —
+    /// and switching back off restores the phase value at the same tick. The
+    /// tick itself never moved: the flag holds only the lighting input.
+    #[test]
+    fn constant_day_holds_the_ambient_at_the_phase_boundaries() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let mut app = scrub_app(Some((game, map_ref)));
+        app.world_mut().resource_mut::<Viewer>().constant_day = true;
+
+        // Night boundary (the ground-lit plateau) and day boundary (the light
+        // span), under the switch.
+        app.world_mut().resource_mut::<Clock>().ticks = 11000;
+        app.update();
+        let night = scrub_lighting(&app);
+        app.world_mut().resource_mut::<Clock>().ticks = 900;
+        app.update();
+        assert_eq!(
+            scrub_lighting(&app),
+            night,
+            "one lighting input through the whole cycle"
+        );
+        assert_eq!(
+            night,
+            LightingState::default(),
+            "the constant day value is the neutral state: no ambient, no tile light"
+        );
+
+        // Switch back on at the same night tick: the visible cycle returns.
+        app.world_mut().resource_mut::<Viewer>().constant_day = false;
+        app.world_mut().resource_mut::<Clock>().ticks = 11000;
+        app.update();
+        assert_eq!(
+            scrub_lighting(&app),
+            lighting_state(lighting::params(11000, SIM_SEED)),
+            "the cycle resumes from the tick where it stood"
+        );
+        assert_ne!(
+            scrub_lighting(&app),
+            night,
+            "the night phase differs from the held day value"
+        );
+    }
+
+    /// #97 AC2: the phase trace with the switch on equals the flag-on run —
+    /// time keeps running. The simulation is caught up to the clock whatever
+    /// the flag is, so both runs report the same day, cycle position, phase
+    /// word and ground window at every tick across the ground window's edges.
+    #[test]
+    fn the_constant_day_run_keeps_the_phase_trace_of_the_cycle_on_run() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let phase_trace = |constant_day: bool, dir: &PathBuf, map_ref: MapRef| {
+            let game = Game::open(dir).unwrap();
+            let mut app = scrub_app(Some((game, map_ref)));
+            app.world_mut().resource_mut::<Viewer>().constant_day = constant_day;
+            // Install the simulation the catch-up walks: the clock is the
+            // single time source, the sim follows it tick for tick.
+            let simulation = app
+                .world()
+                .resource::<GameResource>()
+                .0
+                .simulation(map_ref, SIM_SEED)
+                .unwrap();
+            let initial_pixels = simulation.initial_pixels();
+            app.insert_resource(CreatureSim {
+                sim: Some(simulation),
+                initial_pixels,
+                ..Default::default()
+            });
+            let mut trace = Vec::new();
+            for tick in 8090..=8110 {
+                app.world_mut().resource_mut::<Clock>().ticks = tick;
+                app.update();
+                let time = app
+                    .world()
+                    .resource::<CreatureSim>()
+                    .sim
+                    .as_ref()
+                    .unwrap()
+                    .game_time();
+                trace.push((time.day, time.cycle_tick, time.phase, time.ground_window));
+            }
+            trace
+        };
+        assert_eq!(
+            phase_trace(true, &dir, map_ref),
+            phase_trace(false, &dir, map_ref),
+            "the switch must not move, stall or rewind the day"
+        );
+    }
+
+    /// #97 AC3, the reset semantics: the switch is a viewer session setting,
+    /// not simulation state. A map switch installs a fresh simulation, and the
+    /// switch survives it — still holding the lighting input on the new map's
+    /// standing tick; it resets only when the app restarts
+    /// ([`DEFAULT_CONSTANT_DAY`]).
+    #[test]
+    fn the_constant_day_switch_survives_a_map_switch() {
+        let Some((dir, map_ref)) = game_and_first_map() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let mut app = scrub_app(Some((game, map_ref)));
+        app.world_mut().resource_mut::<Viewer>().constant_day = true;
+        app.world_mut().resource_mut::<Clock>().ticks = 11000;
+        app.update();
+
+        // The map-change path: a fresh simulation, the epoch pinned to the
+        // clock — `Viewer` is no part of it.
+        let clock_ticks = app.world().resource::<Clock>().ticks;
+        let fresh = app
+            .world()
+            .resource::<GameResource>()
+            .0
+            .simulation(map_ref, SIM_SEED)
+            .unwrap();
+        {
+            let mut sim = app.world_mut().resource_mut::<CreatureSim>();
+            sim.sim = Some(fresh);
+            sim.epoch = clock_ticks;
+            sim.sim_ticks = 0;
+        }
+        app.update();
+        assert!(
+            app.world().resource::<Viewer>().constant_day,
+            "the switch outlives the simulation it does not belong to"
+        );
+        assert_eq!(
+            scrub_lighting(&app),
+            LightingState::default(),
+            "the held lighting input stands on the new map too"
+        );
+    }
+
     /// A backward `Step` rewinds the clock below the simulation's own timeline;
     /// `advance_creature_sim` sees `target < sim_ticks`, replays the map from tick 0 to
     /// the rewound target, and pins `sim_ticks` there — so creatures show the same
@@ -3000,6 +3341,7 @@ mod tests {
                 selected: 0,
                 overlays: DEFAULT_OVERLAYS,
                 playback: PlayState::Paused,
+                constant_day: false,
             })
             .insert_resource(sim_resource)
             .insert_resource(motion)
@@ -3051,6 +3393,7 @@ mod tests {
                 selected: 0,
                 overlays: DEFAULT_OVERLAYS,
                 playback: PlayState::Paused,
+                constant_day: false,
             })
             .insert_resource(sim_resource)
             .insert_resource(Clock::new(TICK_MS as f32))
@@ -3169,6 +3512,7 @@ mod tests {
                 selected: 0,
                 overlays: [false, false, false, characters_on],
                 playback: PlayState::Paused,
+                constant_day: false,
             };
             let mut app = App::new();
             app.add_plugins(MinimalPlugins)
@@ -3388,6 +3732,7 @@ mod tests {
             selected: 0,
             overlays: DEFAULT_OVERLAYS,
             playback: PlayState::Paused,
+            constant_day: false,
         })
         .insert_resource(images)
         // The subsystem's prepare system validates against these even when no
@@ -3644,6 +3989,7 @@ mod tests {
             selected: 0,
             overlays: DEFAULT_OVERLAYS,
             playback: PlayState::Paused,
+            constant_day: false,
         })
         .insert_resource(images)
         .init_resource::<TextureCache>()
@@ -4298,14 +4644,24 @@ mod tests {
             .insert_resource(Clock::new(TICK_MS as f32))
             .insert_resource(CreatureSim::default())
             .insert_resource(LightingState::default())
+            .insert_resource(viewer([false; 4]))
             .init_resource::<ScrubState>()
+            .init_resource::<Rebuild>()
             .add_observer(change_scrub)
             .add_observer(jump_to_preset)
-            // The window's chain runs the scrub before the lighting read; the
-            // shared catch-up lands between the settle and the next frame.
+            .add_observer(change_day_night)
+            // The window's chain runs the scrub and the switch state before
+            // the lighting read; the shared catch-up lands between the settle
+            // and the next frame.
             .add_systems(
                 Update,
-                (apply_scrub, sync_scrub_slider, update_lighting_state).chain(),
+                (
+                    apply_scrub,
+                    sync_scrub_slider,
+                    sync_daynight_boxes,
+                    update_lighting_state,
+                )
+                    .chain(),
             );
         if let Some((game, map_ref)) = live {
             app.insert_resource(GameResource(game))
@@ -4736,6 +5092,7 @@ mod tests {
             .insert_resource(pool)
             .insert_resource(Clock::new(TICK_MS as f32))
             .insert_resource(CreatureSim::default())
+            .insert_resource(viewer([false; 4]))
             .init_resource::<ScrubState>()
             .add_systems(
                 Update,
