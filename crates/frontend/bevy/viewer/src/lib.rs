@@ -36,6 +36,7 @@ use k1_data::map;
 use k1_data::repo::{GAME_FILES, GameDir, TUTORIAL_FILES};
 use k1_game::lighting;
 use k1_game::time_of_day::CYCLE_TICKS;
+use kn_game::simulation::{Simulation, WalkState};
 use kn_game::{
     DayPhase, Game, MapRef, MapSource, Piece, PieceGroup, SceneOptions, TICK_MS, group_is_shown,
 };
@@ -192,6 +193,43 @@ pub struct Stats {
 /// Seed of the creature simulation: fixed so "Reset positions" reproduces the
 /// exact spawn of the first build (same seed, same map → same initial state).
 const SIM_SEED: u64 = 42;
+
+/// Benchmark knobs of the "Viewer costs" measurements (docs/rust.md): a var
+/// set to anything but `0` turns its factor on, a var set to `0` or absent
+/// keeps the shipped default. They exist so a benchmark run can hold one
+/// factor at a time — the id labels (`KN_VIEWER_LABELS`) or the playback
+/// start (`KN_VIEWER_PAUSE`) — while an interactive run never sees either.
+/// Read through [`knob_value`], so the numbers reproduce from the recorded
+/// recipe without a build flag.
+fn knob_value(value: Option<&str>, default: bool) -> bool {
+    match value {
+        Some("0") => false,
+        Some(_) => true,
+        None => default,
+    }
+}
+
+fn knob(name: &str, default: bool) -> bool {
+    knob_value(std::env::var(name).ok().as_deref(), default)
+}
+
+/// Whether the creature id labels spawn at all (`KN_VIEWER_LABELS`, default
+/// on). The labels measurement needs the with-and-without pair on one map;
+/// off, the label systems run over an empty query.
+fn labels_enabled() -> bool {
+    knob("KN_VIEWER_LABELS", true)
+}
+
+/// The playback a run starts in (`KN_VIEWER_PAUSE`, default playing): the
+/// paused benchmark holds the simulation and the walk clips out and leaves
+/// the settled scene — the display floor the moving runs compare against.
+fn playback_start() -> PlayState {
+    if knob("KN_VIEWER_PAUSE", false) {
+        PlayState::Paused
+    } else {
+        DEFAULT_PLAYBACK
+    }
+}
 
 /// The lighting inputs of the opened game: the LIGHTS.RES tile masks the pool
 /// is built from at startup, and optionally the tick the lighting is pinned to
@@ -621,9 +659,16 @@ enum BenchmarkPhase {
 
 /// Drives `--benchmark N` — reuses the screenshot path's settle window, then
 /// samples the frame time for N frames and prints one machine-readable line:
-/// `BENCH map=17 frames=600 avg_ms=.. p95_ms=.. p99_ms=.. sprites=..
-/// light_materials=..`, followed by `AppExit::Success`. No screenshot is
-/// taken.
+/// `BENCH map=17 frames=600 avg_ms=.. p95_ms=.. p99_ms=.. max_ms=..
+/// ticks=.. creatures=.. walking=.. labels=.. sprites=.. light_materials=..`,
+/// followed by `AppExit::Success`. No screenshot is taken. `max_ms` is the
+/// worst measured frame (the "worst frame" measurement of docs/rust.md);
+/// `ticks` is how far the simulation advanced across the measured window —
+/// snapshotted when the window opens, so the settle frames' clock does not
+/// leak in — and `creatures` / `walking` are the population it ended on;
+/// together they say how much movement the window covered. `labels` echoes
+/// [`labels_enabled`], so a recorded line carries the knob state it ran
+/// with.
 ///
 /// The samples are read from the `DiagnosticsStore` value
 /// [`FrameTimeDiagnosticsPlugin`] writes each Update — the same wall-clock
@@ -637,6 +682,7 @@ fn benchmark(
     request: Res<BenchmarkRequest>,
     stats: Res<Stats>,
     viewer: Res<Viewer>,
+    sim: Res<CreatureSim>,
     pool: Option<Res<LightingMaterials>>,
     diagnostics: Res<DiagnosticsStore>,
     pieces: Query<(), With<ScenePiece>>,
@@ -644,11 +690,13 @@ fn benchmark(
     mut phase: Local<BenchmarkPhase>,
     mut frames: Local<u32>,
     mut samples: Local<Vec<f64>>,
+    mut ticks_at_open: Local<u64>,
 ) {
     match *phase {
         BenchmarkPhase::Settle => {
             if *frames >= SETTLE_FRAMES {
                 samples.clear();
+                *ticks_at_open = sim.sim_ticks;
                 *frames = 0;
                 *phase = BenchmarkPhase::Measure;
             }
@@ -670,6 +718,12 @@ fn benchmark(
                     sorted[rank.clamp(1, sorted.len()) - 1]
                 };
                 let average = samples.iter().sum::<f64>() / samples.len() as f64;
+                let worst = sorted[sorted.len() - 1];
+                let states = sim.sim.as_ref().map(Simulation::states).unwrap_or_default();
+                let walking = states
+                    .iter()
+                    .filter(|state| state.walk_state == WalkState::Walk)
+                    .count();
                 let map = stats
                     .map
                     .or_else(|| viewer.maps.get(viewer.selected).copied())
@@ -682,10 +736,15 @@ fn benchmark(
                     );
                 println!(
                     "BENCH map={map} frames={} avg_ms={average:.2} p95_ms={:.2} p99_ms={:.2} \
-                     sprites={} light_materials={}",
+                     max_ms={worst:.2} ticks={} creatures={} walking={} labels={} sprites={} \
+                     light_materials={}",
                     samples.len(),
                     percentile(0.95),
                     percentile(0.99),
+                    sim.sim_ticks - *ticks_at_open,
+                    states.len(),
+                    walking,
+                    labels_enabled() as u8,
                     pieces.iter().count(),
                     pool.as_ref().map_or(0, |pool| pool.len()),
                 );
@@ -843,7 +902,7 @@ pub fn run_viewer(config: ViewerConfig) {
         maps: config.maps.clone(),
         selected,
         overlays: DEFAULT_OVERLAYS,
-        playback: DEFAULT_PLAYBACK,
+        playback: playback_start(),
         constant_day: config.constant_day,
     })
     .add_systems(Startup, move |world: &mut World| {
@@ -1543,7 +1602,7 @@ fn spawn_creature_labels(
     viewer: Res<Viewer>,
     mut commands: Commands,
 ) {
-    if labels.labels_spawned || sim.sim.is_none() {
+    if !labels_enabled() || labels.labels_spawned || sim.sim.is_none() {
         return;
     }
     let simulation = sim.sim.as_ref().unwrap();
@@ -2424,6 +2483,30 @@ mod tests {
     fn space_flips_between_playing_and_paused() {
         assert_eq!(toggle_playback(PlayState::Playing), PlayState::Paused);
         assert_eq!(toggle_playback(PlayState::Paused), PlayState::Playing);
+    }
+
+    #[test]
+    fn the_benchmark_knobs_default_to_the_shipped_behavior() {
+        // The "Viewer costs" knobs (docs/rust.md) change a run only when the
+        // var is set, and `0` is the only off value: absent means shipped
+        // behavior, and any other value means the factor is deliberately on.
+        assert!(knob_value(None, true), "absent keeps the default");
+        assert!(!knob_value(None, false), "absent keeps the default");
+        assert!(!knob_value(Some("0"), true), "`0` opts out");
+        assert!(!knob_value(Some("0"), false));
+        assert!(knob_value(Some("1"), false), "any other value opts in");
+        assert!(knob_value(Some("on"), false));
+        // The factors themselves: labels on, playback playing, unless asked.
+        assert!(labels_enabled() || std::env::var("KN_VIEWER_LABELS").as_deref() == Ok("0"));
+        assert_eq!(
+            playback_start(),
+            if std::env::var("KN_VIEWER_PAUSE").as_deref() == Ok("1") {
+                PlayState::Paused
+            } else {
+                DEFAULT_PLAYBACK
+            },
+            "the run starts playing unless KN_VIEWER_PAUSE=1"
+        );
     }
 
     #[test]
@@ -4347,6 +4430,328 @@ mod tests {
         app.world_mut().resource_mut::<Clock>().ticks = clock_ticks;
         app.update();
         app
+    }
+
+    /// The edition directory the cost measurements run on: `GAME_DIR` when
+    /// set, otherwise the first edition directory with data (rus, then eng) —
+    /// the same order [`game_and_first_map`] walks. The measurements name the
+    /// edition they ran on, so the recipe passes `GAME_DIR` explicitly.
+    fn bench_game_dir() -> Option<PathBuf> {
+        if let Some(dir) = std::env::var_os("GAME_DIR") {
+            let dir = PathBuf::from(dir);
+            if dir.is_dir() {
+                return Some(dir);
+            }
+            eprintln!("skip: GAME_DIR set but not a directory: {}", dir.display());
+            return None;
+        }
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../original/k1");
+        for edition in ["rus", "eng"] {
+            let dir = root.join(edition).join("game");
+            if dir.is_dir() {
+                return Some(dir);
+            }
+        }
+        eprintln!("skip: no original/k1/{{rus,eng}}/game and no GAME_DIR (docs/k1/editions.md)");
+        None
+    }
+
+    /// The game map of `number`, or `None` when the edition lacks it.
+    fn map_by_number(game: &Game, number: u32) -> Option<MapRef> {
+        game.maps()
+            .ok()?
+            .into_iter()
+            .find(|map| map.source == MapSource::Game && map.number == number)
+    }
+
+    /// Which sequence every creature sprite shows: the pose the sprite pass
+    /// has installed. The key carries `is_shadow`, because the shadow and
+    /// body layer 0 are different sprites of one creature.
+    fn pose_snapshot(app: &mut App) -> HashMap<(usize, bool, usize), usize> {
+        let mut sprites = app.world_mut().query::<(&CreatureSprite, &Animator)>();
+        sprites
+            .iter(app.world())
+            .map(|(tag, animator)| {
+                (
+                    (tag.creature_id, tag.is_shadow, tag.layer),
+                    Arc::as_ptr(&animator.sequence) as usize,
+                )
+            })
+            .collect()
+    }
+
+    /// Creatures whose pose changed between the snapshots and the sprite
+    /// clips they re-installed: a pose change is one creature with any of its
+    /// sprites on another sequence.
+    fn pose_changes(
+        before: &HashMap<(usize, bool, usize), usize>,
+        after: &HashMap<(usize, bool, usize), usize>,
+    ) -> (HashSet<usize>, usize) {
+        let mut creatures = HashSet::new();
+        let mut clips = 0;
+        for (key, sequence) in after {
+            if before.get(key) != Some(sequence) {
+                creatures.insert(key.0);
+                clips += 1;
+            }
+        }
+        (creatures, clips)
+    }
+
+    /// Median of an unsorted copy.
+    fn median(values: &mut [f64]) -> f64 {
+        values.sort_by(f64::total_cmp);
+        values[values.len() / 2]
+    }
+
+    /// The cost of one pose change — a creature switching its state —
+    /// isolated in the frame stream. The shared subsystem runs headless on
+    /// the walking map (19), the clock advances exactly one tick per update,
+    /// and every update is timed against the creatures whose sprite
+    /// sequences swapped on it. A steady frame (the simulation ticks, no
+    /// creature changes pose) is the baseline; frames where exactly one
+    /// creature changes pose isolate the change, so the difference carries
+    /// no other per-tick work. Headless (no window, no GPU): this is the
+    /// CPU update cost, the same app minus the window the player's tests
+    /// run. Measured in release and printed — the numbers land in
+    /// docs/rust.md, "Viewer costs"; no bound is asserted beyond the frame
+    /// classes existing.
+    ///
+    /// ```bash
+    /// GAME_DIR=original/k1/rus/game cargo test --release \
+    ///     --manifest-path crates/Cargo.toml -p kn-fe-viewer --lib \
+    ///     tests::benchmark_pose_swap_cost -- --ignored --exact --nocapture
+    /// ```
+    #[test]
+    #[ignore = "cost measurement: release only, and only when run explicitly"]
+    fn benchmark_pose_swap_cost() {
+        const MAP: u32 = 19;
+        const TICKS: u64 = 400;
+        let Some(dir) = bench_game_dir() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let map_ref = map_by_number(&game, MAP).expect("the edition must have map 19");
+        let mut motion = CreatureMotion::default();
+        motion.request(
+            map_ref,
+            SIM_SEED,
+            None,
+            game.scene(map_ref, &SceneOptions::ALL).unwrap(),
+        );
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AnimPlugin::new(TICK_MS as f32),
+            CreatureAnimationPlugin,
+        ))
+        .insert_resource(GameResource(game))
+        .init_resource::<TextureCache>()
+        .insert_resource(Assets::<Image>::default())
+        .insert_resource(motion);
+        // The clock moves only through the test, one tick per update; the
+        // settle frame (map decode, spawn, the state-4 load swaps) stays
+        // outside the timed loop.
+        app.world_mut()
+            .resource_mut::<Clock>()
+            .goto(PlayState::Paused);
+        app.update();
+
+        let mut steady: Vec<f64> = Vec::new();
+        let mut single: Vec<f64> = Vec::new();
+        let mut multi: Vec<f64> = Vec::new();
+        let mut single_clips = 0usize;
+        let mut worst = (0.0f64, 0usize);
+        for tick in 1..=TICKS {
+            let before = pose_snapshot(&mut app);
+            let started = Instant::now();
+            app.world_mut().resource_mut::<Clock>().ticks = tick;
+            app.update();
+            let elapsed = started.elapsed().as_secs_f64() * 1e3;
+            let (creatures, clips) = pose_changes(&before, &pose_snapshot(&mut app));
+            if elapsed > worst.0 {
+                worst = (elapsed, creatures.len());
+            }
+            match creatures.len() {
+                0 => steady.push(elapsed),
+                1 => {
+                    single.push(elapsed);
+                    single_clips += clips;
+                }
+                _ => multi.push(elapsed),
+            }
+        }
+        let sim = app.world().resource::<CreatureSim>();
+        let simulation = sim.sim.as_ref().unwrap();
+        assert_eq!(
+            simulation.tick_number(),
+            TICKS,
+            "the loop must carry one sim tick per update"
+        );
+        let states = simulation.states();
+        let walking = states
+            .iter()
+            .filter(|state| state.walk_state == WalkState::Walk)
+            .count();
+        println!(
+            "pose swap cost, map {MAP} of {}, {TICKS} updates of one tick each:",
+            dir.display()
+        );
+        println!(
+            "population {} creatures, {walking} walking at the end",
+            states.len()
+        );
+        let steady_med = median(&mut steady);
+        let (steady_min, steady_max) = class_min_max(&steady);
+        println!(
+            "steady tick frames {:5} · median {:.4} ms · min {:.4} · max {:.4}",
+            steady.len(),
+            steady_med,
+            steady_min,
+            steady_max
+        );
+        assert!(
+            !steady.is_empty(),
+            "map 19 must give tick frames without pose changes"
+        );
+        // Game data is present here — a data-less environment already left
+        // through `bench_game_dir` — so an empty `single` class is a failed
+        // run (no target measurement), not a skip.
+        assert!(
+            !single.is_empty(),
+            "no single-creature pose change in {TICKS} ticks on {} map {MAP}: the target \
+             measurement is missing — rerun with more ticks",
+            dir.display()
+        );
+        let single_med = median(&mut single);
+        let single_min = class_min_max(&single).0;
+        println!(
+            "single pose change  {:5} · median {:.4} ms · min {:.4} · over steady Δ {:.4} ms \
+             ({:.1} clips per change)",
+            single.len(),
+            single_med,
+            single_min,
+            single_med - steady_med,
+            single_clips as f64 / single.len() as f64
+        );
+        if !multi.is_empty() {
+            println!(
+                "multi pose change   {:5} · median {:.4} ms · min {:.4}",
+                multi.len(),
+                median(&mut multi),
+                class_min_max(&multi).0
+            );
+        }
+        println!(
+            "worst update {:.4} ms with {} creatures changing pose",
+            worst.0, worst.1
+        );
+    }
+
+    /// (min, max) of a frame-time class.
+    fn class_min_max(values: &[f64]) -> (f64, f64) {
+        let min = values.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        (min, max)
+    }
+
+    /// The per-frame cost of the depth recompute, isolated as the pure map
+    /// call: `DepthMap::creature_z` — the binary search over the static
+    /// stacks, the interpolation and the per-id slot — over the real depth
+    /// maps of maps 17 and 19 with the bottoms the walking creatures
+    /// actually carry (the live row plus the creature's body height). That
+    /// lookup is what `sync_creature_nodes` pays per creature per frame for
+    /// the shadow's slot, and as `creature_z` for the body z whenever a
+    /// creature's bottom moves; the per-frame extrapolation multiplies the
+    /// call by the population. Measured in release and printed; the numbers
+    /// land in docs/rust.md, "Viewer costs".
+    ///
+    /// ```bash
+    /// GAME_DIR=original/k1/rus/game cargo test --release \
+    ///     --manifest-path crates/Cargo.toml -p kn-fe-viewer --lib \
+    ///     tests::benchmark_depth_slot_cost -- --ignored --exact --nocapture
+    /// ```
+    #[test]
+    #[ignore = "cost measurement: release only, and only when run explicitly"]
+    fn benchmark_depth_slot_cost() {
+        const CALLS: usize = 200_000;
+        let Some(dir) = bench_game_dir() else {
+            return;
+        };
+        let game = Game::open(&dir).unwrap();
+        let mut cache = TextureCache::default();
+        let mut images = Assets::<Image>::default();
+        for number in [17u32, 19] {
+            let Some(map_ref) = map_by_number(&game, number) else {
+                continue;
+            };
+            let scene = game.scene(map_ref, &SceneOptions::ALL).unwrap();
+            let mut seen = HashSet::new();
+            for piece in &scene.pieces {
+                if let Some(id) = &piece.texture {
+                    seen.insert(*id);
+                }
+                if let Some(animation) = &piece.animation {
+                    for frame in &animation.frames {
+                        if let Some(id) = &frame.texture {
+                            seen.insert(*id);
+                        }
+                    }
+                }
+            }
+            let problems = cache
+                .load(&game, &seen.into_iter().collect::<Vec<_>>(), &mut images)
+                .unwrap();
+            assert!(problems.is_empty(), "map {number} textures: {problems:?}");
+            let depth = build_depth_map(&scene, &cache);
+            let simulation = game.simulation(map_ref, SIM_SEED).unwrap();
+            let (anim, report) = build_creature_anim(
+                &game,
+                map_ref,
+                None,
+                &scene.creature_pieces,
+                &mut cache,
+                &mut images,
+            );
+            assert!(
+                report.error.is_none(),
+                "map {number} creature anim: {:?}",
+                report.error
+            );
+            let spawns = build_creature_spawns(&scene, &cache, &anim, &simulation.initial_pixels());
+            // The bottoms the nodes carry each frame: the live row plus the
+            // creature's body height, exactly what sync_creature_nodes computes.
+            let bottoms: Vec<(u32, i32)> = simulation
+                .states()
+                .iter()
+                .filter_map(|state| {
+                    spawns
+                        .heights
+                        .get(&state.id)
+                        .map(|&height| (state.id as u32, (state.pixel.1 + height).max(0)))
+                })
+                .collect();
+            assert!(!bottoms.is_empty(), "map {number} must carry creatures");
+            for &(id, bottom) in &bottoms {
+                let _ = depth.creature_z(bottom, id);
+            }
+            let started = Instant::now();
+            let mut sink = 0.0f32;
+            for index in 0..CALLS {
+                let (id, bottom) = bottoms[index % bottoms.len()];
+                sink += depth.creature_z(bottom, id);
+            }
+            let per_call = started.elapsed().as_secs_f64() * 1e9 / CALLS as f64;
+            println!(
+                "depth recompute, map {number} of {}: {} creatures · creature_z \
+                 {:.1} ns/call · a frame of all creatures ≈ {:.2} µs",
+                dir.display(),
+                bottoms.len(),
+                per_call,
+                per_call * bottoms.len() as f64 / 1e3
+            );
+            assert!(sink.is_finite(), "the sink keeps the calls from vanishing");
+        }
     }
 
     #[test]

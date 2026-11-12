@@ -761,6 +761,144 @@ Both sit below a tenth of a second, so a release is one dropped frame at
 worst, and the backward replay branch is consistently the cheaper one; no
 optimization is warranted until the frame-time gate (#98) says otherwise.
 
+### Viewer costs
+
+The per-frame numbers of the viewer window itself — the simulation plus the
+display on the creature maps, at least the roaming-group map 17 (28 creatures,
+none of which walks in 600 ticks) and the village map 19 (20 creatures, 14
+walking), both editions (issue #83).
+
+**Method.** Release build, Windows 11, AMD Ryzen 9 9950X, 64 GiB RAM, NVIDIA
+GeForce RTX 2070 SUPER (the wgpu adapter of every run; the CPU's iGPU sits
+idle), window 1280×800. The window benchmark is
+`--benchmark 8000`: 40 settle frames, then 8000 measured frames — at the
+village's ~2.4 ms frame that is 300–350 simulation ticks, several step cycles
+per walker. The frame is bounded the same way the render table above bounds
+it: `PresentMode::AutoNoVsync` (benchmark runs only), so the meter reads the
+scene and not the display's 16.67 ms quantum; the samples are the
+`DiagnosticsStore` frame time that `FrameTimeDiagnosticsPlugin` writes each
+update — the same wall-clock delta the diagnostics panel shows — and the
+percentiles are nearest-rank over the 8000 samples. Every `BENCH` line now
+carries `max_ms` (the worst measured frame), `ticks` (sim ticks advanced
+across the measured window, snapshotted when the window opens so settle time
+does not leak in), `creatures`, `walking` and `labels` — a recorded line
+self-describes the run, and the identity `ticks · 60 ms ≈ frames · avg_ms`
+marks the honest ones. Runs while the desktop was loaded are discarded, not
+averaged in: they announce themselves by `p95` shifting to 16–17 ms in
+*every* configuration at once — pause included, which a paused scene cannot
+cause — and they still satisfy the identity, so they measure the machine,
+not the scene. The tables keep the clean rounds; both editions' clean rounds
+agree within 0.1–0.3 ms, which is the reproducibility check.
+
+**Instrumentation (AC choice, stated here):** the numbers reproduce from
+instrumentation left in the code behind two environment variables — no
+build flag, and no behavior change unless a variable is set.
+`KN_VIEWER_LABELS=0` spawns no creature id labels (default: spawn, as
+shipped), `KN_VIEWER_PAUSE=1` starts the playback paused (default: playing),
+which holds the simulation and the walk clips out and leaves the settled
+scene — the display floor the playing runs compare against. `knob_value`
+forces the factor off on `0`, keeps the shipped default when the variable
+is absent and forces it on for any other value, pinned by
+`the_benchmark_knobs_default_to_the_shipped_behavior`. The two isolated
+measurements below are `#[ignore]`d tests run by the recorded recipe; the
+data stays in `original/`, reached through `GAME_DIR`.
+
+```bash
+cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- \
+    --game-dir original/k1/rus/game --map 17 --benchmark 8000
+GAME_DIR=original/k1/rus/game cargo test --release --manifest-path \
+    crates/Cargo.toml -p kn-fe-viewer --lib tests::benchmark_pose_swap_cost \
+    -- --ignored --exact --nocapture
+GAME_DIR=original/k1/rus/game cargo test --release --manifest-path \
+    crates/Cargo.toml -p kn-fe-viewer --lib tests::benchmark_depth_slot_cost \
+    -- --ignored --exact --nocapture
+```
+
+**The visualization tick with the creatures moving.** Playing runs (default
+knobs), 8000 frames each, the spread of the clean rounds:
+
+| Map (edition) | playing | paused (display floor) | ticks | p95 / p99 / max, playing |
+|---|---|---|---|---|
+| 17 RUS — 28 creatures, 0 walking | 3.19–3.57 ms | 3.24–3.78 ms | 425–476 | 3.70–4.28 / 4.28–5.12 / 10.6–12.8 |
+| 17 ENG — 28 creatures, 0 walking | 3.15–3.20 ms | 3.06–3.15 ms | 420–426 | 3.56–3.66 / 3.95–4.12 / 10.4 |
+| 19 RUS — 20 creatures, 14 walking | 2.34–2.62 ms | 2.24–2.61 ms | 311–349 | 2.73–3.23 / 3.12–3.84 / 9.3–13.4 |
+| 19 ENG — 20 creatures, 14 walking | 2.33 ms | 2.23 ms | 310 | 2.75 / 3.13 / 9.1 |
+
+The comparison the ticket asks for: **playing − paused, same round, same
+map.** On the village it is +0.09/+0.10/+0.10 ms (RUS rounds 2–3, ENG round
+1) — a reproducible ≈ +0.1 ms for the living scene; the calm map's rounds
+span −0.59…+0.33 ms (RUS) but sit at +0.05…+0.10 ms in all three ENG rounds,
+at most a few percent of the frame. Of the
+village's +0.1 ms the *simulation logic* is measured to own ~1.5 µs per
+frame amortized: a tick lands every ~24th frame and carries the full engine
+tick of 18–22 µs (table "Rules tick cost" above), one walk-swap batch of
+~10 µs (the pose change below) and the depth recompute of ≲0.5 µs — three
+orders below the frame, which is why pausing is invisible in the percentiles
+and the reproducible part of the difference tracks the sprites' churn
+instead (the ≤85 animated pieces of the village, 37 of the calm map, cycling
+their frames every tick, the walkers among them). The headless decide pass
+(map 17, 1.2–1.6 µs/tick) is invisible in the window, as the calm map's
+drift confirms.
+
+**One pose change, isolated.** `benchmark_pose_swap_cost` runs the shared
+creature subsystem headless (the window app minus the window, `MinimalPlugins`)
+on map 19, one simulation tick per update, and times 400 updates against the
+creatures whose sprite sequences swapped on each: a steady tick frame (the
+simulation advances, no creature changes pose) is the baseline, and frames
+where exactly one creature changes pose isolate the change. Over three runs
+per edition the single-pose-change frames sit above the steady median by
++10.2–13.7 µs (RUS) and +6.9–12.2 µs (ENG) — a creature's pose change
+re-installs 3.7–3.8 sprite clips (body layers plus shadow), so ~2–4 µs per
+clip install and sprite rewrite. Neighbors: one full engine tick is 18–22 µs
+on the same map; one data-layer pose *build* is 57–72 µs (table "Pose cost")
+but happens once per state or direction change, while this swap is the
+per-change display cost on top of clips already built; one depth call is
+~8–19 ns (below). At ~1.1 step starts per tick across the village's walkers,
+pose changes amortize to ~0.2 µs per frame — the AC6 bound (one rebuild per
+state change, none per frame) is what keeps it there.
+
+**The depth recompute while creatures move.** `benchmark_depth_slot_cost`
+times `DepthMap::creature_z` — the binary search over the static stacks, the
+interpolation and the per-id slot. That lookup is what `sync_creature_nodes`
+pays per creature per frame for the shadow's slot, and as `creature_z` for
+the body z whenever a creature's bottom moves; the test runs it over the
+real depth maps with the bottoms the walking creatures actually carry (live
+row plus body height). Spread over
+six runs × both editions × both maps: **8–19 ns per call**, so a frame's
+depth recompute for the whole population is **0.2–0.5 µs** (28 creatures on
+map 17, 20 on map 19). Neighbors: a thousandth of one walk-swap batch
+(~10 µs) and ~1/5000–1/12 000 of the village's frame — no throttling or
+caching of depth recomputes is warranted at these populations.
+
+**The creature labels, with and without.** The `KN_VIEWER_LABELS=0` runs sit
+next to the playing runs of the same round: the difference is below the
+round drift on most rounds and never exceeds +0.16 ms (village RUS, 20
+labels) or +0.15 ms (roaming RUS, 28 labels); the clean pairs give
++0.01–0.16 ms, i.e. ≲5 µs per label per frame — text nodes already spawned,
+per-frame repositioning plus their share of the render. Neighbor: a label
+costs about half a pose change per frame, and 28 labels cost under 1% of the
+60 ms budget — "labels only for visible creatures" has no numbers behind it
+on these maps: all creatures are visible by default, and their labels are
+measured cheap.
+
+**The worst observed frame and what caused it.** `max_ms` of the quiet runs:
+the village's worst frame is ~9.1–9.7 ms when the scene plays and
+3.5–3.7 ms when paused — reproduced in three independent clean rounds (RUS
+rounds 2–3, ENG round 1) — while the calm map's runs spike to ~10 ms in most
+configurations, its paused rounds included (9.5–10.6 ms RUS). Attribution:
+the village's play-only spike cannot be the scene's CPU work (the tick
+frame's measured share is ≲35 µs, above), and it survives
+`KN_VIEWER_LABELS=0` (9.17 ms), so by elimination it is the display-side
+churn of a tick frame — the ≤85 animated pieces plus the walkers swapping
+images at once — with the exact mechanism (extraction, re-batching, driver)
+unconfirmed: bevy_render 0.20 exposes no draw-call counter without extra
+features, the same caveat the render table above records. The calm map's
+configuration-independent spikes and every burst where `p95` shifts to
+16–17 ms belong to the desktop, not the scene. Even the worst attributed
+frame is 6× under the 60 ms tick, so the standing follow-up is a profiler
+pass over the tick-frame churn before anyone optimizes — out of this
+ticket's scope, which measures and does not fix.
+
 ### Open questions
 
 - The `class` module in `k1-game::rules` is load-bearing since criteria 3 and 4:
