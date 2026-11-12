@@ -49,7 +49,7 @@ use kn_render::{
     ScenePiece, Sequence, TextureCache, clear_scene, load_scene, ortho_scale, piece_center,
     piece_size, reset_creature_animations, reset_creature_positions, update_lighting_uniforms,
 };
-use kn_ui::{KonungUiPlugin, pointer_over_ui, sync_checked};
+use kn_ui::{KonungFonts, KonungUiPlugin, pointer_over_ui, sync_checked};
 
 /// Отладочный оверлей, который включает просмотрщик.
 ///
@@ -753,6 +753,36 @@ pub fn map_labels(maps: &[MapRef]) -> Vec<String> {
         .map(|map| match map.source {
             MapSource::Game => format!("Map {}", map.number),
             MapSource::Tutorial => format!("Tutorial {}", map.number),
+        })
+        .collect()
+}
+
+/// Тексты подписей по номеру записи: `#<id> <имя>` (issues #38, #84). Имя
+/// собирается из текстов EXE (#34) через [`k1_data::executable::character_name`]:
+/// у монстра — название вида, у человека — имя и прозвище. Ни того, ни другого
+/// (пустые таблицы, номера вне таблиц) — подпись остаётся голым `#<id>`.
+///
+/// Тексты живут только в окне: ни фикстуры, ни отчёт CI их не содержат
+/// (issue #84 AC3), поэтому чистая функция проверяется синтетикой.
+pub fn creature_labels(
+    roster: &[k1_game::creatures::Creature],
+    texts: Option<&k1_data::executable::Texts>,
+) -> HashMap<usize, String> {
+    roster
+        .iter()
+        .map(|creature| {
+            let name = k1_data::executable::character_name(
+                texts,
+                creature.class_id,
+                creature.name_id,
+                creature.nick_id,
+            );
+            let text = if name.is_empty() {
+                format!("#{}", creature.id)
+            } else {
+                format!("#{} {}", creature.id, name)
+            };
+            (creature.id, text)
         })
         .collect()
 }
@@ -1509,6 +1539,13 @@ fn reset_animation(
 
 const LABEL_OFFSET_Y: f32 = 50.0;
 
+/// The label z: above every map piece (`z = draw order · kn_render::Z_STEP`,
+/// at most ~172 on the largest shipped map — 17 148 pieces on RUS 37) yet
+/// inside the 2D camera's clip range (±1000, `OrthographicProjection::default_2d`).
+/// The old 9999 sat beyond the far plane, so the whole label layer was
+/// silently clipped away — no label ever reached a pixel (issue #84).
+const LABEL_Z: f32 = 500.0;
+
 /// Temporary per-creature diagnostics for the movement/animation review: set
 /// `KN_CREATURE_DEBUG` in the environment to log, per creature id, the simulation
 /// tick, cell, step from/to, `step_elapsed`, the cell pixel the node sits on, the
@@ -1531,6 +1568,8 @@ fn creature_debug() -> bool {
 
 fn spawn_creature_labels(
     sim: Res<CreatureSim>,
+    game: Res<GameResource>,
+    fonts: Res<KonungFonts>,
     mut labels: ResMut<CreatureLabels>,
     viewer: Res<Viewer>,
     mut commands: Commands,
@@ -1538,7 +1577,9 @@ fn spawn_creature_labels(
     if labels.labels_spawned || sim.sim.is_none() {
         return;
     }
-    let states = sim.sim.as_ref().unwrap().states();
+    let simulation = sim.sim.as_ref().unwrap();
+    let states = simulation.states();
+    let names = creature_labels(simulation.roster(), game.0.texts());
     labels.labels_spawned = true;
     // Born with the Characters overlay's visibility, not a fixed one: a root
     // that were `Visible` would render for the frame before
@@ -1556,19 +1597,26 @@ fn spawn_creature_labels(
     let mut children = Vec::new();
     for state in &states {
         let (px, py) = state.pixel;
-        let text = format!("#{}", state.id);
+        let text = names
+            .get(&state.id)
+            .cloned()
+            .unwrap_or_else(|| format!("#{}", state.id));
         let label = commands
             .spawn((
                 CreatureLabel {
                     creature_id: state.id,
                 },
                 Text2d(text),
+                // The bundled PT Sans, not Bevy's embedded default: RUS names
+                // are Cyrillic and the default face draws boxes for them. The
+                // same face the panel renders with (issue #84 AC1).
                 TextFont {
+                    font: fonts.regular.clone().into(),
                     font_size: FontSize::Px(11.0),
                     ..default()
                 },
                 TextColor(Color::srgb(1.0, 1.0, 0.6)),
-                Transform::from_xyz(px as f32, -(py as f32) - LABEL_OFFSET_Y, 9999.0),
+                Transform::from_xyz(px as f32, -(py as f32) + LABEL_OFFSET_Y, LABEL_Z),
                 Visibility::Inherited,
             ))
             .id();
@@ -1638,7 +1686,9 @@ fn sync_creature_labels(
             continue;
         };
         transform.translation.x = x;
-        transform.translation.y = y - LABEL_OFFSET_Y;
+        // World y points up: the offset lifts the label over the body image
+        // on screen. A subtraction dropped it below the creature's feet.
+        transform.translation.y = y + LABEL_OFFSET_Y;
     }
     if !creature_debug() {
         return;
@@ -2347,6 +2397,70 @@ mod tests {
                 },
             ]),
             ["Map 12", "Tutorial 4"]
+        );
+    }
+
+    #[test]
+    fn creature_labels_read_species_for_monsters_and_name_for_people() {
+        // Synthetic tables in the exact shape `parse_texts` returns: no game
+        // text in any fixture, headless and edition-independent (#84 AC2/AC3).
+        let texts = k1_data::executable::Texts {
+            monsters: (0..16).map(|index| format!("mon{index:03}")).collect(),
+            names: (0..8).map(|index| format!("name{index:03}")).collect(),
+            nicknames: (0..8).map(|index| format!("nick{index:03}")).collect(),
+            maps: (0..4).map(|index| format!("map{index:02}")).collect(),
+        };
+        let creature =
+            |id: usize, class_id: u8, name_id: u8, nick_id: u8| k1_game::creatures::Creature {
+                id,
+                cell: (0, 0),
+                direction: 0,
+                state: 0,
+                class_id,
+                group: 0,
+                group_kind: 0,
+                roaming: false,
+                spawn: k1_data::game_state::Rect {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                },
+                workplace: None,
+                name_id,
+                nick_id,
+                sprite_set: 0,
+            };
+        let roster = [
+            // A monster (class bit 0x40, below the first villager class):
+            // the label carries the species, the name numbers are unused.
+            creature(7, 0x41, 0, 0),
+            // A person: name and nickname joined with one space.
+            creature(9, 0x51, 2, 3),
+            // Nickname 0 — the game's "no nickname" marker.
+            creature(11, 0x51, 5, 0),
+            // Neither number lands in a table: the bare id stays.
+            creature(13, 0x51, 255, 255),
+        ];
+        assert_eq!(
+            creature_labels(&roster, Some(&texts)),
+            HashMap::from([
+                (7, "#7 mon000".to_owned()),
+                (9, "#9 name002 nick003".to_owned()),
+                (11, "#11 name005".to_owned()),
+                (13, "#13".to_owned()),
+            ])
+        );
+        // No texts at all (an EXE without a recognizable names block): every
+        // label falls back to the bare `#<id>` instead of inventing a name.
+        assert_eq!(
+            creature_labels(&roster, None),
+            HashMap::from([
+                (7, "#7".to_owned()),
+                (9, "#9".to_owned()),
+                (11, "#11".to_owned()),
+                (13, "#13".to_owned()),
+            ])
         );
     }
 
@@ -3587,7 +3701,20 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            // Assets for the bundled face: `init_asset` needs the asset
+            // machinery, which MinimalPlugins alone does not carry (the
+            // kn-ui headless setup does the same).
+            .add_plugins(bevy::asset::AssetPlugin::default())
             .insert_resource(sim_resource)
+            // `spawn_creature_labels` names creatures out of the game's texts
+            // and draws them with the bundled face, like the window does.
+            .insert_resource(GameResource(game))
+            .init_asset::<Font>();
+        let fonts = {
+            let mut font_assets = app.world_mut().resource_mut::<Assets<Font>>();
+            kn_ui::konung_fonts(&mut font_assets)
+        };
+        app.insert_resource(fonts)
             .init_resource::<CreatureSpawns>()
             .init_resource::<CreatureDepth>()
             .init_resource::<CreatureLabels>()
@@ -3978,44 +4105,53 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
+            // Assets for the bundled face the labels spawn with: `init_asset`
+            // needs the asset machinery (the kn-ui headless setup, ditto).
+            bevy::asset::AssetPlugin::default(),
             bevy::transform::TransformPlugin,
             AnimPlugin::new(TICK_MS as f32),
             // The pipeline the button must reset is the shared subsystem's.
             CreatureAnimationPlugin,
         ))
         .insert_resource(GameResource(game))
-        .insert_resource(Viewer {
-            maps: vec![map_ref],
-            selected: 0,
-            overlays: DEFAULT_OVERLAYS,
-            playback: PlayState::Paused,
-            constant_day: false,
-        })
-        .insert_resource(images)
-        .init_resource::<TextureCache>()
-        .insert_resource(sim_resource)
-        .insert_resource(CreatureDepth { map: depth })
-        .insert_resource(CreatureMotion {
-            map: Some(map_ref),
-            seed: SIM_SEED,
-            ..Default::default()
-        })
-        .insert_resource(anim)
-        .insert_resource(spawns)
-        .init_resource::<CreatureLabels>()
-        .add_systems(
-            Update,
-            (
-                spawn_creature_labels.after(CreatureSet::Spawn),
-                // The viewer's own pass over the finished frame, exactly as the
-                // window runs it: ids above the body images.
-                sync_creature_labels
-                    .after(CreatureSet::Swap)
-                    .after(AnimSet::Sprites)
-                    .after(CreatureSet::Nodes),
-            ),
-        )
-        .add_observer(reset_positions);
+        .init_asset::<Font>();
+        let fonts = {
+            let mut font_assets = app.world_mut().resource_mut::<Assets<Font>>();
+            kn_ui::konung_fonts(&mut font_assets)
+        };
+        app.insert_resource(fonts)
+            .insert_resource(Viewer {
+                maps: vec![map_ref],
+                selected: 0,
+                overlays: DEFAULT_OVERLAYS,
+                playback: PlayState::Paused,
+                constant_day: false,
+            })
+            .insert_resource(images)
+            .init_resource::<TextureCache>()
+            .insert_resource(sim_resource)
+            .insert_resource(CreatureDepth { map: depth })
+            .insert_resource(CreatureMotion {
+                map: Some(map_ref),
+                seed: SIM_SEED,
+                ..Default::default()
+            })
+            .insert_resource(anim)
+            .insert_resource(spawns)
+            .init_resource::<CreatureLabels>()
+            .add_systems(
+                Update,
+                (
+                    spawn_creature_labels.after(CreatureSet::Spawn),
+                    // The viewer's own pass over the finished frame, exactly as the
+                    // window runs it: ids above the body images.
+                    sync_creature_labels
+                        .after(CreatureSet::Swap)
+                        .after(AnimSet::Sprites)
+                        .after(CreatureSet::Nodes),
+                ),
+            )
+            .add_observer(reset_positions);
         let button = app.world_mut().spawn(ResetPositions).id();
         app.world_mut()
             .resource_mut::<Clock>()
@@ -4183,7 +4319,7 @@ mod tests {
             let body = global.translation();
             assert!(
                 (transform.translation.x - body.x).abs() < 1e-3
-                    && (transform.translation.y - (body.y - LABEL_OFFSET_Y)).abs() < 1e-3,
+                    && (transform.translation.y - (body.y + LABEL_OFFSET_Y)).abs() < 1e-3,
                 "label #{} left its body: label {:?}, body {:?}",
                 label.creature_id,
                 transform.translation,

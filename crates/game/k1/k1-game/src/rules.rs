@@ -619,6 +619,8 @@ mod tests {
                 bottom: 50,
             },
             workplace: None,
+            name_id: 0,
+            nick_id: 0,
             sprite_set: 0,
         }
     }

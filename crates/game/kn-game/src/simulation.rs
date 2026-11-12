@@ -457,6 +457,14 @@ impl Simulation {
             .collect()
     }
 
+    /// The map's roster: one [`Creature`] per record the load kept, ordered by
+    /// id. The movement world carries none of the record's identity fields, so
+    /// a consumer that names creatures (the viewer's labels, issue #84) reads
+    /// the class and the name/nickname ids off here.
+    pub fn roster(&self) -> &[Creature] {
+        &self.roster
+    }
+
     /// The animation stage of one creature (issue #70): `Special { frame }`
     /// while its state-4 sequence runs, `Idle` otherwise. `None` for an id the
     /// machine never seeded.
@@ -1149,6 +1157,8 @@ mod tests {
             ),
             spawn,
             workplace,
+            name_id: 0,
+            nick_id: 0,
             sprite_set: 0,
         }
     }

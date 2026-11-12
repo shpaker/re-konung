@@ -744,6 +744,8 @@ mod tests {
                     bottom: 7,
                 },
                 workplace: None,
+                name_id: 0,
+                nick_id: 0,
                 sprite_set: 0,
             }
         }

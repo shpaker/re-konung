@@ -59,6 +59,8 @@ fn monster(cell: (i16, i16)) -> Creature {
         roaming: true,
         spawn: area(),
         workplace: None,
+        name_id: 0,
+        nick_id: 0,
         sprite_set: 0,
     }
 }

@@ -48,6 +48,12 @@ pub struct Creature {
     /// Rectangle the creature's group was put in the map for.
     pub spawn: Rect,
     pub workplace: Option<Workplace>,
+    /// Byte 0xD4 of the character record: the name table index in the
+    /// executable's texts (docs/k1/formats/game-state.md, offset 0xD4).
+    pub name_id: u8,
+    /// Byte 0xD5 of the character record: the nickname table index; 0 — no
+    /// nickname. See docs/k1/formats/game-state.md, offset 0xD4.
+    pub nick_id: u8,
     /// Byte 0xD6 of the character record: sprite set selector (GRAPH.RES models 0–2 or
     /// Objects.res dynamic objects 0–29). See docs/k1/formats/game-state.md, offset 0xD6.
     pub sprite_set: u8,
@@ -89,6 +95,8 @@ fn creature(character: &Character, group: &Group, places: &HashMap<usize, Workpl
         roaming: group.is_roaming(),
         spawn: group.spawn,
         workplace: places.get(&character.slot).copied(),
+        name_id: character.name_id,
+        nick_id: character.nick_id,
         sprite_set: character.sprite_set,
     }
 }
