@@ -24,10 +24,12 @@
 //!   8-bit floats. The difference is bounded by the original's own output
 //!   quantization (its display was 16-bit colour) and is not reproduced.
 //!
-//! ## Not yet implemented (out of scope for #96)
+//! ## Not yet implemented
 //!
-//! - The two user option switches ("day/night" and "light effects"): ticket #97.
-//!   Here we assume both are on. The light-effects global is pinned: `[0x81D604]`.
+//! - The light-effects user option switch (`[0x81D604]`, the clone's
+//!   `_bConfLightEffects`): it gates the ground's tile light, not the ambient,
+//!   and its switch is nobody's ticket scope yet. The day/night switch is
+//!   implemented — [`params_gated`] (#97).
 //!
 //! - Per-map constant light maps (42, 44, 45): their deciding flag `[0x81D5DC]`
 //!   is unlocated at the binary level. We leave those out until it is confirmed.
@@ -240,9 +242,10 @@ pub fn fades(surface: Surface, fine_light_value: u8) -> bool {
 
 /// Flat parameters the render layer is handed once per frame.
 ///
-/// No option switches (they belong to ticket #97), no per-map constant light
-/// (unconfirmed flag `[0x81D5DC]`). All values come from the simulation tick and
-/// the session seed.
+/// The only option switch applied here is the day/night gate — a parameter of
+/// [`params_gated`], not a stored field: the phase computation itself stays a
+/// pure function of the tick and the seed. The light-effects switch and the
+/// per-map constant light (unconfirmed flag `[0x81D5DC]`) are not applied.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LightingParams {
     /// The fade factors for every surface — ground, decorations, objects and
@@ -255,7 +258,7 @@ pub struct LightingParams {
     pub ground_window: bool,
 }
 
-/// Full params for a simulation tick.
+/// Full params for a simulation tick — the day/night cycle on.
 ///
 /// Derives `day` and `cycle_tick` the same way `time_of_day::game_time` does, so a
 /// caller can hand any absolute tick without normalising it first.
@@ -269,6 +272,34 @@ pub fn params(tick: u64, seed: u64) -> LightingParams {
         ambient,
         ground_light,
         ground_window: time_of_day::ground_window(cycle_tick),
+    }
+}
+
+/// [`params`] with the original's day/night option gate applied (`#97`).
+///
+/// `day_night` mirrors the user option `[0x81D5EC]` (the clone's
+/// `_bConfDayNight`) exactly where the original reads it: with it off the light
+/// routine returns the neutral triple and the ground-light flag stays cleared —
+/// the routine clears the flag at its head and the stores that set it live in
+/// the window branches the gate skips (`docs/k1/time-of-day.md`, "The order of
+/// the checks"). So the gate-off result is the constant day value: neutral
+/// ambient, no tile light.
+///
+/// The option gates the lighting computation only — the original's counter is
+/// incremented at two sites neither of which sits inside a branch on the option,
+/// and ours is not either: `tick` keeps advancing through the cycle whatever
+/// the flag is, and turning the gate back on resumes the visible cycle at the
+/// current tick. Deliberate divergence, recorded next to the fact: the
+/// original's flag travels with the saved options, ours is a viewer session
+/// setting handed to this function every frame.
+pub fn params_gated(tick: u64, seed: u64, day_night: bool) -> LightingParams {
+    if day_night {
+        return params(tick, seed);
+    }
+    LightingParams {
+        ambient: [0.0; 3],
+        ground_light: [0.0; 3],
+        ground_window: false,
     }
 }
 
@@ -647,5 +678,67 @@ mod tests {
             t3.ground_light, t1.ground_light,
             "ground_light should vary with seed"
         );
+    }
+
+    /// #97 AC2: with the day/night gate off the ambient snapshot at a day
+    /// boundary and at a night boundary are identical — the constant day value.
+    /// The boundary ticks are the interval trace of
+    /// `docs/k1/time-of-day.md`, plus the ground-lit plateau between them.
+    #[test]
+    fn the_gate_off_ambient_is_identical_at_day_and_night_boundaries() {
+        let boundaries = [0u64, 1802, 5402, 8100, 11000, 11700, 18900, 19020, 21599];
+        for tick in boundaries {
+            assert_eq!(
+                params_gated(tick, 42, false).ambient,
+                [0.0, 0.0, 0.0],
+                "ambient at {tick} must hold the day value"
+            );
+        }
+        // The two snapshots the ticket names: a day boundary against a night
+        // boundary — identical under the gate, different without it.
+        assert_eq!(
+            params_gated(900, 42, false).ambient,
+            params_gated(11000, 42, false).ambient,
+            "day and night snapshots under the gate"
+        );
+        assert_ne!(
+            params(900, 42).ambient,
+            params(11000, 42).ambient,
+            "the gate-on run must actually change with the phase"
+        );
+    }
+
+    /// The gate-off run closes the ground-light window and drops the tile-light
+    /// colour: the original clears the ground flag at the routine's head and
+    /// the gate skips the branches that set it, so no tile light either.
+    #[test]
+    fn the_gate_off_closes_the_ground_window_and_the_tile_light() {
+        let off = params_gated(11000, 42, false);
+        assert!(!off.ground_window);
+        assert_eq!(off.ground_light, [0.0; 3]);
+        let on = params(11000, 42);
+        assert!(on.ground_window, "the gate-on run at the same tick is lit");
+        assert_ne!(on.ground_light, [0.0; 3]);
+    }
+
+    /// The flag is the only thing the gate changes: the gate-on call is the
+    /// legacy entry unchanged across the cycle, and the gate-off result at an
+    /// absolute tick two cycles away equals the one at the same cycle position —
+    /// nothing about the gate freezes, shifts or rewinds the clock (#97 AC2:
+    /// the phase trace matches the flag-on run).
+    #[test]
+    fn the_gate_changes_only_the_lighting_input() {
+        for tick in (0..time_of_day::CYCLE_TICKS).step_by(7) {
+            assert_eq!(
+                params(tick, 42),
+                params_gated(tick, 42, true),
+                "gate-on must equal the legacy params at {tick}"
+            );
+            assert_eq!(
+                params_gated(tick, 42, false),
+                params_gated(2 * time_of_day::CYCLE_TICKS + tick, 42, false),
+                "the gate sees the same cycle position at {tick}"
+            );
+        }
     }
 }

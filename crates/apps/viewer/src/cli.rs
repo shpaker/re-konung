@@ -26,6 +26,12 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub light_tick: Option<u64>,
 
+    /// Open with the visible day/night cycle held off ("constant day"): the
+    /// ambient stays at its day value while time keeps running. The same
+    /// flag the `Constant day` checkbox and the `N` hotkey drive in the window
+    #[arg(long, global = true)]
+    pub constant_day: bool,
+
     /// Снять скриншот карты в файл и выйти
     #[arg(long, global = true)]
     pub screenshot: Option<PathBuf>,
@@ -246,6 +252,32 @@ mod tests {
         assert!(zero.is_err(), "--benchmark 0 is not a run");
         // The subcommands stay reachable with the flag present
         match cli(&["--game-dir", "g", "--benchmark", "10", "check", "--all"]).command {
+            Some(Command::Check { all, .. }) => assert!(all),
+            other => panic!("expected check, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn constant_day_flag_parses_global() {
+        // The capture/benchmark hook for the switch: the same state the panel
+        // checkbox and `N` drive, pinned for a headless run.
+        let parsed = cli(&[
+            "--game-dir",
+            "g",
+            "--map",
+            "17",
+            "--light-tick",
+            "11000",
+            "--constant-day",
+            "--screenshot",
+            "out/constant-day-night.png",
+        ]);
+        assert!(parsed.constant_day);
+        assert_eq!(parsed.light_tick, Some(11000));
+        // Default: the cycle runs.
+        assert!(!cli(&["--game-dir", "g"]).constant_day);
+        // The subcommands stay reachable with the flag present
+        match cli(&["--game-dir", "g", "--constant-day", "check", "--all"]).command {
             Some(Command::Check { all, .. }) => assert!(all),
             other => panic!("expected check, got {other:?}"),
         }

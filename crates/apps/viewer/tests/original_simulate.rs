@@ -48,6 +48,7 @@ fn cli(game_dir: PathBuf) -> Cli {
         map: None,
         source: SourceArg::Game,
         light_tick: None,
+        constant_day: false,
         screenshot: None,
         benchmark: None,
         command: None,
