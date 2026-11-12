@@ -4520,7 +4520,7 @@ mod tests {
     /// ```bash
     /// GAME_DIR=original/k1/rus/game cargo test --release \
     ///     --manifest-path crates/Cargo.toml -p kn-fe-viewer --lib \
-    ///     benchmark_pose_swap_cost -- --ignored --nocapture
+    ///     tests::benchmark_pose_swap_cost -- --ignored --exact --nocapture
     /// ```
     #[test]
     #[ignore = "cost measurement: release only, and only when run explicitly"]
@@ -4614,10 +4614,15 @@ mod tests {
             !steady.is_empty(),
             "map 19 must give tick frames without pose changes"
         );
-        if single.is_empty() {
-            println!("no single-creature pose change in {TICKS} ticks — rerun with more ticks");
-            return;
-        }
+        // Game data is present here — a data-less environment already left
+        // through `bench_game_dir` — so an empty `single` class is a failed
+        // run (no target measurement), not a skip.
+        assert!(
+            !single.is_empty(),
+            "no single-creature pose change in {TICKS} ticks on {} map {MAP}: the target \
+             measurement is missing — rerun with more ticks",
+            dir.display()
+        );
         let single_med = median(&mut single);
         let single_min = class_min_max(&single).0;
         println!(
@@ -4654,16 +4659,17 @@ mod tests {
     /// call: `DepthMap::creature_z` — the binary search over the static
     /// stacks, the interpolation and the per-id slot — over the real depth
     /// maps of maps 17 and 19 with the bottoms the walking creatures
-    /// actually carry (the live row plus the creature's body height). One
-    /// call per creature per frame is what `sync_creature_nodes` pays while
-    /// the creatures move; the per-frame extrapolation multiplies the call
-    /// by the population. Measured in release and printed; the numbers land
-    /// in docs/rust.md, "Viewer costs".
+    /// actually carry (the live row plus the creature's body height). That
+    /// lookup is what `sync_creature_nodes` pays per creature per frame for
+    /// the shadow's slot, and as `creature_z` for the body z whenever a
+    /// creature's bottom moves; the per-frame extrapolation multiplies the
+    /// call by the population. Measured in release and printed; the numbers
+    /// land in docs/rust.md, "Viewer costs".
     ///
     /// ```bash
     /// GAME_DIR=original/k1/rus/game cargo test --release \
     ///     --manifest-path crates/Cargo.toml -p kn-fe-viewer --lib \
-    ///     benchmark_depth_slot_cost -- --ignored --nocapture
+    ///     tests::benchmark_depth_slot_cost -- --ignored --exact --nocapture
     /// ```
     #[test]
     #[ignore = "cost measurement: release only, and only when run explicitly"]

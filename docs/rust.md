@@ -791,13 +791,14 @@ not the scene. The tables keep the clean rounds; both editions' clean rounds
 agree within 0.1–0.3 ms, which is the reproducibility check.
 
 **Instrumentation (AC choice, stated here):** the numbers reproduce from
-feature-gated instrumentation left in the code — no build flag, no behavior
-change. Two environment knobs read only where a benchmark run needs them:
+instrumentation left in the code behind two environment variables — no
+build flag, and no behavior change unless a variable is set.
 `KN_VIEWER_LABELS=0` spawns no creature id labels (default: spawn, as
 shipped), `KN_VIEWER_PAUSE=1` starts the playback paused (default: playing),
 which holds the simulation and the walk clips out and leaves the settled
 scene — the display floor the playing runs compare against. `knob_value`
-treats an absent variable and any value but `0` as the default, pinned by
+forces the factor off on `0`, keeps the shipped default when the variable
+is absent and forces it on for any other value, pinned by
 `the_benchmark_knobs_default_to_the_shipped_behavior`. The two isolated
 measurements below are `#[ignore]`d tests run by the recorded recipe; the
 data stays in `original/`, reached through `GAME_DIR`.
@@ -858,9 +859,11 @@ state change, none per frame) is what keeps it there.
 
 **The depth recompute while creatures move.** `benchmark_depth_slot_cost`
 times `DepthMap::creature_z` — the binary search over the static stacks, the
-interpolation and the per-id slot, exactly the per-creature-per-frame call
-`sync_creature_nodes` pays — over the real depth maps with the bottoms the
-walking creatures actually carry (live row plus body height). Spread over
+interpolation and the per-id slot. That lookup is what `sync_creature_nodes`
+pays per creature per frame for the shadow's slot, and as `creature_z` for
+the body z whenever a creature's bottom moves; the test runs it over the
+real depth maps with the bottoms the walking creatures actually carry (live
+row plus body height). Spread over
 six runs × both editions × both maps: **8–19 ns per call**, so a frame's
 depth recompute for the whole population is **0.2–0.5 µs** (28 creatures on
 map 17, 20 on map 19). Neighbors: a thousandth of one walk-swap batch
