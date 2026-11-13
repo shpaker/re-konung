@@ -59,9 +59,9 @@ jobs:
 
   # The PR build gate: full compile and link of both apps in dev-runtime, the
   # profile every local session runs (`just viewer`, `just game`). On Linux —
-  # the same profile measured several times faster here than on windows-latest
-  # (docs/rust.md, "Build profiles"). --timings publishes cargo-timing.html as
-  # a workflow artifact of every run.
+  # the same profile measured 1.4× faster here than on windows-latest
+  # (14m50s vs 21m1s cold; docs/rust.md, "Build profiles"). --timings
+  # publishes cargo-timing.html as a workflow artifact of every run.
   build:
     runs-on: ubuntu-latest
     steps:
@@ -79,7 +79,7 @@ jobs:
         run: cargo build --profile dev-runtime --timings --manifest-path crates/Cargo.toml -p kn-viewer -p kn-player
       - name: Upload cargo timings
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cargo-timing-linux
           path: crates/target/cargo-timings/cargo-timing.html
@@ -88,13 +88,14 @@ jobs:
   # Windows smoke-build: validates dev-runtime, the reduced bevy feature set
   # and .cargo/config.toml (rust-lld, which only applies to
   # x86_64-pc-windows-msvc). Not on pull_request: the same profile measured
-  # several times slower here than on ubuntu-latest, and a Windows regression
-  # can only be caught after merge — an accepted trade-off. Static linking
-  # only — dynamic_linking builds bevy_dylib.dll (full recompile of every Bevy
-  # crate as cdylib, ~10× slower) and launches a window requiring a GPU
-  # context that headless CI cannot provide.
+  # 1.4× slower here than on ubuntu-latest, and a Windows regression can only
+  # be caught after merge — an accepted trade-off. Static linking only —
+  # dynamic_linking builds bevy_dylib.dll (full recompile of every Bevy crate
+  # as cdylib, ~10× slower) and launches a window requiring a GPU context
+  # that headless CI cannot provide.
   build-windows:
     runs-on: windows-latest
+    if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
@@ -104,7 +105,7 @@ jobs:
         run: cargo build --profile dev-runtime --timings --manifest-path crates/Cargo.toml -p kn-viewer -p kn-player
       - name: Upload cargo timings
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cargo-timing-windows
           path: crates/target/cargo-timings/cargo-timing.html
