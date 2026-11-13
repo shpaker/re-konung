@@ -13,11 +13,17 @@ pub enum Screen {
     /// The title menu. Renders in `applied.language`; a failed session shows
     /// [`AppState::session_error`] here.
     MainMenu,
+    /// The hero selection of the new-game flow: one option per
+    /// [`AppState::heroes`] entry, entered by `MainMenuAction::NewGame`, left
+    /// by [`HeroSelectAction::Choose`] (to [`Loading`](Screen::Loading)) or
+    /// [`HeroSelectAction::Cancel`] (back to [`MainMenu`](Screen::MainMenu)).
+    HeroSelect,
     /// The settings editor. Previews the `draft` of
     /// [`AppState::settings_screen`], while the rest of the UI keeps rendering
     /// in `applied.language`.
     Settings,
-    /// Building the game session. Entered by `MainMenuAction::NewGame`, left by
+    /// Building the game session. Entered by
+    /// `HeroSelectAction::Choose`, left by
     /// [`LoadingAction::Succeeded`] (to [`Playing`](Screen::Playing)) or
     /// [`LoadingAction::Failed`] (back to [`MainMenu`](Screen::MainMenu)).
     Loading,
@@ -80,6 +86,12 @@ pub struct SettingsScreen {
 #[derive(Clone, PartialEq, Debug)]
 pub struct AppState {
     pub screen: Screen,
+    /// The heroes the new-game flow offers, as the game layer resolves them
+    /// (`Game.N` starting-state numbers). Fixed for the process lifetime: the
+    /// list comes from the opened game directory at startup. An empty list is
+    /// legal state (nothing to offer); `HeroSelectAction::Choose` of a number
+    /// outside it is a no-op.
+    pub heroes: Vec<u32>,
     /// The last applied-and-persisted settings; the main menu and the whole UI
     /// render in `applied.language`, the settings screen previews
     /// `draft.language`.

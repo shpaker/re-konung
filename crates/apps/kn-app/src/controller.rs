@@ -6,7 +6,8 @@ use std::collections::VecDeque;
 use kn_settings::Settings;
 
 use crate::action::{
-    Action, LoadingAction, MainMenuAction, PersistOutcome, SettingsAction, SettingsField,
+    Action, HeroSelectAction, LoadingAction, MainMenuAction, PersistOutcome, SettingsAction,
+    SettingsField,
 };
 use crate::effect::Effect;
 use crate::state::{AppState, SaveStatus, Screen, SettingsScreen};
@@ -22,12 +23,14 @@ pub struct AppController {
 }
 
 impl AppController {
-    /// Creates the controller at the main menu with the given
-    /// applied-and-persisted settings (the ones the startup loaded from disk).
-    pub fn new(applied: Settings) -> Self {
+    /// Creates the controller at the main menu with the given heroes the
+    /// new-game flow offers and the given applied-and-persisted settings (the
+    /// ones the startup loaded from disk).
+    pub fn new(heroes: Vec<u32>, applied: Settings) -> Self {
         Self {
             state: AppState {
                 screen: Screen::MainMenu,
+                heroes,
                 applied,
                 settings_screen: None,
                 saving: None,
@@ -67,8 +70,20 @@ impl AppController {
         match (self.state.screen, action) {
             (Screen::MainMenu, Action::MainMenu(MainMenuAction::NewGame)) => {
                 self.state.session_error = None;
-                self.state.screen = Screen::Loading;
-                effects.push(Effect::StartSession);
+                self.state.screen = Screen::HeroSelect;
+            }
+            (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::Choose(hero))) => {
+                // The offered list is the only source of valid numbers: a
+                // stale view cannot start a session for a hero this game
+                // directory does not carry.
+                if self.state.heroes.contains(&hero) {
+                    self.state.session_error = None;
+                    self.state.screen = Screen::Loading;
+                    effects.push(Effect::StartSession { hero });
+                }
+            }
+            (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::Cancel)) => {
+                self.state.screen = Screen::MainMenu;
             }
             (Screen::MainMenu, Action::MainMenu(MainMenuAction::OpenSettings)) => {
                 self.state.screen = Screen::Settings;
@@ -180,13 +195,18 @@ mod tests {
 
     use super::AppController;
     use crate::action::{
-        Action, LoadingAction, MainMenuAction, PersistOutcome, SettingsAction, SettingsField,
+        Action, HeroSelectAction, LoadingAction, MainMenuAction, PersistOutcome, SettingsAction,
+        SettingsField,
     };
     use crate::effect::Effect;
     use crate::state::{SaveError, SaveStatus, Screen, SessionError};
 
+    /// The heroes the test game directory offers — the same numbers the real
+    /// data resolves (`Game.0`–`Game.2`).
+    const HEROES: [u32; 3] = [0, 1, 2];
+
     fn controller() -> AppController {
-        AppController::new(Settings::default())
+        AppController::new(HEROES.into(), Settings::default())
     }
 
     /// A controller driven to `screen` through legal transitions only.
@@ -194,14 +214,19 @@ mod tests {
         let mut controller = controller();
         match screen {
             Screen::MainMenu => {}
+            Screen::HeroSelect => {
+                controller.submit(Action::MainMenu(MainMenuAction::NewGame));
+            }
             Screen::Settings => {
                 controller.submit(Action::MainMenu(MainMenuAction::OpenSettings));
             }
             Screen::Loading => {
                 controller.submit(Action::MainMenu(MainMenuAction::NewGame));
+                controller.submit(Action::HeroSelect(HeroSelectAction::Choose(HEROES[0])));
             }
             Screen::Playing => {
                 controller.submit(Action::MainMenu(MainMenuAction::NewGame));
+                controller.submit(Action::HeroSelect(HeroSelectAction::Choose(HEROES[0])));
                 controller.submit(Action::Loading(LoadingAction::Succeeded));
             }
         }
@@ -241,8 +266,9 @@ mod tests {
     #[test]
     fn new_starts_at_main_menu_clean() {
         let applied = english_fullscreen();
-        let controller = AppController::new(applied);
+        let controller = AppController::new(HEROES.into(), applied);
         assert_eq!(controller.state().screen, Screen::MainMenu);
+        assert_eq!(controller.state().heroes, HEROES);
         assert_eq!(controller.state().applied, applied);
         assert_eq!(controller.state().settings_screen, None);
         assert_eq!(controller.state().session_error, None);
@@ -256,12 +282,66 @@ mod tests {
     // Transition table, one test per row.
 
     #[test]
-    fn main_menu_new_game_enters_loading_and_starts_session() {
+    fn main_menu_new_game_enters_hero_select_without_effects() {
         let mut controller = controller();
         let effects = submit_all(&mut controller, [Action::MainMenu(MainMenuAction::NewGame)]);
-        assert_eq!(effects, vec![Effect::StartSession]);
-        assert_eq!(controller.state().screen, Screen::Loading);
+        assert!(effects.is_empty());
+        assert_eq!(controller.state().screen, Screen::HeroSelect);
         assert_eq!(controller.state().session_error, None);
+    }
+
+    #[test]
+    fn hero_select_choose_enters_loading_and_emits_the_chosen_hero() {
+        for &hero in &HEROES {
+            let mut controller = controller_at(Screen::HeroSelect);
+            let effects = submit_all(
+                &mut controller,
+                [Action::HeroSelect(HeroSelectAction::Choose(hero))],
+            );
+            assert_eq!(effects, vec![Effect::StartSession { hero }]);
+            assert_eq!(controller.state().screen, Screen::Loading);
+            assert_eq!(controller.state().session_error, None);
+        }
+    }
+
+    #[test]
+    fn hero_select_choose_of_an_unoffered_hero_is_a_no_op() {
+        let mut controller = controller_at(Screen::HeroSelect);
+        let before = controller.state().clone();
+        let effects = submit_all(
+            &mut controller,
+            [Action::HeroSelect(HeroSelectAction::Choose(
+                HEROES[HEROES.len() - 1] + 1,
+            ))],
+        );
+        assert!(effects.is_empty());
+        assert_eq!(controller.state(), &before);
+    }
+
+    #[test]
+    fn hero_select_cancel_returns_to_main_menu() {
+        let mut controller = controller_at(Screen::HeroSelect);
+        let effects = submit_all(
+            &mut controller,
+            [Action::HeroSelect(HeroSelectAction::Cancel)],
+        );
+        assert!(effects.is_empty());
+        assert_eq!(controller.state().screen, Screen::MainMenu);
+    }
+
+    #[test]
+    fn the_new_game_seed_reaches_loading_in_one_flush_without_a_hero_select_frame() {
+        // What `--new-game` seeds: the whole new-game flow queued before the
+        // first frame. One flush reduces both actions, so exactly one session
+        // effect exists and the screen is already `Loading` — the hero select
+        // root can never spawn.
+        let mut controller = controller();
+        controller.submit(Action::MainMenu(MainMenuAction::NewGame));
+        controller.submit(Action::HeroSelect(HeroSelectAction::Choose(HEROES[1])));
+        let effects = controller.flush();
+        assert_eq!(effects, vec![Effect::StartSession { hero: HEROES[1] }]);
+        assert_eq!(controller.state().screen, Screen::Loading);
+        assert!(controller.flush().is_empty());
     }
 
     #[test]
@@ -271,19 +351,20 @@ mod tests {
             &mut controller,
             [
                 Action::MainMenu(MainMenuAction::NewGame),
+                Action::HeroSelect(HeroSelectAction::Choose(HEROES[0])),
                 Action::Loading(LoadingAction::Failed(SessionError::Map)),
             ],
         );
         assert_eq!(controller.state().session_error, Some(SessionError::Map));
         let effects = submit_all(&mut controller, [Action::MainMenu(MainMenuAction::NewGame)]);
-        assert_eq!(effects, vec![Effect::StartSession]);
-        assert_eq!(controller.state().screen, Screen::Loading);
+        assert!(effects.is_empty());
+        assert_eq!(controller.state().screen, Screen::HeroSelect);
         assert_eq!(controller.state().session_error, None);
     }
 
     #[test]
     fn main_menu_open_settings_copies_applied_into_draft() {
-        let mut controller = AppController::new(english_fullscreen());
+        let mut controller = AppController::new(HEROES.into(), english_fullscreen());
         let effects = submit_all(
             &mut controller,
             [Action::MainMenu(MainMenuAction::OpenSettings)],
@@ -487,6 +568,7 @@ mod tests {
         ];
         for screen in [
             Screen::MainMenu,
+            Screen::HeroSelect,
             Screen::Settings,
             Screen::Loading,
             Screen::Playing,
@@ -507,6 +589,9 @@ mod tests {
             Action::MainMenu(MainMenuAction::NewGame),
             Action::MainMenu(MainMenuAction::OpenSettings),
             Action::MainMenu(MainMenuAction::Exit),
+            Action::HeroSelect(HeroSelectAction::Choose(HEROES[0])),
+            Action::HeroSelect(HeroSelectAction::Choose(HEROES[2] + 1)),
+            Action::HeroSelect(HeroSelectAction::Cancel),
             Action::Settings(SettingsAction::Change(SettingsField::Language(
                 Language::English,
             ))),
@@ -517,10 +602,12 @@ mod tests {
             Action::Persisted(PersistOutcome::Saved),
             Action::Persisted(PersistOutcome::SaveFailed(SaveError::Write)),
         ];
-        // The only rows that emit: NewGame and Exit from MainMenu, Save from
-        // Settings with a draft differing from applied.
+        // The only rows that emit: Exit from MainMenu, a Choose of an offered
+        // hero from HeroSelect, Save from Settings with a draft differing
+        // from applied.
         for screen in [
             Screen::MainMenu,
+            Screen::HeroSelect,
             Screen::Settings,
             Screen::Loading,
             Screen::Playing,
@@ -537,8 +624,11 @@ mod tests {
                         );
                     }
                     let emits = match (screen, action) {
-                        (Screen::MainMenu, Action::MainMenu(MainMenuAction::NewGame))
-                        | (Screen::MainMenu, Action::MainMenu(MainMenuAction::Exit)) => true,
+                        (Screen::MainMenu, Action::MainMenu(MainMenuAction::Exit)) => true,
+                        (
+                            Screen::HeroSelect,
+                            Action::HeroSelect(HeroSelectAction::Choose(hero)),
+                        ) => controller.state().heroes.contains(&hero),
                         (Screen::Settings, Action::Settings(SettingsAction::Save)) => draft_changed,
                         _ => false,
                     };
@@ -557,6 +647,20 @@ mod tests {
     fn second_new_game_while_loading_is_a_no_op() {
         let mut controller = controller_at(Screen::Loading);
         let effects = submit_all(&mut controller, [Action::MainMenu(MainMenuAction::NewGame)]);
+        assert!(effects.is_empty());
+        assert_eq!(controller.state().screen, Screen::Loading);
+    }
+
+    #[test]
+    fn a_choose_while_loading_is_a_no_op() {
+        // The double-click protection of the new-game flow: the screen left
+        // HeroSelect, so a late or repeated Choose cannot start a second
+        // session.
+        let mut controller = controller_at(Screen::Loading);
+        let effects = submit_all(
+            &mut controller,
+            [Action::HeroSelect(HeroSelectAction::Choose(HEROES[0]))],
+        );
         assert!(effects.is_empty());
         assert_eq!(controller.state().screen, Screen::Loading);
     }
@@ -646,8 +750,14 @@ mod tests {
     #[test]
     fn failed_session_returns_to_menu_and_retry_clears_the_error() {
         let mut controller = controller();
-        let effects = submit_all(&mut controller, [Action::MainMenu(MainMenuAction::NewGame)]);
-        assert_eq!(effects, vec![Effect::StartSession]);
+        let effects = submit_all(
+            &mut controller,
+            [
+                Action::MainMenu(MainMenuAction::NewGame),
+                Action::HeroSelect(HeroSelectAction::Choose(HEROES[0])),
+            ],
+        );
+        assert_eq!(effects, vec![Effect::StartSession { hero: HEROES[0] }]);
         let effects = submit_all(
             &mut controller,
             [Action::Loading(LoadingAction::Failed(SessionError::Map))],
@@ -655,8 +765,14 @@ mod tests {
         assert!(effects.is_empty());
         assert_eq!(controller.state().screen, Screen::MainMenu);
         assert_eq!(controller.state().session_error, Some(SessionError::Map));
-        let effects = submit_all(&mut controller, [Action::MainMenu(MainMenuAction::NewGame)]);
-        assert_eq!(effects, vec![Effect::StartSession]);
+        let effects = submit_all(
+            &mut controller,
+            [
+                Action::MainMenu(MainMenuAction::NewGame),
+                Action::HeroSelect(HeroSelectAction::Choose(HEROES[2])),
+            ],
+        );
+        assert_eq!(effects, vec![Effect::StartSession { hero: HEROES[2] }]);
         assert_eq!(controller.state().screen, Screen::Loading);
         assert_eq!(controller.state().session_error, None);
     }

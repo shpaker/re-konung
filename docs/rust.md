@@ -545,6 +545,25 @@ before asking for group states (#38, #49). The rules' eight-direction offset
 table is a second copy of the engine's, because `k1-game` cannot import
 `kn-game`; `kn-game/tests/movement_grid.rs` holds the two together.
 
+### The marked hero's footprint
+
+The player squad is a creature of the simulation like any other: it draws no
+decision (`PlayerOrWarrior` returns before the shared RNG, `group_states`
+maps `PlayerInside` to what `Calm` does today), so no hero-specific behavior
+machinery exists (`k1-game/tests/original_rules.rs`, «a marked hero squad
+earns no decision and changes nobody else's»). Its physical presence,
+though, is a fact of the world: the squad's occupied cells enter the
+occupancy test of `walk_target` and of the static-work free neighbour, and
+one rejected attempt spends two more draws of the shared decision RNG —
+every later draw of every creature shifts. Measured over `Game.0`–`Game.2`
+of both editions on the start maps (#121): with the squad marked, villager
+walk counters differ from a squad-less world on map 1, whose village holds
+the hero's start; NPC load positions never move. The coupling is
+hero-agnostic — any creature standing there does the same — so a whole-world
+counter identity between a marked and an unmarked run is not a contract the
+engine can hold; the placement contract and the marked replay determinism
+live in `kn-game/tests/original_hero_start.rs`.
+
 ### Decision: turning in place
 
 `Decision::Turn(u8)` turns a standing creature to face the original's

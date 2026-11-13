@@ -16,6 +16,14 @@ pub enum Text {
     /// The game's own name in its release spelling per language.
     Title,
     NewGame,
+    /// The hero selection screen's heading.
+    HeroTitle,
+    /// A hero button when the game data carries no name for it (no texts, an
+    /// unnamed record, no game at all); `n` is the 1-based row, not the
+    /// `Game.N` number.
+    HeroSlot(usize),
+    /// Leaving the hero selection back to the main menu.
+    Back,
     Settings,
     Exit,
     Loading,
@@ -44,6 +52,28 @@ pub fn t(language: Language, text: Text) -> &'static str {
         Text::NewGame => match language {
             Language::Russian => "Новая игра",
             Language::English => "New game",
+        },
+        Text::HeroTitle => match language {
+            Language::Russian => "Выбор героя",
+            Language::English => "Choose your hero",
+        },
+        Text::HeroSlot(n) => match language {
+            Language::Russian => match n {
+                1 => "Герой 1",
+                2 => "Герой 2",
+                3 => "Герой 3",
+                _ => "Герой",
+            },
+            Language::English => match n {
+                1 => "Hero 1",
+                2 => "Hero 2",
+                3 => "Hero 3",
+                _ => "Hero",
+            },
+        },
+        Text::Back => match language {
+            Language::Russian => "Назад",
+            Language::English => "Back",
         },
         Text::Settings => match language {
             Language::Russian => "Настройки",
@@ -111,6 +141,8 @@ mod tests {
         let mut keys = vec![
             Text::Title,
             Text::NewGame,
+            Text::HeroTitle,
+            Text::Back,
             Text::Settings,
             Text::Exit,
             Text::Loading,
@@ -122,6 +154,7 @@ mod tests {
             Text::Save,
             Text::Cancel,
         ];
+        keys.extend([1, 2, 3, 4].map(Text::HeroSlot));
         keys.extend(
             [
                 SessionError::Map,

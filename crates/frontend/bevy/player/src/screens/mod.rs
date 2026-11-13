@@ -3,6 +3,7 @@
 //! screen. Views read [`crate::flow::AppFlow`] state and the applied
 //! settings; user intents leave them only as typed actions.
 
+pub(crate) mod hero_select;
 pub(crate) mod loading;
 pub(crate) mod main_menu;
 pub(crate) mod settings;

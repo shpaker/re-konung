@@ -10,8 +10,8 @@ use bevy::prelude::*;
 use bevy::ui::Checked;
 use bevy::ui::widget::Text;
 use bevy::ui_widgets::Checkbox;
-use common::{first_hero, game_dir, player_app, player_app_with};
-use kn_app::{Action, MainMenuAction, SettingsAction, SettingsField};
+use common::{all_heroes, first_hero, game_dir, player_app, player_app_with};
+use kn_app::{Action, HeroSelectAction, MainMenuAction, SettingsAction, SettingsField};
 use kn_fe_player::flow::{AppFlow, AppliedSettings};
 use kn_game::Game;
 use kn_settings::{Language, Settings};
@@ -59,7 +59,7 @@ fn the_menu_renders_in_the_applied_language() {
     let game = Game::open(&dir).unwrap();
     let hero = first_hero(&game);
 
-    let mut app = player_app(game, hero);
+    let mut app = player_app(game, vec![hero]);
     app.update();
     let shown = strings(&mut app);
     assert!(
@@ -74,7 +74,7 @@ fn the_menu_renders_in_the_applied_language() {
         language: Language::English,
         ..Settings::default()
     };
-    let mut app = player_app_with(Game::open(&dir).unwrap(), hero, english);
+    let mut app = player_app_with(Game::open(&dir).unwrap(), vec![hero], english);
     app.update();
     let shown = strings(&mut app);
     assert!(
@@ -94,7 +94,7 @@ fn the_settings_screen_previews_the_draft_and_mirrors_it_onto_the_widgets() {
     };
     let game = Game::open(&dir).unwrap();
     let hero = first_hero(&game);
-    let mut app = player_app(game, hero);
+    let mut app = player_app(game, vec![hero]);
     app.update();
 
     app.world_mut()
@@ -150,7 +150,7 @@ fn a_failed_save_shows_its_sentence_and_keeps_the_draft() {
     };
     let game = Game::open(&dir).unwrap();
     let hero = first_hero(&game);
-    let mut app = player_app(game, hero);
+    let mut app = player_app(game, vec![hero]);
     app.update();
     app.world_mut()
         .resource_mut::<AppFlow>()
@@ -200,14 +200,64 @@ fn the_loading_screen_shows_while_the_session_builds() {
     };
     let game = Game::open(&dir).unwrap();
     let hero = first_hero(&game);
-    let mut app = player_app(game, hero);
+    let mut app = player_app(game, vec![hero]);
     app.update();
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::MainMenu(MainMenuAction::NewGame));
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::HeroSelect(HeroSelectAction::Choose(hero)));
+    app.update();
+    assert!(
+        strings(&mut app).iter().any(|s| s.contains("Загрузка")),
+        "the loading line shows while the session builds"
+    );
+}
+
+/// The hero selection: one named button per offered hero, the names coming
+/// from the game data — and Back returns to the menu (#121).
+#[test]
+fn the_hero_select_offers_every_hero_by_name_and_back_returns() {
+    let Some(dir) = game_dir() else {
+        return;
+    };
+    let game = Game::open(&dir).unwrap();
+    let heroes = all_heroes(&game);
+    let names = game.hero_names(kn_game::MapSource::Game).unwrap();
+    let mut app = player_app(game, heroes);
+    app.update();
+
     app.world_mut()
         .resource_mut::<AppFlow>()
         .submit(Action::MainMenu(MainMenuAction::NewGame));
     app.update();
     assert!(
-        strings(&mut app).iter().any(|s| s.contains("Загрузка")),
-        "the loading line shows while the session builds"
+        strings(&mut app).iter().any(|s| s.contains("Выбор героя")),
+        "the hero-select screen opened"
+    );
+    let shown = strings(&mut app);
+    for (_, name) in &names {
+        assert!(
+            !name.is_empty(),
+            "the game data must name every hero for this test to be meaningful"
+        );
+        assert!(
+            shown.iter().any(|s| s.contains(name.as_str())),
+            "the button of hero {name:?} is on screen, got {shown:?}"
+        );
+    }
+    assert!(
+        shown.iter().any(|s| s.contains("Назад")),
+        "the way back is on screen"
+    );
+
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::HeroSelect(HeroSelectAction::Cancel));
+    app.update();
+    assert!(
+        strings(&mut app).iter().any(|s| s.contains("Новая игра")),
+        "Cancel returned to the main menu"
     );
 }

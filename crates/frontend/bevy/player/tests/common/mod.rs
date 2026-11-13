@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use kn_fe_player::flow::PlayerFlowPlugin;
-use kn_fe_player::session::NewGame;
 use kn_game::{Game, MapSource, TICK_MS};
 use kn_render::{
     AnimPlugin, Clock, CreatureAnimationPlugin, GameResource, KonungLightMaterial, PendingFrame,
@@ -33,13 +32,17 @@ pub(crate) fn game_dir() -> Option<PathBuf> {
 /// way `kn-ui`'s own tests do: assets, the scene machinery, a theme and the
 /// bundled fonts — everything `KonungUiPlugin` adds except Feathers itself,
 /// whose Shader asset needs the render registry.
-pub(crate) fn player_app(game: Game, hero: u32) -> App {
-    player_app_with(game, hero, kn_settings::defaults())
+pub(crate) fn player_app(game: Game, heroes: Vec<u32>) -> App {
+    player_app_with(game, heroes, kn_settings::defaults())
 }
 
 /// [`player_app`] with explicit startup settings (the applied language of the
 /// menu, the video defaults the window would be born in).
-pub(crate) fn player_app_with(game: Game, hero: u32, settings: kn_settings::Settings) -> App {
+pub(crate) fn player_app_with(
+    game: Game,
+    heroes: Vec<u32>,
+    settings: kn_settings::Settings,
+) -> App {
     let mut app = App::new();
     app.add_plugins((
         MinimalPlugins,
@@ -55,8 +58,8 @@ pub(crate) fn player_app_with(game: Game, hero: u32, settings: kn_settings::Sett
     .insert_resource(Assets::<Image>::default())
     .insert_resource(Assets::<KonungLightMaterial>::default())
     .init_resource::<PendingFrame>()
-    .insert_resource(NewGame { hero })
     .add_plugins(PlayerFlowPlugin {
+        heroes,
         settings,
         settings_path: None,
     });
@@ -73,4 +76,9 @@ pub(crate) fn player_app_with(game: Game, hero: u32, settings: kn_settings::Sett
 /// The first hero of the starting state, which the window opens.
 pub(crate) fn first_hero(game: &Game) -> u32 {
     game.heroes(MapSource::Game).unwrap()[0]
+}
+
+/// Every hero the game directory offers, the list the new-game flow renders.
+pub(crate) fn all_heroes(game: &Game) -> Vec<u32> {
+    game.heroes(MapSource::Game).unwrap()
 }

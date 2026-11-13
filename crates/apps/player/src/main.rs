@@ -1,7 +1,7 @@
 //! `re-konung` — the «Князь» player.
 //!
 //! Bootstrap order: settings first (they shape the window before it exists),
-//! then the game and the hero, then the Bevy frontend (`kn-fe-player`). A
+//! then the game and its heroes, then the Bevy frontend (`kn-fe-player`). A
 //! session is never built here — only the frontend's AppFlow pipeline builds
 //! one.
 
@@ -80,19 +80,22 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let Some(hero) = game
-        .heroes(MapSource::Game)
-        .ok()
-        .and_then(|h| h.first().copied())
-    else {
-        eprintln!("{}: нет Game.N — не с чего начать", cli.game_dir.display());
-        return ExitCode::FAILURE;
+    let heroes = match game.heroes(MapSource::Game) {
+        Ok(heroes) if !heroes.is_empty() => heroes,
+        Ok(_) => {
+            eprintln!("{}: нет Game.N — не с чего начать", cli.game_dir.display());
+            return ExitCode::FAILURE;
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
     };
 
     run_player(PlayerConfig {
         game,
         game_dir: cli.game_dir,
-        hero,
+        heroes,
         settings,
         settings_path,
         start: if cli.new_game {

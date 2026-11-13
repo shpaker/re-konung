@@ -13,11 +13,9 @@ use crate::state::{SaveError, SessionError};
 /// Main menu intents.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MainMenuAction {
-    /// Start a new game: enter [`Loading`](crate::Screen::Loading) and wait
-    /// for the session build, clearing any previous
-    /// [`session_error`](crate::AppState::session_error). Emits
-    /// [`StartSession`](crate::Effect::StartSession); a repeat while already
-    /// loading is a no-op, so a double click cannot start two sessions.
+    /// Open the hero selection screen of the new-game flow, clearing any
+    /// previous [`session_error`](crate::AppState::session_error). The
+    /// session itself starts only from [`HeroSelectAction::Choose`].
     NewGame,
     /// Open the settings screen with a draft copied from the applied settings.
     OpenSettings,
@@ -34,6 +32,21 @@ pub enum SettingsField {
     Language(Language),
     Fullscreen(bool),
     Vsync(bool),
+}
+
+/// Hero selection intents — the second step of the new-game flow.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HeroSelectAction {
+    /// Start a new game as the hero `Game.N` `hero`: enter
+    /// [`Loading`](crate::Screen::Loading) and wait for the session build.
+    /// Emits [`StartSession`](crate::Effect::StartSession) carrying the same
+    /// number; a hero outside [`AppState::heroes`](crate::AppState::heroes)
+    /// is a no-op, so a stale frontend cannot start a bogus session. The
+    /// number is the starting-state file number the game layer resolves
+    /// (`Game::heroes`), not a screen row.
+    Choose(u32),
+    /// Return to the main menu; no session is requested.
+    Cancel,
 }
 
 /// Settings screen intents.
@@ -82,6 +95,7 @@ pub enum PersistOutcome {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
     MainMenu(MainMenuAction),
+    HeroSelect(HeroSelectAction),
     Settings(SettingsAction),
     Loading(LoadingAction),
     Persisted(PersistOutcome),

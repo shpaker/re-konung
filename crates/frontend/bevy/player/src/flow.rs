@@ -36,8 +36,8 @@ use crate::session::{self, SessionInit};
 pub struct AppFlow(pub AppController);
 
 impl AppFlow {
-    pub fn new(applied: Settings) -> Self {
-        Self(AppController::new(applied))
+    pub fn new(heroes: Vec<u32>, applied: Settings) -> Self {
+        Self(AppController::new(heroes, applied))
     }
 
     pub fn state(&self) -> &AppState {
@@ -83,10 +83,13 @@ pub struct FlowSet;
 
 /// Adds the AppFlow pipeline with its resources. The app must already run the
 /// creature subsystem (`kn_render::CreatureAnimationPlugin`) and provide
-/// [`kn_render::GameResource`], [`session::NewGame`], a [`kn_render::TextureCache`]
+/// [`kn_render::GameResource`], a [`kn_render::TextureCache`]
 /// and `Assets<Image>`/`Assets<KonungLightMaterial>` — what any window drawing
 /// this game has anyway.
 pub struct PlayerFlowPlugin {
+    /// The heroes the new-game flow offers, as the game directory resolves
+    /// them (`Game.N` numbers).
+    pub heroes: Vec<u32>,
     /// The applied-and-persisted settings the startup loaded.
     pub settings: Settings,
     /// Where [`Effect::ApplyAndPersist`] writes; `None` disables saving.
@@ -95,7 +98,7 @@ pub struct PlayerFlowPlugin {
 
 impl Plugin for PlayerFlowPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(AppFlow::new(self.settings))
+        app.insert_resource(AppFlow::new(self.heroes.clone(), self.settings))
             .insert_resource(PendingEffects::default())
             .insert_resource(AppliedSettings(self.settings))
             .insert_resource(SettingsPath(self.settings_path.clone()))
@@ -140,7 +143,7 @@ fn apply_effects(world: &mut World) {
     let effects = std::mem::take(&mut world.resource_mut::<PendingEffects>().0);
     for effect in effects {
         match effect {
-            Effect::StartSession => match session::init(world) {
+            Effect::StartSession { hero } => match session::init(world, hero) {
                 Ok(()) => {}
                 Err(kind) => {
                     // init already tore its half-built session down; the
@@ -235,6 +238,7 @@ fn sync_screens(world: &mut World) {
     }
     match screen {
         Screen::MainMenu => crate::screens::main_menu::spawn(world),
+        Screen::HeroSelect => crate::screens::hero_select::spawn(world),
         Screen::Settings => crate::screens::settings::spawn(world),
         Screen::Loading => crate::screens::loading::spawn(world),
         Screen::Playing => {}
@@ -302,14 +306,16 @@ mod tests {
     }
 
     fn app_at(screen: Screen) -> App {
-        let mut flow = AppFlow::new(Settings::default());
+        let mut flow = AppFlow::new(vec![0, 1, 2], Settings::default());
         // Drive the controller through legal transitions only; the emitted
         // effects are the pipeline's business, not the condition's.
         match screen {
             Screen::MainMenu => {}
+            Screen::HeroSelect => flow.submit(Action::MainMenu(kn_app::MainMenuAction::NewGame)),
             Screen::Settings => flow.submit(Action::MainMenu(kn_app::MainMenuAction::OpenSettings)),
             Screen::Loading | Screen::Playing => {
                 flow.submit(Action::MainMenu(kn_app::MainMenuAction::NewGame));
+                flow.submit(Action::HeroSelect(kn_app::HeroSelectAction::Choose(0)));
                 if screen == Screen::Playing {
                     flow.submit(Action::Loading(LoadingAction::Succeeded));
                 }

@@ -341,6 +341,41 @@ impl Game {
         Ok(self.dir.state_numbers(source.file_set())?)
     }
 
+    /// The name of each hero, the way the original's new-game menu shows it:
+    /// the first record of the player group, assembled by the game's own rule
+    /// from the executable's name tables (docs/k1/formats/game-state.md,
+    /// bytes 0xD4/0xD5; `game_newgame.cpp:306-351`). Game data, not interface
+    /// strings — an edition without the tables, or a record without a name,
+    /// yields an empty string the caller renders with its own fallback.
+    pub fn hero_names(&self, source: MapSource) -> Result<Vec<(u32, String)>> {
+        let files = source.file_set();
+        let mut names = Vec::new();
+        for hero in self.heroes(source)? {
+            let state_bytes = self.dir.state_bytes(hero, files)?;
+            let state = game_state::parse(&state_bytes)?;
+            let entities = game_state::on_map(
+                &state,
+                game_state::start_map(hero as usize),
+                Some(hero as usize),
+            );
+            let name = entities
+                .start
+                .and_then(|group| group.members().next())
+                .and_then(|member| state.characters.get(member).and_then(Option::as_ref))
+                .map(|character| {
+                    k1_data::executable::character_name(
+                        self.resources.tables.texts.as_ref(),
+                        character.class_id,
+                        character.name_id,
+                        character.nick_id,
+                    )
+                })
+                .unwrap_or_default();
+            names.push((hero, name));
+        }
+        Ok(names)
+    }
+
     /// The single place a creature/character subsystem decides which `Game.N` to
     /// load: the caller's `requested` hero, else the first available. The Scene,
     /// the simulation and the clips all ask here, so choosing a hero other than
