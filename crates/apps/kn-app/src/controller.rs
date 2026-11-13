@@ -30,7 +30,10 @@ impl AppController {
         Self {
             state: AppState {
                 screen: Screen::MainMenu,
-                heroes,
+                heroes: heroes.clone(),
+                // The screen opens on the first offered hero; an empty offer
+                // stays `None`.
+                hero_preview: heroes.first().copied(),
                 applied,
                 settings_screen: None,
                 saving: None,
@@ -71,6 +74,11 @@ impl AppController {
             (Screen::MainMenu, Action::MainMenu(MainMenuAction::NewGame)) => {
                 self.state.session_error = None;
                 self.state.screen = Screen::HeroSelect;
+            }
+            (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::Preview(hero))) => {
+                if self.state.heroes.contains(&hero) {
+                    self.state.hero_preview = Some(hero);
+                }
             }
             (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::Choose(hero))) => {
                 // The offered list is the only source of valid numbers: a
@@ -269,6 +277,7 @@ mod tests {
         let controller = AppController::new(HEROES.into(), applied);
         assert_eq!(controller.state().screen, Screen::MainMenu);
         assert_eq!(controller.state().heroes, HEROES);
+        assert_eq!(controller.state().hero_preview, Some(HEROES[0]));
         assert_eq!(controller.state().applied, applied);
         assert_eq!(controller.state().settings_screen, None);
         assert_eq!(controller.state().session_error, None);
@@ -302,6 +311,32 @@ mod tests {
             assert_eq!(controller.state().screen, Screen::Loading);
             assert_eq!(controller.state().session_error, None);
         }
+    }
+
+    #[test]
+    fn hero_select_preview_moves_the_detail_panel_target() {
+        let mut controller = controller_at(Screen::HeroSelect);
+        let effects = submit_all(
+            &mut controller,
+            [Action::HeroSelect(HeroSelectAction::Preview(HEROES[2]))],
+        );
+        assert!(effects.is_empty());
+        assert_eq!(controller.state().screen, Screen::HeroSelect);
+        assert_eq!(controller.state().hero_preview, Some(HEROES[2]));
+    }
+
+    #[test]
+    fn hero_select_preview_of_an_unoffered_hero_is_a_no_op() {
+        let mut controller = controller_at(Screen::HeroSelect);
+        let before = controller.state().clone();
+        let effects = submit_all(
+            &mut controller,
+            [Action::HeroSelect(HeroSelectAction::Preview(
+                HEROES[HEROES.len() - 1] + 1,
+            ))],
+        );
+        assert!(effects.is_empty());
+        assert_eq!(controller.state(), &before);
     }
 
     #[test]
@@ -591,6 +626,8 @@ mod tests {
             Action::MainMenu(MainMenuAction::Exit),
             Action::HeroSelect(HeroSelectAction::Choose(HEROES[0])),
             Action::HeroSelect(HeroSelectAction::Choose(HEROES[2] + 1)),
+            Action::HeroSelect(HeroSelectAction::Preview(HEROES[1])),
+            Action::HeroSelect(HeroSelectAction::Preview(HEROES[2] + 1)),
             Action::HeroSelect(HeroSelectAction::Cancel),
             Action::Settings(SettingsAction::Change(SettingsField::Language(
                 Language::English,

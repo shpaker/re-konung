@@ -92,6 +92,13 @@ pub struct AppState {
     /// legal state (nothing to offer); `HeroSelectAction::Choose` of a number
     /// outside it is a no-op.
     pub heroes: Vec<u32>,
+    /// The hero the hero-select screen shows the details of: the first
+    /// offered hero at startup, [`HeroSelectAction::Preview`] afterwards —
+    /// the offer persists across re-entries of the screen. `Some` exactly
+    /// while it is a hero of [`AppState::heroes`]; `None` — an empty offer.
+    /// The session still starts from `HeroSelectAction::Choose`, which
+    /// carries its own number.
+    pub hero_preview: Option<u32>,
     /// The last applied-and-persisted settings; the main menu and the whole UI
     /// render in `applied.language`, the settings screen previews
     /// `draft.language`.

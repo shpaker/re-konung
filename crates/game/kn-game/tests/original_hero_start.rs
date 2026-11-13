@@ -31,6 +31,7 @@ use k1_game::creatures;
 use k1_game::resources::Resources;
 use kn_game::movement::{Cell, Grid, Passage};
 use kn_game::simulation::{MapPassage, Simulation};
+use kn_game::{Game, MapSource};
 
 /// The same fixed seed the viewer replays with and the player window starts a
 /// session with — one reproducible world everywhere.
@@ -319,6 +320,55 @@ fn a_marked_start_map_replays_deterministically() {
             !marked.goal_reaches().is_empty(),
             "{edition}: no arrivals on the first hero's start map — the replay \
              comparison would hold vacuously"
+        );
+    }
+}
+
+/// The hero presentation of the original's new-game menu, resolvable from the
+/// facade: every summary carries a name — the original assigns them by the
+/// hero number, so they are distinct — and the derived numbers stay within
+/// what the original's own formulas produce. Structure only — the numbers
+/// themselves are game data, no content pins (#34's rule).
+#[test]
+fn the_menu_can_present_every_hero() {
+    let roots = game_roots();
+    if roots.is_empty() {
+        return;
+    }
+    for (edition, root) in roots {
+        let game = Game::open(&root).unwrap();
+        let summaries = game.hero_summaries(MapSource::Game).unwrap();
+        let heroes = game.heroes(MapSource::Game).unwrap();
+        assert_eq!(
+            summaries.len(),
+            heroes.len(),
+            "{edition}: one summary per starting state"
+        );
+        for summary in &summaries {
+            assert!(
+                !summary.name.is_empty(),
+                "{edition} hero {}: the hero's name-table entry resolves",
+                summary.hero
+            );
+            assert!(
+                summary.max_party > 0 && summary.max_party <= 10,
+                "{edition} hero {}: max party size {} is the charisma table's range",
+                summary.hero,
+                summary.max_party
+            );
+            assert!(
+                summary.carrying > 0.0,
+                "{edition} hero {}: carrying capacity is positive",
+                summary.hero
+            );
+        }
+        let mut names: Vec<_> = summaries.iter().map(|s| s.name.clone()).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(
+            names.len(),
+            summaries.len(),
+            "{edition}: the heroes carry distinct names"
         );
     }
 }

@@ -112,9 +112,13 @@ impl Plugin for PlayerFlowPlugin {
             )
             .add_systems(
                 Update,
-                // The settings widgets mirror the draft after the chain has
-                // reduced this frame's actions into it.
-                crate::screens::settings::sync.after(FlowSet),
+                // The screen widgets mirror the state after the chain has
+                // reduced this frame's actions into it: the settings draft
+                // onto the widgets, the hero-select preview onto its view.
+                (
+                    crate::screens::settings::sync.after(FlowSet),
+                    crate::screens::hero_select::sync.after(FlowSet),
+                ),
             )
             .add_systems(
                 Update,

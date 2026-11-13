@@ -258,6 +258,83 @@ pub struct MapRef {
     pub number: u32,
 }
 
+/// The hero each `Game.N` stands for, by the executable's name-table index
+/// the original assigns in code (`game_newgame.cpp:305-351`): hero 0 → entry
+/// 10, hero 1 → 124, hero 2 → 151 (docs/k1/formats/game-state.md). The
+/// player-group records of the starting states carry one shared name and are
+/// not the heroes' identity.
+const HERO_NAME_IDS: [u8; 3] = [10, 124, 151];
+
+/// One hero of the new-game flow, the way the original's new-game menu
+/// presented them (`game_newgame.cpp:115-186`): every number comes straight
+/// from the hero's character record of the starting state
+/// (docs/k1/formats/game-state.md, offsets 0x33–0x64, confirmed for both
+/// editions), the derived ones by the original's own formulas.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeroSummary {
+    /// The `Game.N` starting-state number.
+    pub hero: u32,
+    /// The hero's name from the executable's name tables; empty when the
+    /// tables are missing or the number is not one of the three heroes.
+    pub name: String,
+    pub level: u8,
+    pub experience: i32,
+    pub gold: i32,
+    /// The unspent points the original's menu printed.
+    pub free_points: i32,
+    /// The base attributes the menu printed (0x56/0x5A/0x60/0x64), not the
+    /// current ones.
+    pub agility: i16,
+    pub charisma: i16,
+    pub strength: i16,
+    pub endurance: i16,
+    /// Health on the interface scale: the file holds 0…1600 and the original
+    /// printed `(HP + 15) / 16` points (`game_state.cpp:47`).
+    pub health: i16,
+    /// Carrying capacity, the original's formula over the current endurance
+    /// (`game_newgame.cpp:152-154`).
+    pub carrying: f32,
+    /// The largest party the hero can lead, the original's charisma
+    /// thresholds over the occupation class (`game_state.cpp:173-190`).
+    pub max_party: usize,
+    /// The seven skills the menu showed, file order (0x40–0x4C): fencing,
+    /// trading, accuracy, carpentry, medicine, identification, smithery.
+    /// The armor and poisoning slots (0x4E/0x50) are combat states, not
+    /// starting facts, and stay out.
+    pub fencing: i16,
+    pub trading: i16,
+    pub accuracy: i16,
+    pub carpentry: i16,
+    pub medicine: i16,
+    pub identification: i16,
+    pub smithery: i16,
+}
+
+/// The original's max party size (`game_state.cpp:173-190`): the number of
+/// charisma thresholds the current charisma meets, plus one.
+fn max_party_size(class_id: u8, charisma: i16) -> usize {
+    const PARTY_SIZE_CHARM: [[i16; 10]; 5] = [
+        [15, 21, 28, 36, 45, 55, 65, 74, 83, 95],
+        [15, 21, 28, 36, 45, 55, 65, 74, 83, 95],
+        [17, 23, 30, 38, 47, 57, 67, 76, 85, 97],
+        [15, 21, 28, 36, 45, 55, 65, 74, 83, 95],
+        [20, 28, 36, 45, 55, 65, 74, 83, 95, 110],
+    ];
+    // The row indexes the occupation class (1..=5); the original reads past
+    // the table for anything else, which no shipped record carries.
+    let Some(row) = usize::from(class_id & 7)
+        .checked_sub(1)
+        .and_then(|class| PARTY_SIZE_CHARM.get(class))
+    else {
+        return 0;
+    };
+    let passed = row
+        .iter()
+        .take_while(|&&threshold| charisma >= threshold)
+        .count();
+    (passed + 1).min(10)
+}
+
 /// Что добавить к чистой карте.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SceneOptions {
@@ -348,8 +425,29 @@ impl Game {
     /// strings — an edition without the tables, or a record without a name,
     /// yields an empty string the caller renders with its own fallback.
     pub fn hero_names(&self, source: MapSource) -> Result<Vec<(u32, String)>> {
+        Ok(self
+            .hero_summaries(source)?
+            .into_iter()
+            .map(|summary| (summary.hero, summary.name))
+            .collect())
+    }
+
+    /// Each hero the way the original's new-game menu presented them
+    /// (`game_newgame.cpp:115-186`). The name comes from the executable's
+    /// name table by the hero's number — the original assigns it in code
+    /// (`game_newgame.cpp:305-351`, docs/k1/formats/game-state.md), because
+    /// the player-group record the starting states carry is the same in
+    /// every `Game.N` of both editions (measured) and is not the hero's
+    /// identity. The numbers come from that record: the base attributes and
+    /// health the menu printed, the ones it derived (carrying capacity, max
+    /// party size), the seven skills it showed, and level, experience, gold
+    /// and free points (docs/k1/formats/game-state.md, offsets 0x33–0x64,
+    /// confirmed for both editions). An unknown hero number, or texts the
+    /// exe does not carry, yields an empty name the caller renders with its
+    /// own fallback.
+    pub fn hero_summaries(&self, source: MapSource) -> Result<Vec<HeroSummary>> {
         let files = source.file_set();
-        let mut names = Vec::new();
+        let mut summaries = Vec::new();
         for hero in self.heroes(source)? {
             let state_bytes = self.dir.state_bytes(hero, files)?;
             let state = game_state::parse(&state_bytes)?;
@@ -358,22 +456,80 @@ impl Game {
                 game_state::start_map(hero as usize),
                 Some(hero as usize),
             );
-            let name = entities
+            let name = || {
+                HERO_NAME_IDS
+                    .get(hero as usize)
+                    .and_then(|&name_id| {
+                        self.resources
+                            .tables
+                            .texts
+                            .as_ref()
+                            .and_then(|texts| texts.names.get(usize::from(name_id)))
+                    })
+                    .map(|name| name.trim().to_string())
+                    .unwrap_or_default()
+            };
+            let record = entities
                 .start
                 .and_then(|group| group.members().next())
-                .and_then(|member| state.characters.get(member).and_then(Option::as_ref))
-                .map(|character| {
-                    k1_data::executable::character_name(
-                        self.resources.tables.texts.as_ref(),
-                        character.class_id,
-                        character.name_id,
-                        character.nick_id,
-                    )
-                })
-                .unwrap_or_default();
-            names.push((hero, name));
+                .and_then(|member| state.characters.get(member).and_then(Option::as_ref));
+            let Some(character) = record else {
+                summaries.push(HeroSummary {
+                    hero,
+                    name: name(),
+                    level: 0,
+                    experience: 0,
+                    gold: 0,
+                    free_points: 0,
+                    agility: 0,
+                    charisma: 0,
+                    strength: 0,
+                    endurance: 0,
+                    health: 0,
+                    carrying: 0.0,
+                    max_party: 0,
+                    fencing: 0,
+                    trading: 0,
+                    accuracy: 0,
+                    carpentry: 0,
+                    medicine: 0,
+                    identification: 0,
+                    smithery: 0,
+                });
+                continue;
+            };
+            // The base attributes the original's menu printed: 0x56/0x5A/0x60/0x64
+            // (game_state.cpp:47-64). Health rides the interface scale: the file
+            // holds 0…1600, the menu printed points.
+            let attributes = character.attributes;
+            let health = (i32::from(attributes[4]) + 15) / 16;
+            // Carrying capacity, the original's own formula over the current
+            // endurance (`game_newgame.cpp:152-154`).
+            let carrying = ((i32::from(attributes[7]) * 1000) / 3 + 10_000) as f32 * 0.001;
+            summaries.push(HeroSummary {
+                hero,
+                name: name(),
+                level: character.level,
+                experience: character.experience,
+                gold: character.gold,
+                free_points: character.free_points,
+                agility: attributes[1],
+                charisma: attributes[3],
+                strength: attributes[6],
+                endurance: attributes[8],
+                health: health as i16,
+                carrying,
+                max_party: max_party_size(character.class_id, attributes[2]),
+                fencing: character.skills[0],
+                trading: character.skills[1],
+                accuracy: character.skills[2],
+                carpentry: character.skills[3],
+                medicine: character.skills[4],
+                identification: character.skills[5],
+                smithery: character.skills[6],
+            });
         }
-        Ok(names)
+        Ok(summaries)
     }
 
     /// The single place a creature/character subsystem decides which `Game.N` to

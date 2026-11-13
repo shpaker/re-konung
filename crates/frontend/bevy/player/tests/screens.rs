@@ -215,16 +215,18 @@ fn the_loading_screen_shows_while_the_session_builds() {
     );
 }
 
-/// The hero selection: one named button per offered hero, the names coming
-/// from the game data — and Back returns to the menu (#121).
+/// The hero selection in full: one named card per offered hero, the dossier
+/// of the previewed hero on the right (attributes, skills, the rest), and
+/// the two actions — preview moves the dossier, Back returns to the menu
+/// (#121).
 #[test]
-fn the_hero_select_offers_every_hero_by_name_and_back_returns() {
+fn the_hero_select_presents_every_hero_and_previews_the_details() {
     let Some(dir) = game_dir() else {
         return;
     };
     let game = Game::open(&dir).unwrap();
     let heroes = all_heroes(&game);
-    let names = game.hero_names(kn_game::MapSource::Game).unwrap();
+    let summaries = game.hero_summaries(kn_game::MapSource::Game).unwrap();
     let mut app = player_app(game, heroes);
     app.update();
 
@@ -232,24 +234,64 @@ fn the_hero_select_offers_every_hero_by_name_and_back_returns() {
         .resource_mut::<AppFlow>()
         .submit(Action::MainMenu(MainMenuAction::NewGame));
     app.update();
+    let shown = strings(&mut app);
     assert!(
-        strings(&mut app).iter().any(|s| s.contains("Выбор героя")),
+        shown.iter().any(|s| s.contains("Выбор героя")),
         "the hero-select screen opened"
     );
-    let shown = strings(&mut app);
-    for (_, name) in &names {
+    for summary in &summaries {
         assert!(
-            !name.is_empty(),
+            !summary.name.is_empty(),
             "the game data must name every hero for this test to be meaningful"
         );
         assert!(
-            shown.iter().any(|s| s.contains(name.as_str())),
-            "the button of hero {name:?} is on screen, got {shown:?}"
+            shown.iter().any(|s| s.contains(summary.name.as_str())),
+            "the card of hero {:?} is on screen, got {shown:?}",
+            summary.name
         );
     }
-    assert!(
-        shown.iter().any(|s| s.contains("Назад")),
-        "the way back is on screen"
+    // The dossier of the default preview (the first hero), sectioned.
+    for part in [
+        "Атрибуты",
+        "Навыки",
+        "Прочее",
+        "Сила",
+        "Фехтование",
+        "Начать",
+    ] {
+        assert!(
+            shown.iter().any(|s| s.contains(part)),
+            "the dossier holds {part:?}, got {shown:?}"
+        );
+    }
+    let first_name = summaries[0].name.clone();
+    let occurrences =
+        |app: &mut App, name: &str| strings(app).iter().filter(|s| s.as_str() == name).count();
+    let second_name = summaries[1].name.clone();
+    assert_eq!(
+        occurrences(&mut app, &second_name),
+        1,
+        "the second hero's name sits on its card alone"
+    );
+
+    // Preview moves the dossier: the second hero's name now reads on its
+    // card and again as the dossier heading.
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::HeroSelect(HeroSelectAction::Preview(
+            summaries[1].hero,
+        )));
+    app.update();
+    let shown = strings(&mut app);
+    assert_eq!(
+        occurrences(&mut app, &second_name),
+        2,
+        "the dossier follows the preview, got {shown:?}"
+    );
+    assert_eq!(
+        occurrences(&mut app, &first_name),
+        1,
+        "the first hero is back to its card alone"
     );
 
     app.world_mut()

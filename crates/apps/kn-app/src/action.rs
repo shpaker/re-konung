@@ -37,6 +37,12 @@ pub enum SettingsField {
 /// Hero selection intents — the second step of the new-game flow.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HeroSelectAction {
+    /// Highlight the offered hero `hero` on the screen (the detail panel
+    /// follows): [`AppState::hero_preview`] becomes `hero`. A hero outside
+    /// [`AppState::heroes`](crate::AppState::heroes) is a no-op, like every
+    /// off-screen action. No effect: the session starts from
+    /// [`Choose`](HeroSelectAction::Choose) only.
+    Preview(u32),
     /// Start a new game as the hero `Game.N` `hero`: enter
     /// [`Loading`](crate::Screen::Loading) and wait for the session build.
     /// Emits [`StartSession`](crate::Effect::StartSession) carrying the same

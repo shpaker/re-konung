@@ -101,8 +101,15 @@ game a player runs look like the same engine. What it fixes:
 - **Controls.** Feathers widgets composed through kn-ui helpers — adopted, not
   re-implemented — with explicit states (hover, pressed, disabled, checked,
   focus ring) and keyboard navigation as first-class.
-- **Minimalism.** No decorative noise: compact panels, flat surfaces, screen
-  space belongs to the world.
+- **Minimalism.** Minimalism in presentation, not in information. No
+  decorative noise: compact panels, flat surfaces, screen space belongs to
+  the world. Presentation is minimal so the content reads; the content never
+  shrinks to earn the style — an interface of re-konung carries no less
+  information than the original Konung did (its facts come from `docs/`),
+  organized the way the reference organizes it: a clear hierarchy, side-by-side
+  comparison, a detail panel over progressive disclosure. A screen that
+  reduces the original's facts to three buttons is a regression, not a
+  restyle.
 
 The UI is deliberately **not** a copy of the original Konung interface — the
 stance of [../AGENTS.md](../AGENTS.md), "Priority: modern experience". The
