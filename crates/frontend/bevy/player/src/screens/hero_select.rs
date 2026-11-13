@@ -1,16 +1,27 @@
 //! The hero selection of the new-game flow, in the spirit of the original's
 //! new-game menu (Slavik `game_newgame.cpp:115-186`) and the classical CRPG
-//! presentation: a card per offered hero on the left, the chosen hero's
-//! dossier on the right — base attributes, health, carry limit, max party,
-//! the seven skills, level, experience, gold, free points — every number the
-//! game data carries and the original showed, nothing invented. The choice
-//! leaves only as the typed `HeroSelectAction`; the reducer owns who starts
-//! a session.
+//! presentation: a portrait card per offered hero on the left, the chosen
+//! hero's dossier on the right — the description from the game's own lines,
+//! the menu numbers (base attributes, health, carry limit, max party, the
+//! seven skills, level, experience, gold, free points) and the hero's
+//! selected portrait. Every number is the original's own; nothing invented.
+//! The choice leaves only as the typed `HeroSelectAction`; the reducer owns
+//! who starts a session.
 
-use bevy::feathers::{controls::ButtonVariant, display::caption, font_styles::InheritableFont};
+use std::collections::HashMap;
+
+use bevy::asset::RenderAssetUsages;
+use bevy::feathers::{
+    controls::{ButtonVariant, FeathersButton},
+    display::caption,
+    font_styles::InheritableFont,
+};
+use bevy::image::Image;
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::scene::{EntityScene, Scene, SceneList};
 use bevy::text::FontWeight;
+use bevy::ui::widget::ImageNode;
 use bevy::ui_widgets::Activate;
 use kn_app::{Action, HeroSelectAction};
 use kn_game::{HeroSummary, MapSource};
@@ -26,6 +37,13 @@ use crate::screens;
 /// screen's `BuiltLanguage` pattern.
 #[derive(Resource)]
 struct HeroSelectView(Option<u32>);
+
+/// The heroes' portraits, decoded once per process from the game's menu
+/// images (`NEWH800R.RES`, any edition's — the portraits are identical);
+/// keyed by record number. `None` — no game or an unreadable file: the cards
+/// fall back to name-only buttons, the dossier to text alone.
+#[derive(Resource, Default)]
+struct HeroPortraits(Option<HashMap<u8, Handle<Image>>>);
 
 /// Which `Game.N` the clicked card stands for; the shared observer reads it
 /// off the activated entity, so the card list stays data-driven.
@@ -49,10 +67,57 @@ pub(crate) fn spawn(world: &mut World) {
         .get_resource::<GameResource>()
         .and_then(|game| game.0.hero_summaries(MapSource::Game).ok())
         .unwrap_or_default();
+    if !world.contains_resource::<HeroPortraits>() {
+        // The game's root first, so the world borrow ends before the assets
+        // borrow starts.
+        let game_root = world
+            .get_resource::<GameResource>()
+            .map(|game| game.0.root().to_path_buf());
+        let records = game_root.and_then(|root| {
+            ["NEWH800R.RES", "NEWH800E.RES"].iter().find_map(|name| {
+                let bytes = std::fs::read(root.join(name)).ok()?;
+                k1_data::newh_res::parse(&bytes).ok()
+            })
+        });
+        let portraits = records.map(|records| {
+            let mut images = world.resource_mut::<Assets<Image>>();
+            records
+                .images
+                .into_iter()
+                .enumerate()
+                .skip(3)
+                .take(6)
+                .map(|(record, image)| (record as u8, images.add(portrait_image(image))))
+                .collect::<HashMap<u8, Handle<Image>>>()
+        });
+        world.insert_resource(HeroPortraits(portraits));
+    }
+    let portraits = world
+        .resource::<HeroPortraits>()
+        .0
+        .clone()
+        .unwrap_or_default();
     world
-        .spawn_scene(root(&fonts, language, &heroes, preview, &summaries))
+        .spawn_scene(root(
+            &fonts, language, &heroes, preview, &summaries, &portraits,
+        ))
         .expect("the hero-select root spawns");
     world.insert_resource(HeroSelectView(preview));
+}
+
+/// The decoded menu image as a texture: straight-alpha RGBA.
+fn portrait_image(image: k1_data::newh_res::Image) -> Image {
+    Image::new(
+        Extent3d {
+            width: u32::from(image.width),
+            height: u32::from(image.height),
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        image.rgba,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    )
 }
 
 /// Respawns the view when the previewed hero moved: the detail panel and the
@@ -80,21 +145,27 @@ fn root(
     heroes: &[u32],
     preview: Option<u32>,
     summaries: &[HeroSummary],
+    portraits: &HashMap<u8, Handle<Image>>,
 ) -> impl Scene {
     let cards = heroes
         .iter()
         .enumerate()
         .map(|(row, &hero)| {
-            let name = summaries
-                .iter()
-                .find(|summary| summary.hero == hero)
+            let summary = summaries.iter().find(|summary| summary.hero == hero);
+            let name = summary
                 .map(|summary| summary.name.as_str())
                 .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| t(language, Text::HeroSlot(row + 1)));
-            hero_card(fonts, hero, name, preview == Some(hero))
+            let portrait = summary
+                .map(|summary| summary.portrait)
+                .and_then(|record| portraits.get(&record).cloned());
+            hero_card(hero, name, portrait, preview == Some(hero))
         })
         .collect::<Vec<_>>();
     let dossier = preview.and_then(|hero| summaries.iter().find(|summary| summary.hero == hero));
+    let dossier_portrait = dossier
+        .map(|summary| summary.portrait_selected)
+        .and_then(|record| portraits.get(&record).cloned());
     bsn! {
         Node {
             width: percent(100),
@@ -118,6 +189,7 @@ fn root(
                 language,
                 cards,
                 dossier,
+                dossier_portrait,
             ))}
             --
             {EntityScene(action_row(fonts, language, preview))}
@@ -132,8 +204,10 @@ fn dossier_row(
     language: kn_settings::Language,
     cards: Vec<impl Scene>,
     dossier: Option<&HeroSummary>,
+    dossier_portrait: Option<Handle<Image>>,
 ) -> impl Scene {
-    let dossier_list: Box<dyn SceneList> = Box::new(dossier_list(fonts, language, dossier));
+    let dossier_list: Box<dyn SceneList> =
+        Box::new(dossier_list(fonts, language, dossier, dossier_portrait));
     bsn! {
         Node {
             flex_direction: FlexDirection::Row,
@@ -148,33 +222,49 @@ fn dossier_row(
     }
 }
 
-/// One hero card of the list; the previewed one reads as primary, exactly
-/// like the settings screen's active language. Two blocks: the BSN grammar
-/// only takes component constructors, not value expressions.
-fn hero_card(fonts: &KonungFonts, hero: u32, label: &str, selected: bool) -> Box<dyn Scene> {
+/// One hero card of the list: the plain portrait over the name, the
+/// previewed one reading as primary — exactly like the settings screen's
+/// active language. Two blocks: the BSN grammar only takes component
+/// constructors, not value expressions.
+fn hero_card(
+    hero: u32,
+    label: &str,
+    portrait: Option<Handle<Image>>,
+    selected: bool,
+) -> Box<dyn Scene> {
+    let body = bsn! {
+        Node {
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            row_gap: spacing::SPACE_8,
+        }
+        Children [
+            {EntityScene(portrait_view(portrait))}
+            --
+            @caption(label)
+        ]
+    };
     if selected {
         Box::new(bsn! {
-            @widgets::menu_button(fonts, label)
+            @FeathersButton { @caption: {body} }
             HeroCard(hero)
             ButtonVariant::Primary
             on(click_hero_card)
         })
     } else {
         Box::new(bsn! {
-            @widgets::menu_button(fonts, label)
+            @FeathersButton { @caption: {body} }
             HeroCard(hero)
             on(click_hero_card)
         })
     }
 }
 
-/// The dossier: the chosen hero's facts, sectioned the way the original's
-/// menu grouped them. Without the game's texts the panel holds the slot
-/// label alone — nothing invented in place of numbers we do not have.
 fn dossier_list(
     fonts: &KonungFonts,
     language: kn_settings::Language,
     dossier: Option<&HeroSummary>,
+    dossier_portrait: Option<Handle<Image>>,
 ) -> Box<dyn SceneList> {
     let Some(summary) = dossier else {
         return Box::new(bsn_list! {
@@ -182,11 +272,22 @@ fn dossier_list(
         });
     };
     Box::new(bsn_list! {
-        {EntityScene(screens::text(
-            fonts.bold.clone(),
-            typo::TITLE,
-            &summary.name,
-        ))}
+        Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: spacing::SPACE_16,
+            align_items: AlignItems::Start,
+        }
+        Children [
+            {EntityScene(portrait_view(dossier_portrait))}
+            --
+            {EntityScene(screens::text(
+                fonts.bold.clone(),
+                typo::TITLE,
+                &summary.name,
+            ))}
+        ]
+        --
+        {EntityScene(description(&summary.description))}
         --
         @caption(t(language, Text::HeroAttributes))
         --
@@ -232,8 +333,36 @@ fn dossier_list(
     })
 }
 
+/// The hero's portrait at its natural size; without the menu images — nothing.
+fn portrait_view(portrait: Option<Handle<Image>>) -> impl Scene {
+    let Some(handle) = portrait else {
+        return Box::new(bsn! { Node {} }) as Box<dyn Scene>;
+    };
+    Box::new(bsn! {
+        Node {}
+        ImageNode { image: {handle} }
+    }) as Box<dyn Scene>
+}
+
+/// The hero's description: the game's own line for this hero, wrapped inside
+/// a fixed-width column. Game data, not interface strings — it shows only
+/// when the exe's texts were readable.
+fn description(text: &str) -> impl Scene {
+    let text = text.to_string();
+    bsn! {
+        Node {
+            width: px(430.0),
+        }
+        Children [
+            @caption(text.as_str()) TextColor(palette::TEXT_MUTED)
+        ]
+    }
+}
+
 /// One dossier line: the dim label on the left, the value on the right.
 fn row(fonts: &KonungFonts, label: &str, value: &str) -> impl Scene {
+    let label = label.to_string();
+    let value = value.to_string();
     bsn! {
         Node {
             flex_direction: FlexDirection::Row,
@@ -247,9 +376,9 @@ fn row(fonts: &KonungFonts, label: &str, value: &str) -> impl Scene {
             weight: FontWeight::NORMAL,
         }
         Children [
-            @caption(label) TextColor(palette::TEXT_MUTED)
+            @caption(label.as_str()) TextColor(palette::TEXT_MUTED)
             --
-            @caption(value) TextColor(palette::TEXT)
+            @caption(value.as_str()) TextColor(palette::TEXT)
         ]
     }
 }

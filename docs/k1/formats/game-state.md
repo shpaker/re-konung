@@ -108,6 +108,20 @@ member of every non-roaming group, the player group included, has a position tha
 | 0x40 | 9 × s16 | навыки: фехтование, торговля, меткость, плотницкое дело, медицина, опознание, кузнечное дело; броня; отравление; в коде — `SKILL_NAMES` | по Slavik |
 | 0x52 | 2 байта | | неизвестно |
 | 0x54 | 9 × s16 | ловкость (текущая, базовая), харизма (текущая, базовая), здоровье, сила (текущая, базовая), выносливость (текущая, базовая); в коде — `ATTRIBUTE_NAMES`. Health is the fifth, at 0x5C ([`game_state.cpp:47`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_state.cpp#L47)), on a 0…1600 scale the interface prints as `(HP + 15) / 16` points; in the shipped files it is 1600 except 116 records at 1 ([creatures.md](../creatures.md) «Our measurements») | подтверждено: код плюс наш замер обоих изданий |
+
+At the new-game screen the hero's numbers are **not read from the record**:
+the menu fills them with its own constants (Slavik `game.cpp:2301-2327` —
+сила 15, ловкость 3, харизма 3, выносливость 10, фехтование 100, торговля 10,
+меткость 0, плотницкое дело 1, медицина 50, опознание 20, кузнечное дело 10,
+свободных очков 0; одинаковые у всех трёх героев), and when the game starts
+these constants overwrite the loaded record's fields (`game.cpp:2453-2472`).
+The file values of the player record (ловкость 10, торговля 64, медицина 101,
+опознание 13 — одинаковы во всех `Game.N` обоих изданий) are never shown or
+used. What actually distinguishes the heroes: the name (assigned in code, see
+the player group above), the sprite base and palette, the starting equipment
+(assigned in code, `game_newgame.cpp:276-365`), the start map (`3 · номер +
+1`) and the world state of the `Game.N` file. **Confirmed**: our measurement
+over both editions plus the code.
 | 0x66 | 6 × s16 | надетые доспехи и оружие — номера предметов | подтверждено рендером: по ним рисуется снаряжение |
 | 0x72 | 32 × u16 | инвентарь — номера предметов | по Slavik |
 | 0xB2 | 5 × u16 | украшения | по Slavik |

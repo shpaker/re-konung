@@ -265,11 +265,55 @@ pub struct MapRef {
 /// not the heroes' identity.
 const HERO_NAME_IDS: [u8; 3] = [10, 124, 151];
 
+/// The description each hero gets, by the executable's new-game line index
+/// (`Texts::newgame`): the lines run in the screen-box order — Драгомир
+/// (hero 1), Михаил (hero 2), Волк (hero 0) — so hero 0 reads line 2,
+/// hero 1 line 0, hero 2 line 1.
+const HERO_DESCRIPTION_INDEXES: [usize; 3] = [2, 0, 1];
+
+/// The hero's numbers at the new-game screen: the original fills the menu
+/// with its own constants and never reads them from the record
+/// (`game.cpp:2301-2327`; docs/k1/formats/game-state.md). Identical for all
+/// three heroes — what distinguishes them is the name, the portrait, the
+/// starting equipment and the world of the `Game.N` file.
+const NEWGAME_HERO: NewGameHero = NewGameHero {
+    agility: 3,
+    charisma: 3,
+    strength: 15,
+    endurance: 10,
+    fencing: 100,
+    trading: 10,
+    accuracy: 0,
+    carpentry: 1,
+    medicine: 50,
+    identification: 20,
+    smithery: 10,
+    free_points: 0,
+};
+
+/// The constants of the new-game screen (see the doc above).
+#[derive(Debug, Clone, Copy)]
+struct NewGameHero {
+    agility: i16,
+    charisma: i16,
+    strength: i16,
+    endurance: i16,
+    fencing: i16,
+    trading: i16,
+    accuracy: i16,
+    carpentry: i16,
+    medicine: i16,
+    identification: i16,
+    smithery: i16,
+    free_points: i32,
+}
+
 /// One hero of the new-game flow, the way the original's new-game menu
-/// presented them (`game_newgame.cpp:115-186`): every number comes straight
-/// from the hero's character record of the starting state
-/// (docs/k1/formats/game-state.md, offsets 0x33–0x64, confirmed for both
-/// editions), the derived ones by the original's own formulas.
+/// presented them (`game_newgame.cpp:115-186`): the numbers the menu showed
+/// are the original's own constants (identical across the heroes,
+/// docs/k1/formats/game-state.md), health and the record facts come from the
+/// hero's record of the starting state (offsets 0x33–0x5C, confirmed for
+/// both editions), the derived ones by the original's own formulas.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeroSummary {
     /// The `Game.N` starting-state number.
@@ -277,6 +321,14 @@ pub struct HeroSummary {
     /// The hero's name from the executable's name tables; empty when the
     /// tables are missing or the number is not one of the three heroes.
     pub name: String,
+    /// The hero's description from the executable's new-game lines; empty
+    /// under the same conditions.
+    pub description: String,
+    /// The `NEWH*.RES` record of the hero's plain portrait
+    /// (`newh_res::PORTRAIT_RECORDS`); the selected variant is +1.
+    pub portrait: u8,
+    /// The `NEWH*.RES` record of the hero's selected portrait.
+    pub portrait_selected: u8,
     pub level: u8,
     pub experience: i32,
     pub gold: i32,
@@ -289,7 +341,8 @@ pub struct HeroSummary {
     pub strength: i16,
     pub endurance: i16,
     /// Health on the interface scale: the file holds 0…1600 and the original
-    /// printed `(HP + 15) / 16` points (`game_state.cpp:47`).
+    /// interface prints `(HP + 15) / 16` points (`game_state.cpp:47`). The
+    /// menu itself never printed it — our addition from the record.
     pub health: i16,
     /// Carrying capacity, the original's formula over the current endurance
     /// (`game_newgame.cpp:152-154`).
@@ -433,20 +486,21 @@ impl Game {
     }
 
     /// Each hero the way the original's new-game menu presented them
-    /// (`game_newgame.cpp:115-186`). The name comes from the executable's
-    /// name table by the hero's number — the original assigns it in code
-    /// (`game_newgame.cpp:305-351`, docs/k1/formats/game-state.md), because
-    /// the player-group record the starting states carry is the same in
-    /// every `Game.N` of both editions (measured) and is not the hero's
-    /// identity. The numbers come from that record: the base attributes and
-    /// health the menu printed, the ones it derived (carrying capacity, max
-    /// party size), the seven skills it showed, and level, experience, gold
-    /// and free points (docs/k1/formats/game-state.md, offsets 0x33–0x64,
-    /// confirmed for both editions). An unknown hero number, or texts the
-    /// exe does not carry, yields an empty name the caller renders with its
+    /// (`game_newgame.cpp:115-186`). The name and the description come from
+    /// the executable's tables by the hero's number — the original assigns
+    /// the name in code (`game_newgame.cpp:305-351`), because the
+    /// player-group record the starting states carry is the same in every
+    /// `Game.N` of both editions (measured) and is not the hero's identity.
+    /// The numbers the menu showed are the original's own constants
+    /// (`game.cpp:2301-2327`, identical across the heroes); level,
+    /// experience, gold and health are our additions from the record (the
+    /// menu never printed them). The derived numbers ride the original's
+    /// formulas over those constants. An unknown hero number, or texts the
+    /// exe does not carry, yield empty strings the caller renders with its
     /// own fallback.
     pub fn hero_summaries(&self, source: MapSource) -> Result<Vec<HeroSummary>> {
         let files = source.file_set();
+        let texts = self.resources.tables.texts.as_ref();
         let mut summaries = Vec::new();
         for hero in self.heroes(source)? {
             let state_bytes = self.dir.state_bytes(hero, files)?;
@@ -456,19 +510,28 @@ impl Game {
                 game_state::start_map(hero as usize),
                 Some(hero as usize),
             );
-            let name = || {
-                HERO_NAME_IDS
-                    .get(hero as usize)
-                    .and_then(|&name_id| {
-                        self.resources
-                            .tables
-                            .texts
-                            .as_ref()
-                            .and_then(|texts| texts.names.get(usize::from(name_id)))
-                    })
-                    .map(|name| name.trim().to_string())
+            let empty: [String; 0] = [];
+            let names: &[String] = texts.map_or(&empty[..], |texts| &texts.names);
+            let newgame: &[String] = texts.map_or(&empty[..], |texts| &texts.newgame);
+            let by_name_table = |table: &[String], index: usize| -> String {
+                table
+                    .get(index)
+                    .map(|text| text.trim().to_string())
                     .unwrap_or_default()
             };
+            let name = HERO_NAME_IDS
+                .get(hero as usize)
+                .map(|&name_id| by_name_table(names, usize::from(name_id)))
+                .unwrap_or_default();
+            let description = HERO_DESCRIPTION_INDEXES
+                .get(hero as usize)
+                .map(|&index| by_name_table(newgame, index))
+                .unwrap_or_default();
+            let (portrait, portrait_selected) =
+                match k1_data::newh_res::PORTRAIT_RECORDS.get(hero as usize) {
+                    Some(&selected) => ((selected + 1) as u8, selected as u8),
+                    None => (0, 0),
+                };
             let record = entities
                 .start
                 .and_then(|group| group.members().next())
@@ -476,7 +539,10 @@ impl Game {
             let Some(character) = record else {
                 summaries.push(HeroSummary {
                     hero,
-                    name: name(),
+                    name,
+                    description,
+                    portrait,
+                    portrait_selected,
                     level: 0,
                     experience: 0,
                     gold: 0,
@@ -498,35 +564,35 @@ impl Game {
                 });
                 continue;
             };
-            // The base attributes the original's menu printed: 0x56/0x5A/0x60/0x64
-            // (game_state.cpp:47-64). Health rides the interface scale: the file
-            // holds 0…1600, the menu printed points.
-            let attributes = character.attributes;
-            let health = (i32::from(attributes[4]) + 15) / 16;
-            // Carrying capacity, the original's own formula over the current
-            // endurance (`game_newgame.cpp:152-154`).
-            let carrying = ((i32::from(attributes[7]) * 1000) / 3 + 10_000) as f32 * 0.001;
+            // Health rides the interface scale: the file holds 0…1600, the
+            // interface prints points. The derived numbers ride the
+            // original's formulas over the new-game constants.
+            let health = (i32::from(character.attributes[4]) + 15) / 16;
+            let carrying = ((i32::from(NEWGAME_HERO.endurance) * 1000) / 3 + 10_000) as f32 * 0.001;
             summaries.push(HeroSummary {
                 hero,
-                name: name(),
+                name,
+                description,
+                portrait,
+                portrait_selected,
                 level: character.level,
                 experience: character.experience,
                 gold: character.gold,
-                free_points: character.free_points,
-                agility: attributes[1],
-                charisma: attributes[3],
-                strength: attributes[6],
-                endurance: attributes[8],
+                free_points: NEWGAME_HERO.free_points,
+                agility: NEWGAME_HERO.agility,
+                charisma: NEWGAME_HERO.charisma,
+                strength: NEWGAME_HERO.strength,
+                endurance: NEWGAME_HERO.endurance,
                 health: health as i16,
                 carrying,
-                max_party: max_party_size(character.class_id, attributes[2]),
-                fencing: character.skills[0],
-                trading: character.skills[1],
-                accuracy: character.skills[2],
-                carpentry: character.skills[3],
-                medicine: character.skills[4],
-                identification: character.skills[5],
-                smithery: character.skills[6],
+                max_party: max_party_size(character.class_id, NEWGAME_HERO.charisma),
+                fencing: NEWGAME_HERO.fencing,
+                trading: NEWGAME_HERO.trading,
+                accuracy: NEWGAME_HERO.accuracy,
+                carpentry: NEWGAME_HERO.carpentry,
+                medicine: NEWGAME_HERO.medicine,
+                identification: NEWGAME_HERO.identification,
+                smithery: NEWGAME_HERO.smithery,
             });
         }
         Ok(summaries)

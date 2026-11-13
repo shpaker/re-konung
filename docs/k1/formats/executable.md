@@ -47,8 +47,19 @@ RUS и ENG различаются: у записей 42 и 43 наборы пе�
 | украшения | 120 байт названия + 4 × s16 | 9 | `0x3E2B0` | `0x3F4E8` | `Item.info_id` |
 | зелья | так же | 14 | `0x3F650` | `0x40888` | `Item.info_id` |
 | прочие предметы | так же | 54 | `0x46B1C` | `0x47D54` | `Item.info_id` |
+| строки меню новой игры | 512 байт | 20 | `0x4951C` | `0x4A754` | номер строки |
 
 Монстры, имена и прозвища — один сплошной блок из 222 записей; он ищется по тому, что в нём заполнено и что пусто. Названия карт — единственная серия из 56 записей «текст + нули» по 40 байт; названия есть и у номеров без карты. Украшения, зелья и прочее — три серии 128-байтных записей, у которых обе картинки (третье и четвёртое число) больше 0; серии различаются длиной. Числа после названия — бонус, вес, картинка, картинка клада, по Slavik.
+
+The new-game menu lines are the only series of 20 records of "text + zeros"
+512 bytes each (`game_newgame.cpp:276-365`, `Locale::NewGameMenu`): records
+0–2 are the three heroes' descriptions in the screen-box order (Драгомир,
+Михаил, Волк — `Game.N` 1, 2, 0), 3–6 describe the four classes, 7–19 are the
+hover hints of the menu's numbers (attributes, carry limit, party, skills).
+Next to it sits another series of 19 such records (RUS `0x41F1C`, ENG
+`0x43154`, general interface messages — «Мешок у тебя не резиновый!»); it is
+a different table and the parser leaves it alone. **Rust reads the new-game
+series** (`Texts::newgame`); the 19-record neighbor is only measured.
 
 **Имя персонажа.** У классов 0x41–0x50 (бит 0x40, виды 0–15) — название вида из таблицы монстров. У остальных, в том числе у женщин и детей деревень (класс с 0x51), — имя по номеру и, если прозвище не 0, пробел и прозвище. Так собирает имя код exe — **подтверждено** разбором кода. В каждом `Game.N` один житель с именем 0 и прозвищем 0, то есть без имени: это класс 0x51 из отряда 31, он расставлен на карте 37 (наш замер; тест в Rust повторяет то же число).
 

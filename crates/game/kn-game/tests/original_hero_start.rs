@@ -325,10 +325,12 @@ fn a_marked_start_map_replays_deterministically() {
 }
 
 /// The hero presentation of the original's new-game menu, resolvable from the
-/// facade: every summary carries a name — the original assigns them by the
-/// hero number, so they are distinct — and the derived numbers stay within
-/// what the original's own formulas produce. Structure only — the numbers
-/// themselves are game data, no content pins (#34's rule).
+/// facade. The numbers the menu shows are the original's own constants,
+/// identical across the heroes and pinned here (facts from the code,
+/// `game.cpp:2301-2327` — they are not file data); the names and the
+/// descriptions resolve from the executable's tables and are distinct; the
+/// portraits sit in the original's screen-box order (Драгомир 3/4, Михаил
+/// 5/6, Волк 7/8 — selected/plain).
 #[test]
 fn the_menu_can_present_every_hero() {
     let roots = game_roots();
@@ -351,17 +353,67 @@ fn the_menu_can_present_every_hero() {
                 summary.hero
             );
             assert!(
-                summary.max_party > 0 && summary.max_party <= 10,
-                "{edition} hero {}: max party size {} is the charisma table's range",
-                summary.hero,
-                summary.max_party
-            );
-            assert!(
-                summary.carrying > 0.0,
-                "{edition} hero {}: carrying capacity is positive",
+                !summary.description.is_empty(),
+                "{edition} hero {}: the hero's description resolves",
                 summary.hero
             );
+            // The original's own menu constants.
+            assert_eq!(summary.agility, 3, "{edition} hero {}", summary.hero);
+            assert_eq!(summary.charisma, 3, "{edition} hero {}", summary.hero);
+            assert_eq!(summary.strength, 15, "{edition} hero {}", summary.hero);
+            assert_eq!(summary.endurance, 10, "{edition} hero {}", summary.hero);
+            assert_eq!(summary.fencing, 100, "{edition} hero {}", summary.hero);
+            assert_eq!(summary.trading, 10, "{edition} hero {}", summary.hero);
+            assert_eq!(summary.accuracy, 0, "{edition} hero {}", summary.hero);
+            assert_eq!(summary.carpentry, 1, "{edition} hero {}", summary.hero);
+            assert_eq!(summary.medicine, 50, "{edition} hero {}", summary.hero);
+            assert_eq!(
+                summary.identification, 20,
+                "{edition} hero {}",
+                summary.hero
+            );
+            assert_eq!(summary.smithery, 10, "{edition} hero {}", summary.hero);
+            assert_eq!(summary.free_points, 0, "{edition} hero {}", summary.hero);
+            assert_eq!(summary.max_party, 1, "{edition} hero {}", summary.hero);
+            // The original prints it as "%4.1f" (13.3); the value itself is
+            // 13 1/3 — 10 endurance through the original's formula.
+            assert!(
+                (summary.carrying - 13.333).abs() < 0.01,
+                "{edition} hero {}: carrying {}",
+                summary.hero,
+                summary.carrying
+            );
         }
+        // Identical numbers across the heroes: what distinguishes them is
+        // the name, the portrait, the description and the world.
+        let numbers = |summary: &kn_game::HeroSummary| -> Vec<i64> {
+            [
+                summary.agility as i64,
+                summary.charisma as i64,
+                summary.strength as i64,
+                summary.endurance as i64,
+                summary.fencing as i64,
+                summary.trading as i64,
+                summary.accuracy as i64,
+                summary.carpentry as i64,
+                summary.medicine as i64,
+                summary.identification as i64,
+                summary.smithery as i64,
+                summary.free_points as i64,
+                summary.max_party as i64,
+            ]
+            .into_iter()
+            .chain([summary.carrying.to_bits() as i64])
+            .collect()
+        };
+        for summary in &summaries[1..] {
+            assert_eq!(
+                numbers(summary),
+                numbers(&summaries[0]),
+                "{edition}: the heroes' menu numbers differ"
+            );
+        }
+        // Names and descriptions are distinct.
         let mut names: Vec<_> = summaries.iter().map(|s| s.name.clone()).collect();
         names.sort();
         names.dedup();
@@ -370,5 +422,21 @@ fn the_menu_can_present_every_hero() {
             summaries.len(),
             "{edition}: the heroes carry distinct names"
         );
+        let mut descriptions: Vec<_> = summaries.iter().map(|s| s.description.clone()).collect();
+        descriptions.sort();
+        descriptions.dedup();
+        assert_eq!(
+            descriptions.len(),
+            summaries.len(),
+            "{edition}: the heroes carry distinct descriptions"
+        );
+        // The portraits sit in the original's screen-box order: hero 0 is box
+        // 2 (records 7/8), hero 1 is box 0 (3/4), hero 2 is box 1 (5/6); the
+        // first of each pair is the selected variant.
+        let portraits: Vec<_> = summaries
+            .iter()
+            .map(|s| (s.portrait_selected, s.portrait))
+            .collect();
+        assert_eq!(portraits, vec![(7, 8), (3, 4), (5, 6)]);
     }
 }
