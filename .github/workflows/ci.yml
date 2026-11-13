@@ -1,11 +1,18 @@
-# Те же проверки, что перед push (Python и Rust). Тесты на данных игры в CI
-# пропускаются: оригиналов в репозитории нет
+# The same checks as before push (Python and Rust). Tests on game data are
+# skipped in CI: the originals are not in the repository.
 name: ci
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# A new push to a PR cancels its stale run; pushes to main are never cancelled
+# (a cancelled run would also lose its rust-cache save).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -16,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          # Версия пакета берётся из git-тегов (hatch-vcs)
+          # The package version is taken from git tags (hatch-vcs)
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
       - run: uv sync --locked
@@ -24,32 +31,81 @@ jobs:
       - run: uv run ruff format --check
       - run: uv run pytest
 
-  # stable Rust на GitHub-раннерах уже есть, ставить не нужно
+  # fmt, clippy and tests on the `dev` profile. stable Rust is already on the
+  # GitHub runner, no toolchain setup needed.
   rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      # Bevy с default-фичами линкуется с wayland, x11, ALSA и udev: без -dev
-      # пакетов сборка падает на wayland-sys/alsa-sys/libudev-sys, не дойдя до
-      # нашего кода. Список — docs/linux_dependencies.md в крейте bevy.
-      - name: Системные библиотеки для Bevy
+      # Bevy with default-features off still links wayland, x11, ALSA and udev:
+      # without -dev packages the build fails in wayland-sys/alsa-sys/
+      # libudev-sys, not reaching our code. The list is docs/linux_dependencies.md
+      # in the bevy crate.
+      - name: System libraries for Bevy
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             g++ pkg-config libx11-dev libxkbcommon-x11-0 libxkbcommon-dev \
             libwayland-dev libasound2-dev libudev-dev
+      # Restores before the first cargo call; the job id is part of the cache
+      # key by default, so the dev-profile cache stays separate from the
+      # dev-runtime one below without extra keys.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates
       - run: cargo fmt --manifest-path crates/Cargo.toml --all --check
       - run: cargo clippy --manifest-path crates/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path crates/Cargo.toml
 
-  # Smoke-build of dev-runtime profile on Windows: validates the new profile,
-  # reduced bevy features and .cargo/config.toml (rust-lld). Static linking
+  # The PR build gate: full compile and link of both apps in dev-runtime, the
+  # profile every local session runs (`just viewer`, `just game`). On Linux —
+  # the same profile measured several times faster here than on windows-latest
+  # (docs/rust.md, "Build profiles"). --timings publishes cargo-timing.html as
+  # a workflow artifact of every run.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: System libraries for Bevy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++ pkg-config libx11-dev libxkbcommon-x11-0 libxkbcommon-dev \
+            libwayland-dev libasound2-dev libudev-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates
+      - name: Build dev-runtime (full link)
+        run: cargo build --profile dev-runtime --timings --manifest-path crates/Cargo.toml -p kn-viewer -p kn-player
+      - name: Upload cargo timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-timing-linux
+          path: crates/target/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
+
+  # Windows smoke-build: validates dev-runtime, the reduced bevy feature set
+  # and .cargo/config.toml (rust-lld, which only applies to
+  # x86_64-pc-windows-msvc). Not on pull_request: the same profile measured
+  # several times slower here than on ubuntu-latest, and a Windows regression
+  # can only be caught after merge — an accepted trade-off. Static linking
   # only — dynamic_linking builds bevy_dylib.dll (full recompile of every Bevy
-  # crate as cdylib, ~10× slower) and launches a window requiring GPU context
-  # that headless CI cannot provide.
+  # crate as cdylib, ~10× slower) and launches a window requiring a GPU
+  # context that headless CI cannot provide.
   build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates
       - name: Smoke-build dev-runtime (static)
-        run: cargo build --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-viewer -p kn-player
+        run: cargo build --profile dev-runtime --timings --manifest-path crates/Cargo.toml -p kn-viewer -p kn-player
+      - name: Upload cargo timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-timing-windows
+          path: crates/target/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
