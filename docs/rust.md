@@ -1323,6 +1323,37 @@ separately) shares compiled dependencies between the agent worktrees, each of wh
 own `crates/target` (the cache is per machine, the target directories stay separate). Without
 it a fresh worktree pays one cold dependency build per profile (≈2.5–3 min each here).
 
+### CI (`.github/workflows/ci.yml`)
+
+Measured on GitHub-hosted runners, rustc 1.99.1, 2026-11-13, each row its own run
+(PR #120 runs 43404019876 cold, 43407464572 warm):
+
+| Job | Runner | Cold | Warm |
+|---|---|---|---|
+| `rust` — fmt, clippy, test (`dev`) | ubuntu-latest | 7m32s | 3m56s |
+| `build` — `kn-viewer` + `kn-player`, full link (`dev-runtime`) | ubuntu-latest | 14m50s | 1m39s |
+| `build-windows` — same as `build` | windows-latest | 21m1s | 1m44s |
+
+The `build` job is the PR gate; `build-windows` runs on push to main and `workflow_dispatch` only.
+The same profile measures 1.4× slower on windows-latest than on ubuntu-latest (`cargo build
+--timings`: 503 units, 3379 s of rustc in 859 s of wall on Linux against 4635 s in 1204 s on
+Windows), so the gate lives on Linux. A Windows-only regression is caught by the post-merge smoke
+on main, not on the PR — an accepted trade-off; the release path still requires a green main run
+(`version.yml`). Cold build profile is identical on both runners: `bevy_*` crates take 56–58% of
+the rustc time (`bevy_feathers` 141 s, `bevy_render` 137 s, `bevy_ui` and `bevy_sprite_render`
+121 s each on Linux), so the job time hinges on dependency compilation, not on own code
+(`kn-render` compiles in 39 s at opt-level 1).
+
+Dependency compilation is cached with `Swatinem/rust-cache@v2` (`workspaces: crates`): only
+dependencies are cached, workspace crates rebuild every run by design; the job id is part of the
+cache key by default, so the three jobs keep separate caches without extra inputs — measured
+≈1.1 GB (`dev`), ≈0.8 GB (`dev-runtime` Linux), ≈0.7 GB (`dev-runtime` Windows), restore 23–34 s
+per job, and no re-save on an exact key hit. Both build jobs run `--timings` and upload
+`cargo-timing.html` as a run artifact, so every regression in build time is attributable per
+crate. There is no nightly schedule: pushes to main happen several times a day and every green
+main run refreshes the caches; revisit if the cadence drops (GitHub evicts caches after 7 days
+of disuse, and the repo-wide limit is 10 GB).
+
 ## Запуск
 
 ```bash
