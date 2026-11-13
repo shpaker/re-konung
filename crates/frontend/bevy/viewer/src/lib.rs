@@ -31,14 +31,17 @@ use bevy::{
     ui_widgets::{Activate, SliderStep, SliderValue, ValueChange},
     window::PresentMode,
 };
+// Re-exported: `run_viewer` hands the app's exit back and the windowed
+// binary must be able to name the type to turn it into a process exit code.
+pub use bevy::app::AppExit;
 use k1_data::lights_res;
 use k1_data::map;
 use k1_data::repo::{GAME_FILES, GameDir, TUTORIAL_FILES};
 use k1_game::lighting;
 use k1_game::time_of_day::CYCLE_TICKS;
-use kn_game::simulation::{Simulation, WalkState};
 use kn_game::{
     DayPhase, Game, MapRef, MapSource, Piece, PieceGroup, SceneOptions, TICK_MS, group_is_shown,
+    simulation::{CreatureState, Simulation, WalkState},
 };
 use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
@@ -639,13 +642,112 @@ fn capture(
     *frames += 1;
 }
 
-/// Benchmark request from `--benchmark N`: after the same settle window the
-/// screenshot uses, collect N per-frame times and print the `BENCH …` line.
-/// A benchmark run never captures — the CLI rejects `--benchmark` together
-/// with `--screenshot` up front.
+/// Benchmark request from `--benchmark N` / `--benchmark-secs S`: after the
+/// same settle window the screenshot uses, collect per-frame times until the
+/// bound is reached and print the `BENCH …` line. A benchmark run never
+/// captures — the CLI rejects the benchmark flags together with
+/// `--screenshot` up front.
 #[derive(Resource)]
 struct BenchmarkRequest {
-    frames: u32,
+    bound: BenchmarkBound,
+}
+
+/// What closes the measured window. `Frames` is the old count bound;
+/// `Seconds` accumulates frame time until the sum crosses the target — the
+/// 60-second gate protocol (#98) reads the same recipe on any hardware, the
+/// frame count becomes an output of the run.
+#[derive(Clone, Copy, Debug)]
+enum BenchmarkBound {
+    Frames(u32),
+    Seconds(u64),
+}
+
+/// The frame-time gate threshold (#98): a pass needs average and p95 at or
+/// under 30 FPS (one frame every 33.3 ms); p99 and the worst frame are
+/// reported with their cause and never gate.
+const FRAME_GATE_LIMIT_MS: f64 = 33.3;
+
+/// The window's statistics, as the `BENCH` line and the gate read them:
+/// nearest-rank percentiles over the measured samples plus the worst frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FrameStats {
+    average: f64,
+    p95: f64,
+    p99: f64,
+    worst: f64,
+}
+
+/// Nearest-rank percentiles over the measured frame times: the smallest
+/// value covering the fraction of the sorted samples. Empty input yields
+/// zeros — a window that closed before any sample cannot print a number.
+fn frame_stats(samples: &[f64]) -> FrameStats {
+    if samples.is_empty() {
+        return FrameStats {
+            average: 0.0,
+            p95: 0.0,
+            p99: 0.0,
+            worst: 0.0,
+        };
+    }
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let percentile = |fraction: f64| {
+        let rank = ((sorted.len() as f64) * fraction).ceil() as usize;
+        sorted[rank.clamp(1, sorted.len()) - 1]
+    };
+    FrameStats {
+        average: samples.iter().sum::<f64>() / samples.len() as f64,
+        p95: percentile(0.95),
+        p99: percentile(0.99),
+        worst: sorted[sorted.len() - 1],
+    }
+}
+
+/// The first index of the largest sample — where `max_at` points in the
+/// `BENCH` line (1-based within the measured window). Strict comparison
+/// keeps the first of equal maxima, unlike `Iterator::max_by`, which keeps
+/// the last.
+fn worst_frame_index(samples: &[f64]) -> usize {
+    let mut worst = 0usize;
+    for (index, value) in samples.iter().enumerate() {
+        if value.total_cmp(&samples[worst]) == std::cmp::Ordering::Greater {
+            worst = index;
+        }
+    }
+    worst
+}
+
+/// Whether a simulation tick executed inside the wall-clock interval the
+/// worst sample measured. The frame-time delta is written in `Update` from
+/// `Time<Real>`, whose value `time_system` (in `First`) computed as the span
+/// between the previous iteration's anchor and this one — so a sample always
+/// carries the *previous* iteration's wall time, while the tick count read
+/// beside it belongs to this one. Pairing a sample at index `i` with
+/// `tick_deltas[i - 1]` puts both on the same interval: the ticks the
+/// creature chain executed in iteration `i - 1` are exactly the ticks whose
+/// execution cost that interval includes. The first sample of a window
+/// measures a settle frame's interval and pairs with nothing, so it reads
+/// off-tick.
+fn worst_frame_on_tick(tick_deltas: &[u32], worst_index: usize) -> bool {
+    worst_index > 0 && tick_deltas[worst_index - 1] > 0
+}
+
+/// The gate verdict of one run: pass = average and p95 both at or under
+/// [`FRAME_GATE_LIMIT_MS`]. p99 and the worst frame are reported, never gate
+/// — a number that shows a problem opens its own optimization ticket (#98).
+fn frame_gate_passes(stats: &FrameStats) -> bool {
+    stats.average <= FRAME_GATE_LIMIT_MS && stats.p95 <= FRAME_GATE_LIMIT_MS
+}
+
+/// The exit a benchmark run asks for: `Success` on a pass, `Error(1)` on a
+/// fail — the verdict must reach the process exit code, or `cargo run` and
+/// `just viewer-gate` would succeed through a failed gate.
+fn gate_exit(stats: &FrameStats) -> AppExit {
+    if frame_gate_passes(stats) {
+        AppExit::Success
+    } else {
+        AppExit::error()
+    }
 }
 
 /// Benchmark phases — settle the pipelines and the camera, measure, exit.
@@ -657,26 +759,43 @@ enum BenchmarkPhase {
     Done,
 }
 
-/// Drives `--benchmark N` — reuses the screenshot path's settle window, then
-/// samples the frame time for N frames and prints one machine-readable line:
+/// Drives `--benchmark N` / `--benchmark-secs S` — reuses the screenshot
+/// path's settle window, then samples the frame time until the bound closes
+/// the window and prints two machine-readable lines:
 /// `BENCH map=17 frames=600 avg_ms=.. p95_ms=.. p99_ms=.. max_ms=..
-/// ticks=.. creatures=.. walking=.. labels=.. sprites=.. light_materials=..`,
-/// followed by `AppExit::Success`. No screenshot is taken. `max_ms` is the
-/// worst measured frame (the "worst frame" measurement of docs/rust.md);
-/// `ticks` is how far the simulation advanced across the measured window —
-/// snapshotted when the window opens, so the settle frames' clock does not
-/// leak in — and `creatures` / `walking` are the population it ended on;
-/// together they say how much movement the window covered. `labels` echoes
+/// max_at=.. max_on_tick=.. ticks=.. creatures=.. walking=.. labels=..
+/// sprites=.. light_materials=..` and `GATE map=.. pass=.. avg_ms=..
+/// p95_ms=.. limit_ms=33.3`, followed by the verdict's exit —
+/// `AppExit::Success` on a pass, `AppExit::Error(1)` on a fail, so `cargo
+/// run` and `just viewer-gate` carry the verdict to their own exit codes. No
+/// screenshot is taken. `max_ms` is the worst measured frame (the "worst
+/// frame" measurement of docs/rust.md); `max_at` is its 1-based position in
+/// the measured window and `max_on_tick` says whether a simulation tick
+/// executed inside the wall-clock interval that sample measured — the two
+/// attributes the frame-time gate's cause attribution reads. `ticks` is how
+/// far the simulation advanced across the measured window — snapshotted when
+/// the window opens, so the settle frames' clock does not leak in — and
+/// `creatures` / `walking` are the population it ended on; together they say
+/// how much movement the window covered. `labels` echoes
 /// [`labels_enabled`], so a recorded line carries the knob state it ran
 /// with.
 ///
 /// The samples are read from the `DiagnosticsStore` value
-/// [`FrameTimeDiagnosticsPlugin`] writes each Update — the same wall-clock
-/// frame time the diagnostics panel shows, not a second measurement. Where
-/// the scheduler places this system against the plugin's own system decides
-/// whether a sample is the current frame's delta or the previous frame's;
-/// either way it is N consecutive deltas of settled frames. The percentiles
-/// are nearest-rank over the N samples.
+/// [`FrameTimeDiagnosticsPlugin`] writes each Update — the latest raw
+/// wall-clock delta, not the plugin's smoothed value; the same wall-clock
+/// frame time the diagnostics panel shows. That delta is `Time<Real>`'s
+/// value, which `time_system` computes in `First` as the span between the
+/// previous iteration's anchor and this one — a sample therefore always
+/// carries the *previous* iteration's wall time, and the tick counter read
+/// in the same iteration belongs to *this* one. The system is ordered after
+/// the plugin's `diagnostic_system` and after the creature chain, so the
+/// sample and the counter are both complete for the iteration that reads
+/// them; the print pairs a sample with the previous iteration's counter
+/// ([`worst_frame_on_tick`]), which puts both sides of `max_on_tick` on the
+/// same interval — no ±1 ambiguity on either side. The percentiles are
+/// nearest-rank over the samples. A `Seconds` bound closes the window when
+/// the sum of the samples crosses the target, so the run is 60 seconds of
+/// measured frame time whatever the hardware delivers.
 #[allow(clippy::too_many_arguments)]
 fn benchmark(
     request: Res<BenchmarkRequest>,
@@ -690,13 +809,19 @@ fn benchmark(
     mut phase: Local<BenchmarkPhase>,
     mut frames: Local<u32>,
     mut samples: Local<Vec<f64>>,
+    mut tick_deltas: Local<Vec<u32>>,
+    mut elapsed_ms: Local<f64>,
     mut ticks_at_open: Local<u64>,
+    mut last_ticks: Local<u64>,
 ) {
     match *phase {
         BenchmarkPhase::Settle => {
             if *frames >= SETTLE_FRAMES {
                 samples.clear();
+                tick_deltas.clear();
+                *elapsed_ms = 0.0;
                 *ticks_at_open = sim.sim_ticks;
+                *last_ticks = sim.sim_ticks;
                 *frames = 0;
                 *phase = BenchmarkPhase::Measure;
             }
@@ -707,23 +832,34 @@ fn benchmark(
                 .and_then(|frame_time| frame_time.value())
             {
                 samples.push(value);
+                // The ticks the creature chain executed during this
+                // iteration. A rebuild would reset `sim_ticks`, but a
+                // benchmark run has no input and no rebuild — the counter is
+                // monotonic within the window. The print pairs a sample with
+                // the previous iteration's count: the sample's delta carries
+                // the previous iteration's wall time (`worst_frame_on_tick`).
+                let delta = sim.sim_ticks.saturating_sub(*last_ticks);
+                tick_deltas.push(delta.min(u32::MAX as u64) as u32);
+                *last_ticks = sim.sim_ticks;
+                *elapsed_ms += value;
             }
-            if samples.len() >= request.frames as usize {
-                let mut sorted = samples.clone();
-                sorted.sort_by(f64::total_cmp);
-                // Nearest-rank: the smallest value covering the fraction of
-                // the sorted samples.
-                let percentile = |fraction: f64| {
-                    let rank = ((sorted.len() as f64) * fraction).ceil() as usize;
-                    sorted[rank.clamp(1, sorted.len()) - 1]
-                };
-                let average = samples.iter().sum::<f64>() / samples.len() as f64;
-                let worst = sorted[sorted.len() - 1];
-                let states = sim.sim.as_ref().map(Simulation::states).unwrap_or_default();
-                let walking = states
-                    .iter()
-                    .filter(|state| state.walk_state == WalkState::Walk)
-                    .count();
+            let window_full = match request.bound {
+                BenchmarkBound::Frames(count) => samples.len() >= count as usize,
+                BenchmarkBound::Seconds(secs) => *elapsed_ms >= secs as f64 * 1000.0,
+            };
+            if window_full && !samples.is_empty() {
+                let measured = frame_stats(&samples);
+                let worst_index = worst_frame_index(&samples);
+                let walking_states = sim.sim.as_ref().map(Simulation::states);
+                let walking = walking_states
+                    .as_deref()
+                    .map(|states| {
+                        states
+                            .iter()
+                            .filter(|state| state.walk_state == WalkState::Walk)
+                            .count()
+                    })
+                    .unwrap_or(0);
                 let map = stats
                     .map
                     .or_else(|| viewer.maps.get(viewer.selected).copied())
@@ -735,20 +871,30 @@ fn benchmark(
                         },
                     );
                 println!(
-                    "BENCH map={map} frames={} avg_ms={average:.2} p95_ms={:.2} p99_ms={:.2} \
-                     max_ms={worst:.2} ticks={} creatures={} walking={} labels={} sprites={} \
-                     light_materials={}",
+                    "BENCH map={map} frames={} avg_ms={:.2} p95_ms={:.2} p99_ms={:.2} \
+                     max_ms={:.2} max_at={} max_on_tick={} ticks={} creatures={} walking={} \
+                     labels={} sprites={} light_materials={}",
                     samples.len(),
-                    percentile(0.95),
-                    percentile(0.99),
+                    measured.average,
+                    measured.p95,
+                    measured.p99,
+                    measured.worst,
+                    worst_index + 1,
+                    u32::from(worst_frame_on_tick(&tick_deltas, worst_index)),
                     sim.sim_ticks - *ticks_at_open,
-                    states.len(),
+                    walking_states.as_deref().map_or(0, <[CreatureState]>::len),
                     walking,
                     labels_enabled() as u8,
                     pieces.iter().count(),
                     pool.as_ref().map_or(0, |pool| pool.len()),
                 );
-                commands.write_message(AppExit::Success);
+                println!(
+                    "GATE map={map} pass={} avg_ms={:.2} p95_ms={:.2} limit_ms={FRAME_GATE_LIMIT_MS}",
+                    frame_gate_passes(&measured),
+                    measured.average,
+                    measured.p95,
+                );
+                commands.write_message(gate_exit(&measured));
                 *phase = BenchmarkPhase::Done;
             }
         }
@@ -834,10 +980,16 @@ pub struct ViewerConfig {
     /// Run this many measured frames after the settle window, print one
     /// `BENCH …` line to stdout and exit (`--benchmark`).
     pub benchmark: Option<u32>,
+    /// Run the measured window until this many seconds of frame time have
+    /// accumulated, print one `BENCH …` line to stdout and exit
+    /// (`--benchmark-secs`); the frame count becomes an output. One of the
+    /// two bounds, never both — the CLI rejects the pair up front.
+    pub benchmark_secs: Option<u64>,
 }
 
-/// The viewer window: runs until the user closes it.
-pub fn run_viewer(config: ViewerConfig) {
+/// The viewer window: runs until the user closes it. Returns the exit the
+/// app asked for — a benchmark run's gate verdict rides on it.
+pub fn run_viewer(config: ViewerConfig) -> AppExit {
     let labels = map_labels(&config.maps);
     let selected = config.selected;
     let capture_request = config
@@ -848,7 +1000,16 @@ pub fn run_viewer(config: ViewerConfig) {
             terrain_pieces: 0,
         })
         .unwrap_or_default();
-    let benchmark_request = config.benchmark.map(|frames| BenchmarkRequest { frames });
+    let benchmark_request = config
+        .benchmark_secs
+        .map(|secs| BenchmarkRequest {
+            bound: BenchmarkBound::Seconds(secs),
+        })
+        .or_else(|| {
+            config.benchmark.map(|frames| BenchmarkRequest {
+                bound: BenchmarkBound::Frames(frames),
+            })
+        });
     // A benchmark run only: the measurement must not be quantized to the
     // monitor's refresh quantum — with the default Fifo a frame sits on the
     // next vblank, so day and night both read as ~16.67 ms and the meter
@@ -970,7 +1131,17 @@ pub fn run_viewer(config: ViewerConfig) {
                 .run_if(resource_exists::<CaptureRequest>)
                 .run_if(resource_exists::<LightingMaterials>)
                 .after(CameraApply),
-            benchmark.run_if(resource_exists::<BenchmarkRequest>),
+            benchmark
+                .run_if(resource_exists::<BenchmarkRequest>)
+                // The sample and the tick counter must both be complete for
+                // this iteration when they are read: after the diagnostics
+                // plugin has written this frame's delta and after the
+                // creature chain has advanced the tick counter. The delta
+                // itself carries the previous iteration's wall time, so the
+                // print pairs a sample with the previous iteration's count
+                // (`worst_frame_on_tick`).
+                .after(FrameTimeDiagnosticsPlugin::diagnostic_system)
+                .after(CreatureSet::Nodes),
         ),
     );
     app.insert_resource(setup);
@@ -980,7 +1151,7 @@ pub fn run_viewer(config: ViewerConfig) {
     if let Some(request) = benchmark_request {
         app.insert_resource(request);
     }
-    app.run();
+    app.run()
 }
 
 /// Camera-control binding: applies the kn-input mechanisms to this app's camera.
@@ -2031,6 +2202,7 @@ fn creature_report(report: &CreatureAnimReport) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::num::NonZero;
     use std::sync::Arc;
 
     use super::*;
@@ -2428,6 +2600,110 @@ mod tests {
             ]),
             ["Map 12", "Tutorial 4"]
         );
+    }
+
+    #[test]
+    fn frame_stats_are_nearest_rank_over_the_samples() {
+        let samples: Vec<f64> = (1..=100).map(f64::from).collect();
+        let measured = frame_stats(&samples);
+        assert_eq!(measured.average, 50.5);
+        // Nearest-rank: ceil(100 * fraction) picks the 95th and 99th sample
+        assert_eq!(measured.p95, 95.0);
+        assert_eq!(measured.p99, 99.0);
+        assert_eq!(measured.worst, 100.0);
+        // The average is over the window, not the sorted tail
+        let spike = [3.0, 1.0, 2.0, 40.0];
+        let measured = frame_stats(&spike);
+        assert!((measured.average - 11.5).abs() < 1e-9);
+        assert_eq!(measured.worst, 40.0);
+    }
+
+    #[test]
+    fn frame_stats_of_an_empty_window_are_zeros() {
+        // A window that closed before any sample cannot print a number
+        assert_eq!(
+            frame_stats(&[]),
+            FrameStats {
+                average: 0.0,
+                p95: 0.0,
+                p99: 0.0,
+                worst: 0.0,
+            }
+        );
+    }
+
+    #[test]
+    fn worst_frame_index_points_at_the_first_maximum() {
+        let spike = [1.0, 7.5, 2.0, 7.5, 3.0];
+        assert_eq!(worst_frame_index(&spike), 1, "first of the equal maxima");
+        assert_eq!(worst_frame_index(&[4.2]), 0);
+        assert_eq!(worst_frame_index(&[]), 0);
+    }
+
+    #[test]
+    fn the_gate_passes_only_when_average_and_p95_fit_the_limit() {
+        // 30 FPS: one frame every 33.3 ms; the boundary is inclusive
+        let fits = FrameStats {
+            average: 33.3,
+            p95: 33.3,
+            p99: 90.0,
+            worst: 120.0,
+        };
+        assert!(
+            frame_gate_passes(&fits),
+            "p99 and the worst frame are reported, never gate"
+        );
+        let slow_average = FrameStats {
+            average: 33.31,
+            p95: 30.0,
+            ..fits
+        };
+        assert!(!frame_gate_passes(&slow_average));
+        let slow_p95 = FrameStats {
+            average: 30.0,
+            p95: 33.4,
+            ..fits
+        };
+        assert!(!frame_gate_passes(&slow_p95));
+    }
+
+    #[test]
+    fn a_failed_gate_exits_the_process_with_an_error() {
+        // The printed GATE line is not enough: `just viewer-gate` and `cargo
+        // run` read the verdict from the exit code
+        let fits = FrameStats {
+            average: 10.0,
+            p95: 12.0,
+            p99: 15.0,
+            worst: 20.0,
+        };
+        assert_eq!(gate_exit(&fits), AppExit::Success);
+        let fails = FrameStats {
+            average: 40.0,
+            ..fits
+        };
+        assert_eq!(gate_exit(&fails), AppExit::Error(NonZero::new(1).unwrap()));
+    }
+
+    #[test]
+    fn the_worst_frame_pairs_with_the_previous_iterations_ticks() {
+        // A sample carries the previous iteration's wall time, so the flag
+        // reads the tick count of the iteration before it: a tick executed
+        // in iteration i is seen by the sample at i + 1, not at i
+        let ticks = [0, 0, 1, 0];
+        assert!(
+            worst_frame_on_tick(&ticks, 3),
+            "the tick of iteration 2 lands in the sample at 3"
+        );
+        assert!(
+            !worst_frame_on_tick(&ticks, 2),
+            "the sample at 2 measures iteration 1, which ran no tick"
+        );
+        assert!(
+            !worst_frame_on_tick(&ticks, 0),
+            "the first sample measures a settle frame's interval and pairs with nothing"
+        );
+        assert!(!worst_frame_on_tick(&[1, 1], 0));
     }
 
     fn viewer(overlays: [bool; 4]) -> Viewer {

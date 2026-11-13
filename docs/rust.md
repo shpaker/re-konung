@@ -1143,6 +1143,129 @@ sets a creature's world position. `CreaturePiece` and `update_shadow_depth` are 
 
 Число кусков в панель собирается линейным обходом спрайтов, а не суммой по девяти узлам групп: обход дешевле изменения видимости, который его окружает (0.5 мкс против 150 мкс на переключение), и только он не считает видимыми спрайты, скрытые кадром анимации без картинки.
 
+### Frame time gate
+
+The gate turns the viewer costs above into a verdict (issue #98): pass =
+average and p95 frame time ≤ 33.3 ms — 30 FPS — on each reference map. The
+gate runs after the ambient lighting (#96) and the constant-day toggle (#97)
+with lighting on, so the numbers are the final render, not a diagnostic
+stage; a failing number opens its own optimization ticket, it is never
+optimized inside the gate's ticket.
+
+**Protocol.** Release build, Windows 11, AMD Ryzen 9 9950X, 64 GiB RAM,
+NVIDIA GeForce RTX 2070 SUPER (the wgpu adapter of every run — Vulkan — and
+the machine the "Lighting cost" table above was measured on), window
+1280×800, zoom
+step 3 (scale 1.0 — the startup default; a benchmark run never touches the
+camera or the scene), playback playing (all creatures active, the shipped
+default), day/night lighting on (the cycle follows the sim tick;
+`--constant-day` off). One command runs the gate — maps 17 and 19, both
+editions, 60 seconds each:
+
+```bash
+just viewer-gate
+```
+
+which is four `cargo run --release … -p kn-viewer` runs of
+`--game-dir original/k1/<rus|eng>/game --map <17|19> --benchmark-secs 60`
+(data in `original/`, never committed). One run prints one `BENCH …` line
+and one `GATE map=.. pass=.. avg_ms=.. p95_ms=.. limit_ms=33.3` line.
+
+**Frame bound.** The same bound the "Viewer costs" method records, so the
+numbers stay comparable: benchmark runs render with `PresentMode::AutoNoVsync`
+so the meter reads the scene and not the display's 16.67 ms quantum; the
+samples are the raw per-frame wall-clock deltas `FrameTimeDiagnosticsPlugin`
+writes into `DiagnosticsStore` each update (the diagnostic's latest
+measurement, not its smoothed value); the 40 settle frames are excluded; the
+percentiles are nearest-rank. The benchmark system is ordered after the
+plugin's own frame-time write and after the creature chain, so the sample
+and the tick counter are both complete for the iteration that reads them.
+The delta itself anchors at `First` and carries the previous iteration's
+wall time (bevy_time 0.20.1 `time_system` computes it there;
+bevy_diagnostic 0.20.1 `diagnostic_system` writes it in `Update` from
+`Time<Real>`), so `max_on_tick` pairs each sample with the previous
+iteration's tick count — the ticks whose execution the sample's interval
+includes — and the first sample of a window, whose interval belongs to the
+settle frames, reads 0: the attribution is exact on both sides of the
+pairing. A `--benchmark-secs` run closes the window
+when the samples' sum crosses 60 000 ms — 60 seconds of measured frame time
+whatever the hardware delivers — so the frame count is an output of the run
+(`frames=` in the line), not part of the recipe. The window self-describes:
+`ticks` (sim ticks across the window; a 60-second window is exactly 1000 —
+`TICK_MS` is 60, `k1-data::objects_res`), `creatures`/`walking` (the
+population it ended on), `labels` (whether the name labels drew), and the
+identity `ticks · 60 ms ≈ frames · avg_ms` marks the honest runs — all four
+runs below satisfy it to within 0.2 %.
+
+**Reproducibility.** Three passes back to back — twice through the recorded
+commands, once through the `just viewer-gate` recipe itself — were run on
+the pre-integration tree: average and p95 reproduced within 0.04 ms in every
+configuration, p99 within 0.21 ms, the worst frame within 0.41 ms. The
+recorded tolerance stays, scoped to one machine state: repeated back-to-back
+runs on a settled machine count as reproducing while average and p95 stay
+within ±0.05 ms; a larger shift — across power states or across days —
+means the machine state changed, not the scene. Cross-state spread is
+recorded, not averaged in: the tree's passes on this table sit within
+0.06 ms average and 0.11 ms p95 of each other at the widest pairwise
+comparison, with the GPU idling in different power states between passes,
+and the single runs around the table match them. Two shifted states were
+discarded on the way: a pass taken right after a game session had exited
+read 0.5–0.9 ms higher in every configuration (the driver's post-game power
+state, not the scene), and runs under the desktop-load signature — p95
+jumping to 16–18 ms — were discarded with it.
+
+The table is the re-measurement the integration required — one pass per
+configuration on the tree with #115–#117 in, so what the gate measures now
+includes #116's per-frame name-label rendering, part of main since the
+integration:
+
+| Map (edition) | avg ms | p95 ms | p99 ms | worst ms | frames | population |
+|---|---|---|---|---|---|---|
+| 17 RUS | 3.08 | 3.41 | 3.90 | 10.15 | 19 478 | 28 creatures, 0 walking, labels on |
+| 19 RUS | 2.28 | 2.65 | 3.01 | 8.87 | 26 281 | 20 creatures, 14 walking, labels on |
+| 17 ENG | 3.11 | 3.49 | 3.94 | 10.17 | 19 319 | 28 creatures, 0 walking, labels on |
+| 19 ENG | 2.33 | 2.76 | 3.15 | 9.77 | 25 715 | 20 creatures, 14 walking, labels on |
+
+Every window covered exactly 1 000 sim ticks.
+
+**Verdict: pass, all four configurations, with ~9× headroom.** The slowest
+p95 is 3.49 ms against the 33.3 ms limit. The recorded round sits on the
+pre-integration ranges — the gate's own 2.2–3.3 ms average covers this
+round's 2.28–3.11 ms, the "Viewer costs" playing runs' 3.15–3.57 ms bound
+the calm map from above — so #116's per-frame name labels, drawing over
+every creature every frame while the `BENCH` line counts the same sprites
+and light materials as before, do not show above the machine's spread. One
+same-round pair prices the labels on the village (19 RUS): 2.30 → 2.28 ms
+average and 2.71 → 2.65 ms p95 across `KN_VIEWER_LABELS=0`/on — under the
+round's own reproducibility, so the recorded round leaves the draw cost
+unpriced; the ~0.2 ms an earlier same-round pair measured on the superseded
+integrated table (3.40 → 3.22 ms average, 3.98 → 3.77 ms p95) stays the
+only resolved number, and which machine state lets the pair resolve it is
+unconfirmed. The editions' spread on the same map is 0.03–0.05 ms here
+against the superseded round's 0.8–1.0 ms ("English names draw wider than
+Cyrillic ones") — the same machine-state dependence, hypothesis either
+way. The pre-integration ordering (village 19 faster than calm 17) holds
+on both editions: 2.28 against 3.08 ms on RUS, 2.33 against 3.11 ms on
+ENG.
+
+**p99 and the worst frame, with cause.** p99 is 3.01–3.94 ms — the tail is
+the scene's own spread, not a stall class. The worst frame is 8.9–10.2 ms,
+and its `max_on_tick` attribute is 0 in all four windows — measured under
+the corrected pairing: a sample carries the previous iteration's wall time
+(see "Frame bound"), so the flag reads the tick count of that same
+iteration, and none of the intervals the worst samples measured ran a
+simulation tick. Independence predicts the same (a
+tick lands every ~19–26 frames here, so ~4–5 % of the window carries one), and
+the "Viewer costs" isolation bounds what a tick could add — a full engine
+tick is 18–22 µs, a pose swap ~10 µs, three orders below the spike. What
+that leaves the worst frame to be — scheduler noise, a driver stall — stays
+unconfirmed: the exclusion of tick work is measured, the positive cause is
+not observed. The worst frame's position in the window (`max_at`) moves
+freely — 14799 and 15615 on the calm map, 6999 and 13854 on the village —
+which fits noise, not a recurring stage of the frame. Nothing here warrants
+an optimization ticket: every percentile sits an order of magnitude under
+the limit.
+
 ## Build profiles
 
 Three profiles (`crates/Cargo.toml`) with separate jobs; the local development loop never builds `release`.
