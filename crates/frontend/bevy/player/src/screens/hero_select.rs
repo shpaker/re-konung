@@ -1,12 +1,7 @@
-//! The hero selection of the new-game flow, in the spirit of the original's
-//! new-game menu (Slavik `game_newgame.cpp:115-186`) and the classical CRPG
-//! presentation: a portrait card per offered hero on the left, the chosen
-//! hero's dossier on the right — the description from the game's own lines,
-//! the menu numbers (base attributes, health, carry limit, max party, the
-//! seven skills, level, experience, gold, free points) and the hero's
-//! selected portrait. The layout is compact so the whole offer reads at once
-//! at 800×600 and up; nothing is invented. The choice leaves only as the
-//! typed `HeroSelectAction`; the reducer owns who starts a session.
+//! Hero creation with original portraits, models, descriptions and rules.
+//! The centered layout separates selection, story and configuration into
+//! three columns; narrow windows wrap the columns inside a scrolling body.
+//! Only typed `HeroSelectAction`s leave the view; the reducer owns the draft.
 
 use std::collections::HashMap;
 
@@ -35,8 +30,8 @@ use crate::screens;
 const CARD_COLUMN_WIDTH: f32 = 148.0;
 const PORTRAIT_WIDTH: f32 = 76.0;
 const PORTRAIT_HEIGHT: f32 = 87.0;
-/// The width of the description column inside the dossier.
-const DESCRIPTION_WIDTH: f32 = 440.0;
+const DESCRIPTION_WIDTH: f32 = 280.0;
+const CREATION_WIDTH: f32 = 1120.0;
 
 /// Which preview and constructor draft the on-screen view was built for: a
 /// change in either means its captions are stale, and the view respawns
@@ -353,6 +348,7 @@ fn root(
                 min_height: px(0),
                 overflow: Overflow::scroll_y(),
                 flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
             }
             CreationContent
             ScrollPosition::default()
@@ -371,6 +367,7 @@ fn root(
             --
             Node {
                 width: percent(100),
+                max_width: px(CREATION_WIDTH),
                 flex_direction: FlexDirection::Row,
                 justify_content: JustifyContent::SpaceBetween,
                 padding: UiRect::all(px(12.0)),
@@ -386,8 +383,7 @@ fn root(
     }
 }
 
-/// The card column and the dossier, side by side — the comparison the
-/// classical reference puts on one screen.
+/// Three columns: hero selection, identity and story, then editable statistics.
 #[allow(clippy::too_many_arguments)]
 fn dossier_row(
     fonts: &KonungFonts,
@@ -401,22 +397,36 @@ fn dossier_row(
     let model = dossier
         .map(|summary| summary.hero)
         .and_then(|hero| models.get(&hero).cloned());
-    let dossier_list: Box<dyn SceneList> =
-        Box::new(dossier_list(fonts, language, dossier, &model, hints, draft));
+    let dossier_list = dossier_list(fonts, language, dossier, hints, draft);
     bsn! {
         Node {
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::Wrap,
             width: percent(100),
+            max_width: px(CREATION_WIDTH),
             flex_shrink: 0.0,
+            margin: UiRect::vertical(Val::Auto),
             column_gap: spacing::SPACE_16,
+            row_gap: spacing::SPACE_16,
+            justify_content: JustifyContent::Center,
             align_items: AlignItems::Start,
         }
         Children [
             {EntityScene(card_column(cards))}
             --
+            {EntityScene(story_column(fonts, language, dossier, model))}
+            --
             @widgets::panel(fonts, dossier_list)
-            Node { flex_grow: 1.0, min_width: px(300), max_width: percent(100) }
+            Node {
+                width: px(540),
+                flex_basis: px(440),
+                flex_grow: 1.0,
+                min_width: px(440),
+                max_width: percent(100),
+                padding: UiRect::all(px(16)),
+                row_gap: spacing::SPACE_16,
+            }
+            bevy::feathers::theme::ThemeBackgroundColor(bevy::feathers::tokens::PANE_BODY_BG)
         ]
     }
 }
@@ -428,6 +438,7 @@ fn card_column(cards: Vec<impl Scene>) -> impl Scene {
             flex_direction: FlexDirection::Column,
             row_gap: spacing::SPACE_8,
             width: px(CARD_COLUMN_WIDTH),
+            flex_shrink: 0.0,
         }
         Children [{cards}]
     }
@@ -442,9 +453,11 @@ fn hero_card(
     selected: bool,
 ) -> Box<dyn Scene> {
     if selected {
-        Box::new(bsn! { @hero_card_control(fonts, hero, label, portrait) ButtonVariant::Primary })
+        Box::new(
+            bsn! { @hero_card_control(fonts, hero, label, portrait, selected) ButtonVariant::Primary },
+        )
     } else {
-        Box::new(bsn! { @hero_card_control(fonts, hero, label, portrait) })
+        Box::new(bsn! { @hero_card_control(fonts, hero, label, portrait, selected) })
     }
 }
 
@@ -453,7 +466,18 @@ fn hero_card_control(
     hero: u32,
     label: &str,
     portrait: Option<PortraitImage>,
+    selected: bool,
 ) -> impl Scene {
+    let label_color = if selected {
+        palette::TEXT_ON_ACCENT
+    } else {
+        palette::TEXT
+    };
+    let border_color = if selected {
+        palette::ACCENT
+    } else {
+        palette::CONTROL_BORDER
+    };
     bsn! {
         @bevy::feathers::controls::FeathersButton {
             @caption: bsn! {
@@ -463,13 +487,30 @@ fn hero_card_control(
                     row_gap: spacing::SPACE_8,
                 }
                 bevy::picking::Pickable::IGNORE
+                InheritableFont {
+                    font: {fonts.regular.clone()},
+                    font_size: typo::BODY,
+                    weight: FontWeight::NORMAL,
+                }
                 Children [
                     {EntityScene(portrait_view(portrait))}
                     --
                     @caption(label)
+                    TextColor(label_color)
+                    bevy::picking::Pickable::IGNORE
                 ]
             }
         }
+        Node {
+            width: percent(100),
+            height: px(132),
+            min_height: px(132),
+            flex_shrink: 0.0,
+            padding: UiRect::all(px(10)),
+            border: px(1),
+            overflow: Overflow::clip(),
+        }
+        BorderColor::all(border_color)
         InheritableFont {
             font: {fonts.regular.clone()},
             font_size: typo::BODY,
@@ -480,16 +521,47 @@ fn hero_card_control(
     }
 }
 
-/// The chosen hero's dossier: the header (selected portrait, name, the
-/// game's description), the constructor — the occupation, the combat style
-/// and the secondary set, the numbers the original's menu showed (computed
-/// from the choices exactly like the original's click branches), and the
-/// actions. Everything visible at once.
+fn story_column(
+    fonts: &KonungFonts,
+    language: kn_settings::Language,
+    dossier: Option<&HeroSummary>,
+    model: Option<PortraitImage>,
+) -> impl Scene {
+    let name = dossier.map_or(t(language, Text::HeroSlot(1)), |hero| hero.name.as_str());
+    let story = dossier.map_or("", |hero| hero.description.as_str());
+    bsn! {
+        @widgets::panel(fonts, bsn_list! {
+            {EntityScene(screens::text(fonts.bold.clone(), typo::TITLE, name))}
+            --
+            Node {
+                width: percent(100),
+                height: px(164),
+                flex_shrink: 0.0,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                border_radius: px(6),
+            }
+            BackgroundColor(palette::WINDOW_BG)
+            Children [{EntityScene(portrait_view(model))}]
+            --
+            {EntityScene(description(fonts, story))}
+        })
+        Node {
+            width: px(300),
+            max_width: percent(100),
+            flex_shrink: 0.0,
+            padding: UiRect::all(px(16)),
+            row_gap: spacing::SPACE_16,
+        }
+        bevy::feathers::theme::ThemeBackgroundColor(bevy::feathers::tokens::PANE_BODY_BG)
+    }
+}
+
+/// The editable statistics and occupation/specialization choices.
 fn dossier_list(
     fonts: &KonungFonts,
     language: kn_settings::Language,
     dossier: Option<&HeroSummary>,
-    model: &Option<PortraitImage>,
     _hints: &[String],
     draft: kn_app::NewGameDraft,
 ) -> Box<dyn SceneList> {
@@ -511,38 +583,6 @@ fn dossier_list(
         1 => kn_game::SECONDARY_TRADING,
         2 => kn_game::SECONDARY_MEDICINE,
         _ => kn_game::SECONDARY_DEFAULT,
-    };
-    let header = bsn! {
-        Node {
-            flex_direction: FlexDirection::Row,
-            flex_wrap: FlexWrap::Wrap,
-            column_gap: spacing::SPACE_16,
-            align_items: AlignItems::Start,
-            min_height: px(130.0),
-        }
-        Children [
-            {EntityScene(portrait_view(model.clone()))}
-            --
-            {EntityScene(bsn! {
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: spacing::SPACE_8,
-                    width: px(DESCRIPTION_WIDTH),
-                    max_width: percent(100),
-                    min_width: px(0),
-                    flex_shrink: 1.0,
-                }
-                Children [
-                    {EntityScene(screens::text(
-                        fonts.bold.clone(),
-                        typo::TITLE,
-                        &summary.name,
-                    ))}
-                    --
-                    {EntityScene(description(fonts, &summary.description))}
-                ]
-            })}
-        ]
     };
     let attributes: Box<dyn SceneList> = Box::new(bsn_list! {
         {EntityScene(screens::text(fonts.bold.clone(), typo::BODY, t(language, Text::HeroAttributes)))}
@@ -589,38 +629,13 @@ fn dossier_list(
         --
         {EntityScene(row(fonts, t(language, Text::LabelSmithery), &style.smithery.to_string(), HINT_SMITHERY))}
     });
-    let other_skills = bsn! {
-        Node {
-            flex_direction: FlexDirection::Row,
-            flex_wrap: FlexWrap::Wrap,
-            column_gap: spacing::SPACE_32,
-            align_items: AlignItems::Start,
-        }
-        Children [
-            {EntityScene(bsn! {
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: spacing::SPACE_4,
-                }
-                Children [{others}]
-            })}
-            --
-            {EntityScene(bsn! {
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: spacing::SPACE_4,
-                }
-                Children [{skills}]
-            })}
-        ]
-    };
     let class_row = bsn! {
         Node {
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::Wrap,
             column_gap: spacing::SPACE_8,
             align_items: AlignItems::Center,
-            min_height: px(44.0),
+            row_gap: spacing::SPACE_8,
         }
         // The row label is a bare `@caption`: the theme font has no
         // Cyrillic, the bundled face is set on the row.
@@ -630,7 +645,7 @@ fn dossier_list(
             weight: FontWeight::NORMAL,
         }
         Children [
-            @caption(t(language, Text::HeroClass)) TextColor(palette::TEXT_MUTED)
+            @caption(t(language, Text::HeroClass)) Node { width: percent(100) } TextColor(palette::TEXT_MUTED)
             --
             {EntityScene(choice_button(fonts, t(language, Text::ClassWarrior), draft.class == 0, ConstructorKind::Class, 0, HINT_CLASS_WARRIOR))}
             --
@@ -647,7 +662,7 @@ fn dossier_list(
             flex_wrap: FlexWrap::Wrap,
             column_gap: spacing::SPACE_8,
             align_items: AlignItems::Center,
-            min_height: px(44.0),
+            row_gap: spacing::SPACE_8,
         }
         // The row label is a bare `@caption`: the theme font has no
         // Cyrillic, the bundled face is set on the row.
@@ -657,7 +672,7 @@ fn dossier_list(
             weight: FontWeight::NORMAL,
         }
         Children [
-            @caption(t(language, Text::HeroSpec)) TextColor(palette::TEXT_MUTED)
+            @caption(t(language, Text::HeroSpec)) Node { width: percent(100) } TextColor(palette::TEXT_MUTED)
             --
             {EntityScene(choice_button(fonts, t(language, Text::LabelFencing), draft.combat_style == 0, ConstructorKind::Combat, 0, HINT_FENCING))}
             --
@@ -670,7 +685,7 @@ fn dossier_list(
             flex_wrap: FlexWrap::Wrap,
             column_gap: spacing::SPACE_8,
             align_items: AlignItems::Center,
-            min_height: px(44.0),
+            row_gap: spacing::SPACE_8,
         }
         // The row label is a bare `@caption`: the theme font has no
         // Cyrillic, the bundled face is set on the row.
@@ -680,7 +695,7 @@ fn dossier_list(
             weight: FontWeight::NORMAL,
         }
         Children [
-            @caption(t(language, Text::HeroSecondary)) TextColor(palette::TEXT_MUTED)
+            @caption(t(language, Text::HeroSecondary)) Node { width: percent(100) } TextColor(palette::TEXT_MUTED)
             --
             {EntityScene(choice_button(fonts, t(language, Text::LabelIdentification), draft.secondary == 0, ConstructorKind::Secondary, 0, HINT_IDENTIFICATION))}
             --
@@ -690,13 +705,12 @@ fn dossier_list(
         ]
     };
     Box::new(bsn_list! {
-        {EntityScene(header)}
-        --
         {EntityScene(bsn! {
             Node {
                 flex_direction: FlexDirection::Row,
-            flex_wrap: FlexWrap::Wrap,
-                column_gap: spacing::SPACE_32,
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: spacing::SPACE_24,
+                row_gap: spacing::SPACE_16,
                 align_items: AlignItems::Start,
             }
             Children [
@@ -708,7 +722,18 @@ fn dossier_list(
                     Children [{attributes}]
                 })}
                 --
-                {EntityScene(other_skills)}
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: spacing::SPACE_16,
+                    flex_grow: 1.0,
+                }
+                Children [
+                    Node { flex_direction: FlexDirection::Column, row_gap: spacing::SPACE_4 }
+                    Children [{skills}]
+                    --
+                    Node { flex_direction: FlexDirection::Column, row_gap: spacing::SPACE_4 }
+                    Children [{others}]
+                ]
             ]
         })}
         --
@@ -738,6 +763,7 @@ fn portrait_view(portrait: Option<PortraitImage>) -> impl Scene {
         Node {
             width: px(width),
             height: px(height),
+            flex_shrink: 0.0,
         }
         ImageNode { image: {portrait.handle} }
         bevy::picking::Pickable::IGNORE
@@ -1060,11 +1086,11 @@ fn attribute_button(
     };
     if next.is_some() {
         Box::new(
-            bsn! { @widgets::menu_button(fonts, label.as_str()) AttributeButton { attribute, delta } on(adjust_attribute) },
+            bsn! { @widgets::menu_button(fonts, label.as_str()) Node { width: px(56) } AttributeButton { attribute, delta } on(adjust_attribute) },
         )
     } else {
         Box::new(
-            bsn! { @widgets::menu_button(fonts, label.as_str()) AttributeButton { attribute, delta } bevy::ui::InteractionDisabled on(adjust_attribute) },
+            bsn! { @widgets::menu_button(fonts, label.as_str()) Node { width: px(56) } AttributeButton { attribute, delta } bevy::ui::InteractionDisabled on(adjust_attribute) },
         )
     }
 }

@@ -277,8 +277,14 @@ fn the_hero_select_presents_every_hero_and_previews_the_details() {
         "the second hero's name sits on its card alone"
     );
 
-    // The portrait and caption must share one actual control.
-    let mut target = text_entity(&mut app, &second_name);
+    // A biography can mention another hero; select the exact card caption.
+    let mut target = app
+        .world_mut()
+        .query::<(Entity, &Text)>()
+        .iter(app.world())
+        .find(|(_, text)| text.0 == second_name)
+        .expect("the second hero has a card caption")
+        .0;
     while app
         .world()
         .get::<bevy::ui_widgets::Button>(target)

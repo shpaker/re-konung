@@ -99,14 +99,29 @@ because unused floating fields can contain NaN.
 
 The entire portrait card is a button, with original selected/unselected images.
 Tests activate the actual controls and check attribute refunds, spending,
-class reset and keyboard focus restoration across view rebuilds. The page
-uses shared text colors, wrapping content and a scrollable body; the footer
-stays separate, Back on the left and Begin on the right. Escape cancels;
-Enter/Space activate the focused control. Scroll position survives edits.
+class reset and keyboard focus restoration across view rebuilds. The centered
+page has three columns: portrait selection, model and biography, then attributes
+and constructor choices. Cards reserve their full portrait and caption height;
+the bundled Cyrillic font is also applied inside the card. Neutral buttons use
+light text and outlined raised surfaces; only amber primary buttons use dark
+text. The separate footer keeps Back left and Begin right. Escape cancels;
+Enter/Space activate the focused control. Scroll position survives edits, and
+narrow windows wrap columns inside the scrollable body.
 
-Real pointer acceptance and final window/DPI visual inspection remain unverified:
-`unified-computer-use` returned `Invalid app` for the executable name and absolute
-path and omitted the running game from its inventory. This limits the evidence
-for presentation; it does not leave the allocation or equipment implementation
-unfinished. Headless activation tests and sprite inspection are not represented
-as real mouse testing.
+### Pointer acceptance on macOS
+
+The [development application bundle](../macos-testing.md) resolved the previous
+`Invalid app` limitation. After the user approved re-konung, real coordinate
+clicks opened New game, changed the selected hero from Wolf to Dragomir to
+Mikhail, selected Hunter, changed fencing to accuracy and selected medicine.
+Decreasing Hunter agility from 15 to 14 refunded 5 points; increasing strength
+from 3 to 4 spent 2, leaving 3. Switching heroes preserved those choices, and
+Begin loaded Mikhail's starting map without a session error. The runtime tests
+remain the evidence for the complete record transfer, including the fields
+not exposed by an in-game character panel yet.
+
+Screenshots of the RUS UI at the default 1280-pixel logical width and at a wider
+window confirmed separate portraits, Cyrillic captions, three centered columns
+and readable neutral buttons. Narrow-window scrolling and other DPI scales
+still need a completed pointer run: the attempted resize timed out, and the user
+subsequently took control of the window. No Windows pointer run was performed.

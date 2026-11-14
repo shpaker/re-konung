@@ -16,14 +16,14 @@ use kn_settings::{LoadError, Settings, default_path, defaults};
 #[derive(Parser, Debug)]
 #[command(name = "re-konung", version, about)]
 struct Cli {
-    /// Каталог установленной игры — содержимое inst/setup.dat
-    #[arg(long)]
+    /// Installed game directory, containing the unpacked inst/setup.dat files
+    #[arg(long, env = "RE_KONUNG_GAME_DIR")]
     game_dir: PathBuf,
     /// Start straight into a new game, skipping the main menu
     #[arg(long)]
     new_game: bool,
     /// Settings file path; defaults to config_dir()/re-konung/settings.json
-    #[arg(long)]
+    #[arg(long, env = "RE_KONUNG_SETTINGS")]
     settings: Option<PathBuf>,
 }
 

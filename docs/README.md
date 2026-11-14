@@ -4,6 +4,8 @@
 
 ## Общее
 
+- [macos-testing.md](macos-testing.md) — local application packaging and interactive game testing on macOS.
+
 - [games.md](games.md) — игры серии, издания, какие части на одном движке.
 - [design.md](design.md) — product principles: the original is the source of the game, the modern CRPGs of Larian Studios are the reference for controls, the camera and the interfaces.
 - [sources.md](sources.md) — внешние работы и полезные ресурсы.
