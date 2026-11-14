@@ -13,6 +13,7 @@ pub mod game_state;
 pub mod graph_res;
 pub mod lights_res;
 pub mod map;
+pub mod newh_res;
 pub mod objects_res;
 pub mod palette;
 pub mod reader;

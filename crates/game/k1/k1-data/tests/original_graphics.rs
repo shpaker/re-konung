@@ -256,6 +256,16 @@ fn text_tables_are_found_and_shaped() {
             texts.maps.iter().all(|map| !map.is_empty()),
             "{edition}: карты"
         );
+        assert_eq!(
+            texts.newgame.len(),
+            executable::NEWGAME_TEXTS,
+            "{edition}: строки меню новой игры"
+        );
+        // Первые три — описания героев, последние — подсказки по наведению
+        assert!(
+            texts.newgame.iter().all(|text| !text.is_empty()),
+            "{edition}: все 20 строк заполнены"
+        );
         // Без таблиц разбор exe не падает: их отсутствие — None, а не ошибка
         assert!(
             executable::parse(&data).unwrap().texts.is_some(),

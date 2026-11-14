@@ -10,8 +10,8 @@ mod common;
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use common::{first_hero, game_dir, player_app};
-use kn_app::{Action, LoadingAction, MainMenuAction, Screen, SessionError};
+use common::{all_heroes, first_hero, game_dir, player_app};
+use kn_app::{Action, HeroSelectAction, LoadingAction, MainMenuAction, Screen, SessionError};
 use kn_fe_player::START_SEED;
 use kn_fe_player::flow::AppFlow;
 use kn_fe_player::session;
@@ -49,12 +49,17 @@ fn special_sequence(app: &App, creature: usize) -> Arc<Sequence> {
     Arc::clone(&clip.sequence)
 }
 
-/// Drives the flow to `Playing` through legal actions only: one update to
-/// reduce «New game» and build, one more for the watcher's readiness report.
-fn play_to_playing(app: &mut App) {
+/// Drives the flow to `Playing` through legal actions only: the whole
+/// new-game flow — «New game», then the hero choice — reduced by one update
+/// together with the session build, one more for the watcher's readiness
+/// report.
+fn play_to_playing(app: &mut App, hero: u32) {
     app.world_mut()
         .resource_mut::<AppFlow>()
         .submit(Action::MainMenu(MainMenuAction::NewGame));
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::HeroSelect(HeroSelectAction::Choose(hero)));
     app.update();
     assert_eq!(
         app.world().resource::<AppFlow>().state().screen,
@@ -76,7 +81,7 @@ fn the_menu_loads_nothing_and_new_game_reaches_playing_only_when_ready() {
     };
     let game = Game::open(&dir).unwrap();
     let hero = first_hero(&game);
-    let mut app = player_app(game, hero);
+    let mut app = player_app(game, vec![hero]);
 
     // The menu frame: no session of any kind — the old startup loader's map
     // is gone, and nothing ticks behind the menu.
@@ -94,12 +99,24 @@ fn the_menu_loads_nothing_and_new_game_reaches_playing_only_when_ready() {
         "no simulation behind the menu"
     );
 
-    play_to_playing(&mut app);
+    play_to_playing(&mut app, hero);
 
-    // The request the window itself makes: the fixed seed, the hero's start
-    // map, creatures drawn through the shared subsystem.
+    // The request the window itself makes: the fixed seed, the chosen hero's
+    // start map — the same `Game.N` the scene, the simulation and the clips
+    // load — and creatures drawn through the shared subsystem.
     let motion = app.world().resource::<CreatureMotion>();
     assert_eq!(motion.seed, START_SEED, "the window's own seed is used");
+    assert_eq!(motion.hero, Some(hero), "the chosen hero rides the request");
+    assert_eq!(
+        motion.map,
+        Some(
+            app.world()
+                .resource::<kn_render::GameResource>()
+                .0
+                .start_map(hero)
+        ),
+        "the session opens on the chosen hero's own start map"
+    );
     let mut nodes = app.world_mut().query_filtered::<(), With<CreatureNode>>();
     assert!(
         nodes.iter(app.world()).next().is_some(),
@@ -117,20 +134,13 @@ fn a_failed_session_tears_down_and_a_retry_succeeds() {
     };
     let game = Game::open(&dir).unwrap();
     let hero = first_hero(&game);
-    let mut app = player_app(game, hero);
+    let mut app = player_app(game, vec![hero]);
     app.update();
 
     // The failure report of a build that died inside the subsystem: reported
     // while still Loading — the watcher's failure branch — and reduced back
     // to the menu with the typed reason, exactly as the table says.
-    app.world_mut()
-        .resource_mut::<AppFlow>()
-        .submit(Action::MainMenu(MainMenuAction::NewGame));
-    app.update();
-    assert_eq!(
-        app.world().resource::<AppFlow>().state().screen,
-        Screen::Loading
-    );
+    play_to_loading(&mut app, hero);
     session::teardown(app.world_mut());
     app.world_mut()
         .resource_mut::<AppFlow>()
@@ -141,15 +151,9 @@ fn a_failed_session_tears_down_and_a_retry_succeeds() {
     assert_eq!(flow.state().session_error, Some(SessionError::Map));
 
     // The retry from the failed state: a full session over the cleaned world,
-    // the typed reason cleared by the new attempt.
-    app.world_mut()
-        .resource_mut::<AppFlow>()
-        .submit(Action::MainMenu(MainMenuAction::NewGame));
-    app.update();
-    assert_eq!(
-        app.world().resource::<AppFlow>().state().screen,
-        Screen::Loading
-    );
+    // the typed reason cleared by the new attempt — through the whole
+    // new-game flow again.
+    play_to_loading(&mut app, hero);
     app.update();
     let flow = app.world().resource::<AppFlow>();
     assert_eq!(flow.state().screen, Screen::Playing);
@@ -179,6 +183,61 @@ fn a_failed_session_tears_down_and_a_retry_succeeds() {
             && app.world().get_resource::<LightingMaterials>().is_none()
             && app.world().get_resource::<session::SessionInit>().is_none()
     );
+}
+
+/// Drives the flow to `Loading` through legal actions only: the hero chosen,
+/// the build in flight — one update runs the reducer and the session build.
+fn play_to_loading(app: &mut App, hero: u32) {
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::MainMenu(MainMenuAction::NewGame));
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::HeroSelect(HeroSelectAction::Choose(hero)));
+    app.update();
+    assert_eq!(
+        app.world().resource::<AppFlow>().state().screen,
+        Screen::Loading,
+        "the session build is in flight"
+    );
+}
+
+/// Every offered hero starts a session of its own: the chosen `Game.N` rides
+/// into the scene, the simulation and the clips as one number, and each
+/// choice opens that hero's own start map (#121).
+#[test]
+fn every_hero_reaches_playing_with_its_own_start_map() {
+    let Some(dir) = game_dir() else {
+        return;
+    };
+    let heroes = all_heroes(&Game::open(&dir).unwrap());
+    for hero in &heroes {
+        let game = Game::open(&dir).unwrap();
+        let start_map = game.start_map(*hero);
+        let mut app = player_app(game, heroes.clone());
+        app.update();
+        play_to_playing(&mut app, *hero);
+        assert_eq!(
+            app.world().resource::<AppFlow>().state().screen,
+            Screen::Playing,
+            "hero {hero}: the watcher must report readiness"
+        );
+        let motion = app.world().resource::<CreatureMotion>();
+        assert_eq!(
+            motion.hero,
+            Some(*hero),
+            "hero {hero}: one chosen number drives scene, simulation and clips"
+        );
+        assert_eq!(
+            motion.map,
+            Some(start_map),
+            "hero {hero}: the session opens on the hero's own start map"
+        );
+        assert!(
+            app.world().resource::<CreatureSim>().sim.is_some(),
+            "hero {hero}: the start map must simulate"
+        );
+    }
 }
 
 #[test]

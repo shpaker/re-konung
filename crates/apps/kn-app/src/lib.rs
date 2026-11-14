@@ -40,8 +40,11 @@ mod effect;
 mod state;
 
 pub use action::{
-    Action, LoadingAction, MainMenuAction, PersistOutcome, SettingsAction, SettingsField,
+    Action, HeroSelectAction, LoadingAction, MainMenuAction, PersistOutcome, SettingsAction,
+    SettingsField,
 };
 pub use controller::AppController;
 pub use effect::Effect;
-pub use state::{AppState, SaveError, SaveStatus, Screen, SessionError, SettingsScreen};
+pub use state::{
+    AppState, NewGameDraft, SaveError, SaveStatus, Screen, SessionError, SettingsScreen,
+};

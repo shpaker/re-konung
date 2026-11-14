@@ -8,7 +8,7 @@ use bevy::asset::Assets;
 use bevy::prelude::*;
 use bevy::scene::ScenePlugin;
 use bevy::ui::widget::Text;
-use kn_app::{Action, MainMenuAction, SettingsAction, SettingsField};
+use kn_app::{Action, HeroSelectAction, MainMenuAction, SettingsAction, SettingsField};
 use kn_fe_player::flow::{AppFlow, AppliedSettings};
 use kn_fe_player::session::SessionInit;
 use kn_render::{CreatureMotion, CreatureSim, KonungLightMaterial};
@@ -31,6 +31,8 @@ fn headless_app() -> App {
     .init_resource::<CreatureSim>()
     .init_resource::<CreatureMotion>()
     .add_plugins(kn_fe_player::flow::PlayerFlowPlugin {
+        // The offer is reducer state; no game data is needed to reduce it.
+        heroes: vec![0, 1, 2],
         settings: kn_settings::defaults(),
         settings_path: None,
     });
@@ -56,10 +58,12 @@ fn the_watcher_reports_a_dead_build_and_the_menu_shows_the_reason() {
     let mut app = headless_app();
     app.update();
 
-    // To Loading through the reducer; the StartSession effect is dropped on
-    // the floor — this test owns the build's aftermath, not the build.
-    let mut loading = kn_app::AppController::new(kn_settings::defaults());
+    // To Loading through the reducer's whole new-game flow; the StartSession
+    // effect is dropped on the floor — this test owns the build's aftermath,
+    // not the build.
+    let mut loading = kn_app::AppController::new(vec![0, 1, 2], kn_settings::defaults());
     loading.submit(Action::MainMenu(MainMenuAction::NewGame));
+    loading.submit(Action::HeroSelect(HeroSelectAction::Choose(0)));
     let _effects = loading.flush();
     app.world_mut().resource_mut::<AppFlow>().0 = loading;
     // One honest Loading frame first — the menu root leaves, exactly like
@@ -97,11 +101,12 @@ fn the_menu_hides_when_the_screen_moves_to_loading() {
     app.update();
     assert!(strings(&mut app).iter().any(|s| s.contains("Новая игра")));
 
-    // The controller is driven through the legal transition alone; the
+    // The controller is driven through the legal transitions alone; the
     // StartSession effect is dropped on the floor here — this test is about
     // the view swap, not the session build.
-    let mut loading = kn_app::AppController::new(kn_settings::defaults());
+    let mut loading = kn_app::AppController::new(vec![0, 1, 2], kn_settings::defaults());
     loading.submit(Action::MainMenu(MainMenuAction::NewGame));
+    loading.submit(Action::HeroSelect(HeroSelectAction::Choose(0)));
     let _effects = loading.flush();
     app.world_mut().resource_mut::<AppFlow>().0 = loading;
 

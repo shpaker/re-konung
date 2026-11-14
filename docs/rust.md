@@ -545,6 +545,25 @@ before asking for group states (#38, #49). The rules' eight-direction offset
 table is a second copy of the engine's, because `k1-game` cannot import
 `kn-game`; `kn-game/tests/movement_grid.rs` holds the two together.
 
+### The marked hero's footprint
+
+The player squad is a creature of the simulation like any other: it draws no
+decision (`PlayerOrWarrior` returns before the shared RNG, `group_states`
+maps `PlayerInside` to what `Calm` does today), so no hero-specific behavior
+machinery exists (`k1-game/tests/original_rules.rs`, «a marked hero squad
+earns no decision and changes nobody else's»). Its physical presence,
+though, is a fact of the world: the squad's occupied cells enter the
+occupancy test of `walk_target` and of the static-work free neighbour, and
+one rejected attempt spends two more draws of the shared decision RNG —
+every later draw of every creature shifts. Measured over `Game.0`–`Game.2`
+of both editions on the start maps (#121): with the squad marked, villager
+walk counters differ from a squad-less world on map 1, whose village holds
+the hero's start; NPC load positions never move. The coupling is
+hero-agnostic — any creature standing there does the same — so a whole-world
+counter identity between a marked and an unmarked run is not a contract the
+engine can hold; the placement contract and the marked replay determinism
+live in `kn-game/tests/original_hero_start.rs`.
+
 ### Decision: turning in place
 
 `Decision::Turn(u8)` turns a standing creature to face the original's
@@ -1475,3 +1494,14 @@ A window and a GPU are not needed for the tests: `kn-game` and `k1-game` use no 
 Округление половинок в `character_cell`/`rect_cells` — к чётному (`round_ties_even`), как `round()` в Python: обычный Rust-`round` расходился бы на `.5`.
 
 Проверка записи из AGENTS.md для Rust та же: все файлы обоих изданий после «прочитать → записать» совпадают с оригиналом побайтно.
+
+### New-game allocation cost
+
+Measured locally on macOS arm64 in the release profile with
+`cargo run --release --manifest-path crates/Cargo.toml -p kn-game --example inspect_new_game`:
+100,000 repetitions of allocation plus one decrement took **53 ns (RUS run)**
+and **71 ns (ENG run)** per operation; 100 parses of the corresponding Game.0
+averaged **121,990 ns** and **154,969 ns**. The pure allocation rule is independent
+of the edition; the two timings show run variation. Recomputing the conserved
+point budget is about 2,200 times cheaper than the neighboring state parse in
+this measurement. Rules and verification: [k1/new-game.md](k1/new-game.md).

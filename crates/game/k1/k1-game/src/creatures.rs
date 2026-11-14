@@ -252,6 +252,7 @@ mod tests {
             names: (0..8).map(|index| format!("name{index:03}")).collect(),
             nicknames: (0..8).map(|index| format!("nick{index:03}")).collect(),
             maps: (0..4).map(|index| format!("map{index:02}")).collect(),
+            newgame: Vec::new(),
         };
         let creature = |id: usize, class_id: u8, name_id: u8, nick_id: u8| Creature {
             id,

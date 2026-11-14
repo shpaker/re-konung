@@ -13,11 +13,17 @@ pub enum Screen {
     /// The title menu. Renders in `applied.language`; a failed session shows
     /// [`AppState::session_error`] here.
     MainMenu,
+    /// The hero selection of the new-game flow: one option per
+    /// [`AppState::heroes`] entry, entered by `MainMenuAction::NewGame`, left
+    /// by [`HeroSelectAction::Choose`] (to [`Loading`](Screen::Loading)) or
+    /// [`HeroSelectAction::Cancel`] (back to [`MainMenu`](Screen::MainMenu)).
+    HeroSelect,
     /// The settings editor. Previews the `draft` of
     /// [`AppState::settings_screen`], while the rest of the UI keeps rendering
     /// in `applied.language`.
     Settings,
-    /// Building the game session. Entered by `MainMenuAction::NewGame`, left by
+    /// Building the game session. Entered by
+    /// `HeroSelectAction::Choose`, left by
     /// [`LoadingAction::Succeeded`] (to [`Playing`](Screen::Playing)) or
     /// [`LoadingAction::Failed`] (back to [`MainMenu`](Screen::MainMenu)).
     Loading,
@@ -76,10 +82,43 @@ pub struct SettingsScreen {
     // appears when a second entry point exists.
 }
 
+/// The complete menu selection, frozen into the session effect on confirmation.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct NewGameDraft {
+    /// The row of the occupation table: 0 Воин, 1 Охотник, 2 Купец, 3 Вождь.
+    pub class: usize,
+    /// The combat specialization row: 0 fencing, 1 accuracy.
+    pub combat_style: usize,
+    /// The secondary-skill set row: 0 default, 1 trader, 2 healer.
+    pub secondary: usize,
+    /// Optional allocated values, in the game facade's attribute order.
+    pub attributes: Option<[i16; 4]>,
+}
+
 /// The whole application state of the player, minus the running game.
 #[derive(Clone, PartialEq, Debug)]
 pub struct AppState {
     pub screen: Screen,
+    /// The heroes the new-game flow offers, as the game layer resolves them
+    /// (`Game.N` starting-state numbers). Fixed for the process lifetime: the
+    /// list comes from the opened game directory at startup. An empty list is
+    /// legal state (nothing to offer); `HeroSelectAction::Choose` of a number
+    /// outside it is a no-op.
+    pub heroes: Vec<u32>,
+    /// The hero the hero-select screen shows the details of: the first
+    /// offered hero at startup, [`HeroSelectAction::Preview`] afterwards —
+    /// the offer persists across re-entries of the screen. `Some` exactly
+    /// while it is a hero of [`AppState::heroes`]; `None` — an empty offer.
+    /// The session still starts from `HeroSelectAction::Choose`, which
+    /// carries its own number.
+    pub hero_preview: Option<u32>,
+    /// The character-constructor draft of the hero-select screen: the
+    /// chosen occupation row and the two specializations, indexes into the
+    /// tables the game layer resolves (`newgame_classes()`, the combat
+    /// styles and the secondary sets — 0 is each table's default). The
+    /// defaults are the original's: Воин, fencing, the default set
+    /// (`game.cpp:2301-2327`).
+    pub new_game_draft: NewGameDraft,
     /// The last applied-and-persisted settings; the main menu and the whole UI
     /// render in `applied.language`, the settings screen previews
     /// `draft.language`.

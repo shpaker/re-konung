@@ -6,13 +6,16 @@
 
 mod common;
 
+use bevy::feathers::controls::ButtonVariant;
+use bevy::feathers::controls::FeathersButton;
 use bevy::prelude::*;
 use bevy::ui::Checked;
 use bevy::ui::widget::Text;
 use bevy::ui_widgets::Checkbox;
-use common::{first_hero, game_dir, player_app, player_app_with};
-use kn_app::{Action, MainMenuAction, SettingsAction, SettingsField};
+use common::{all_heroes, first_hero, game_dir, player_app, player_app_with};
+use kn_app::{Action, HeroSelectAction, MainMenuAction, SettingsAction, SettingsField};
 use kn_fe_player::flow::{AppFlow, AppliedSettings};
+use kn_fe_player::screens::{ConstructorButton, ConstructorKind, HintPopup, HintSource};
 use kn_game::Game;
 use kn_settings::{Language, Settings};
 
@@ -59,7 +62,7 @@ fn the_menu_renders_in_the_applied_language() {
     let game = Game::open(&dir).unwrap();
     let hero = first_hero(&game);
 
-    let mut app = player_app(game, hero);
+    let mut app = player_app(game, vec![hero]);
     app.update();
     let shown = strings(&mut app);
     assert!(
@@ -74,7 +77,7 @@ fn the_menu_renders_in_the_applied_language() {
         language: Language::English,
         ..Settings::default()
     };
-    let mut app = player_app_with(Game::open(&dir).unwrap(), hero, english);
+    let mut app = player_app_with(Game::open(&dir).unwrap(), vec![hero], english);
     app.update();
     let shown = strings(&mut app);
     assert!(
@@ -94,7 +97,7 @@ fn the_settings_screen_previews_the_draft_and_mirrors_it_onto_the_widgets() {
     };
     let game = Game::open(&dir).unwrap();
     let hero = first_hero(&game);
-    let mut app = player_app(game, hero);
+    let mut app = player_app(game, vec![hero]);
     app.update();
 
     app.world_mut()
@@ -150,7 +153,7 @@ fn a_failed_save_shows_its_sentence_and_keeps_the_draft() {
     };
     let game = Game::open(&dir).unwrap();
     let hero = first_hero(&game);
-    let mut app = player_app(game, hero);
+    let mut app = player_app(game, vec![hero]);
     app.update();
     app.world_mut()
         .resource_mut::<AppFlow>()
@@ -200,14 +203,345 @@ fn the_loading_screen_shows_while_the_session_builds() {
     };
     let game = Game::open(&dir).unwrap();
     let hero = first_hero(&game);
-    let mut app = player_app(game, hero);
+    let mut app = player_app(game, vec![hero]);
     app.update();
     app.world_mut()
         .resource_mut::<AppFlow>()
         .submit(Action::MainMenu(MainMenuAction::NewGame));
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::HeroSelect(HeroSelectAction::Choose(hero)));
     app.update();
     assert!(
         strings(&mut app).iter().any(|s| s.contains("Загрузка")),
         "the loading line shows while the session builds"
+    );
+}
+
+/// The hero selection in full: one named card per offered hero, the dossier
+/// of the previewed hero on the right (attributes, skills, the rest), and
+/// the two actions — preview moves the dossier, Back returns to the menu
+/// (#121).
+#[test]
+fn the_hero_select_presents_every_hero_and_previews_the_details() {
+    let Some(dir) = game_dir() else {
+        return;
+    };
+    let game = Game::open(&dir).unwrap();
+    let heroes = all_heroes(&game);
+    let summaries = game.hero_summaries(kn_game::MapSource::Game).unwrap();
+    let mut app = player_app(game, heroes);
+    app.update();
+
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::MainMenu(MainMenuAction::NewGame));
+    app.update();
+    let shown = strings(&mut app);
+    assert!(
+        shown.iter().any(|s| s.contains("Атрибуты")),
+        "the hero-select screen opened with the dossier, got {shown:?}"
+    );
+    for summary in &summaries {
+        assert!(
+            !summary.name.is_empty(),
+            "the game data must name every hero for this test to be meaningful"
+        );
+        assert!(
+            shown.iter().any(|s| s.contains(summary.name.as_str())),
+            "the card of hero {:?} is on screen, got {shown:?}",
+            summary.name
+        );
+    }
+    // The dossier of the default preview (the first hero), sectioned.
+    for part in [
+        "Атрибуты",
+        "Навыки",
+        "Прочее",
+        "Сила",
+        "Фехтование",
+        "Начать",
+    ] {
+        assert!(
+            shown.iter().any(|s| s.contains(part)),
+            "the dossier holds {part:?}, got {shown:?}"
+        );
+    }
+    let first_name = summaries[0].name.clone();
+    let occurrences =
+        |app: &mut App, name: &str| strings(app).iter().filter(|s| s.as_str() == name).count();
+    let second_name = summaries[1].name.clone();
+    assert_eq!(
+        occurrences(&mut app, &second_name),
+        1,
+        "the second hero's name sits on its card alone"
+    );
+
+    // A biography can mention another hero; select the exact card caption.
+    let mut target = app
+        .world_mut()
+        .query::<(Entity, &Text)>()
+        .iter(app.world())
+        .find(|(_, text)| text.0 == second_name)
+        .expect("the second hero has a card caption")
+        .0;
+    while app
+        .world()
+        .get::<bevy::ui_widgets::Button>(target)
+        .is_none()
+    {
+        target = app
+            .world()
+            .get::<ChildOf>(target)
+            .expect("caption belongs to a button")
+            .parent();
+    }
+    let portrait_inside = app
+        .world_mut()
+        .query_filtered::<Entity, With<bevy::ui::widget::ImageNode>>()
+        .iter(app.world())
+        .any(|mut image| {
+            while let Some(parent) = app.world().get::<ChildOf>(image) {
+                image = parent.parent();
+                if image == target {
+                    return true;
+                }
+            }
+            false
+        });
+    assert!(
+        portrait_inside,
+        "the portrait must be inside the clickable card"
+    );
+    app.world_mut()
+        .trigger(bevy::ui_widgets::Activate { entity: target });
+    app.update();
+    let shown = strings(&mut app);
+    assert_eq!(
+        occurrences(&mut app, &second_name),
+        2,
+        "the dossier follows the preview, got {shown:?}"
+    );
+    assert_eq!(
+        occurrences(&mut app, &first_name),
+        1,
+        "the first hero is back to its card alone"
+    );
+
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::HeroSelect(HeroSelectAction::Cancel));
+    app.update();
+    assert!(
+        strings(&mut app).iter().any(|s| s.contains("Новая игра")),
+        "Cancel returned to the main menu"
+    );
+}
+
+/// The hint popups: hovering a dossier line opens the original's hover hint
+/// (`Texts::newgame`), leaving closes it. `Hovered` is inserted by hand —
+/// the headless world has no pointer.
+#[test]
+fn a_hovered_line_opens_the_hint_popup_and_leaving_closes_it() {
+    let Some(dir) = game_dir() else {
+        return;
+    };
+    let game = Game::open(&dir).unwrap();
+    let heroes = all_heroes(&game);
+    let hints = game.newgame_texts();
+    assert!(
+        hints.iter().all(|text| !text.is_empty()),
+        "the game's hint lines must resolve for this test to be meaningful"
+    );
+    let mut app = player_app(game, heroes);
+    app.update();
+
+    // Open the hero select, then hover the first dossier row (its label is
+    // Ловкость — hint line 9, the original's agility hint).
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::MainMenu(MainMenuAction::NewGame));
+    app.update();
+    let mut popups = app.world_mut().query_filtered::<Entity, With<HintPopup>>();
+    assert!(
+        popups.iter(app.world()).next().is_none(),
+        "no hover — no popup yet"
+    );
+    let target = {
+        let mut sources = app.world_mut().query_filtered::<Entity, With<HintSource>>();
+        sources
+            .iter(app.world())
+            .find(|entity| {
+                app.world()
+                    .get::<HintSource>(*entity)
+                    .is_some_and(|hint| hint.0 == 9)
+            })
+            .expect("the agility row carries the hint source")
+    };
+    app.world_mut()
+        .entity_mut(target)
+        .insert(bevy::picking::hover::Hovered(true));
+    app.update();
+    let mut popups = app.world_mut().query_filtered::<Entity, With<HintPopup>>();
+    let popup = popups
+        .iter(app.world())
+        .next()
+        .expect("the hint popup opened");
+    let text = app
+        .world()
+        .get::<bevy::ui::widget::Text>(popup)
+        .expect("the popup carries the hint text")
+        .0
+        .clone();
+    assert_eq!(text, hints[9], "the popup shows the hovered line's hint");
+
+    // Leaving closes it.
+    app.world_mut().despawn(target);
+    app.update();
+    let mut popups = app.world_mut().query_filtered::<Entity, With<HintPopup>>();
+    assert!(
+        popups.iter(app.world()).next().is_none(),
+        "no hover — no popup"
+    );
+}
+
+/// Clicking an occupation redraws the constructor: the drafted button reads
+/// primary and the numbers follow the class (Воин: Сила 15 → Охотник:
+/// Сила 3).
+#[test]
+fn choosing_an_occupation_redraws_the_numbers_and_the_highlight() {
+    let Some(dir) = game_dir() else {
+        return;
+    };
+    let heroes = all_heroes(&Game::open(&dir).unwrap());
+    let mut app = player_app(Game::open(&dir).unwrap(), heroes);
+    app.update();
+
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::MainMenu(MainMenuAction::NewGame));
+    app.update();
+    // Rows render as two captions (label, then value): Воин has Сила 15,
+    // Охотник has Сила 3 — the pair is the discriminator.
+    let strength_value = |app: &mut App| {
+        let shown = strings(app);
+        let index = shown
+            .iter()
+            .position(|s| s == "Сила")
+            .expect("the Сила row stands in the dossier");
+        shown[index + 1].clone()
+    };
+    assert_eq!(
+        strength_value(&mut app),
+        "15",
+        "the default occupation is Воин"
+    );
+    // The Охотник button is not primary before the click.
+    let mut buttons = app
+        .world_mut()
+        .query_filtered::<(Entity, &ConstructorButton, &ButtonVariant), With<FeathersButton>>();
+    let hunter = buttons
+        .iter(app.world())
+        .find(|(_, button, _)| {
+            **button
+                == ConstructorButton {
+                    kind: ConstructorKind::Class,
+                    index: 1,
+                }
+        })
+        .map(|(entity, _, _)| entity)
+        .expect("the Охотник button stands on screen");
+    assert!(
+        app.world()
+            .get::<ButtonVariant>(hunter)
+            .is_none_or(|v| *v != ButtonVariant::Primary),
+        "Охотник is not primary before the click"
+    );
+
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::HeroSelect(HeroSelectAction::SetClass(1)));
+    app.update();
+
+    assert_eq!(strength_value(&mut app), "3", "the numbers follow Охотник");
+    let (_, _, variant) = buttons
+        .iter(app.world())
+        .find(|(_, button, _)| {
+            **button
+                == ConstructorButton {
+                    kind: ConstructorKind::Class,
+                    index: 1,
+                }
+        })
+        .expect("the Охотник button stands on screen");
+    assert_eq!(variant, &ButtonVariant::Primary, "Охотник reads as drafted");
+}
+
+#[test]
+fn attribute_buttons_refund_spend_reset_and_preserve_keyboard_focus() {
+    use bevy::input_focus::InputFocus;
+    use kn_fe_player::screens::AttributeButton;
+    let Some(dir) = game_dir() else {
+        return;
+    };
+    let game = Game::open(&dir).unwrap();
+    let heroes = all_heroes(&game);
+    let mut app = player_app(game, heroes);
+    app.init_resource::<InputFocus>();
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::MainMenu(MainMenuAction::NewGame));
+    app.update();
+    let button = |app: &mut App, attribute, delta| {
+        app.world_mut()
+            .query::<(Entity, &AttributeButton)>()
+            .iter(app.world())
+            .find(|(_, button)| button.attribute == attribute && button.delta == delta)
+            .unwrap()
+            .0
+    };
+    let minus = button(&mut app, 2, -1);
+    app.world_mut()
+        .insert_resource(InputFocus::from_entity(minus));
+    app.world_mut()
+        .trigger(bevy::ui_widgets::Activate { entity: minus });
+    app.update();
+    let draft = app.world().resource::<AppFlow>().state().new_game_draft;
+    assert_eq!(draft.attributes, Some([3, 3, 14, 10]));
+    let focused = app.world().resource::<InputFocus>().get().unwrap();
+    assert_eq!(
+        app.world().get::<AttributeButton>(focused).unwrap().delta,
+        -1
+    );
+    let plus = button(&mut app, 0, 1);
+    app.world_mut()
+        .trigger(bevy::ui_widgets::Activate { entity: plus });
+    app.update();
+    let draft = app.world().resource::<AppFlow>().state().new_game_draft;
+    assert_eq!(draft.attributes, Some([4, 3, 14, 10]));
+    assert_eq!(
+        kn_game::newgame_allocation(draft.class, draft.attributes)
+            .unwrap()
+            .free_points,
+        3
+    );
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::HeroSelect(HeroSelectAction::SetClass(1)));
+    app.update();
+    assert_eq!(
+        app.world()
+            .resource::<AppFlow>()
+            .state()
+            .new_game_draft
+            .attributes,
+        None
+    );
+    let draft = app.world().resource::<AppFlow>().state().new_game_draft;
+    assert_eq!(
+        kn_game::newgame_allocation(draft.class, draft.attributes)
+            .unwrap()
+            .free_points,
+        0
     );
 }

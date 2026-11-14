@@ -220,7 +220,7 @@ Arrows indicate logical layers, not exact Cargo dependencies.
 
 | Layer | Component | Path | Owns | Must not know |
 |---|---|---|---|---|
-| 01 | `kn-player` | `crates/apps/player` | Binary `re-konung`: CLI (`--game-dir`, `--new-game`, `--settings`), settings bootstrap (typed load errors, defaults on a bad file, the file never touched), opening the game directory, resolving the hero, handing a `PlayerConfig` to the frontend | Bevy, K1 formats |
+| 01 | `kn-player` | `crates/apps/player` | Binary `re-konung`: CLI (`--game-dir`, `--new-game`, `--settings`), settings bootstrap (typed load errors, defaults on a bad file, the file never touched), opening the game directory, resolving the heroes, handing a `PlayerConfig` to the frontend | Bevy, K1 formats |
 | 01 | `kn-app` | `crates/apps/kn-app` | The player's application core in pure Rust: screens, typed actions, the pure `AppController` reducer and its transition table, typed effects and session/persist errors. Tested headless, no Bevy | Bevy, `kn-game`, formats, any frontend |
 | 01 | `kn-settings` | `crates/apps/kn-settings` | The player's settings model in pure Rust: defaults, validation, the interface `Language`, and versioned JSON persistence — a load that never writes and a save that never loses the previous file (`tmp`+rename, `.bak` for corrupt or newer files) | Bevy, the game, the window |
 | 01 | `kn-viewer` | `crates/apps/viewer` | Binary `re-konung-viewer` plus a library: CLI, startup resolution, headless `check` (JSON report, nonzero exit on failure) — no window, no GPU context | Bevy app construction (linked only transitively) |

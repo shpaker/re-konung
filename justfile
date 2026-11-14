@@ -64,6 +64,11 @@ check-maps source="game":
 game:
     cargo run --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-player --features kn-fe-player/dynamic -- --game-dir "{{game_dir}}"
 
+# Local macOS app bundle, discoverable by desktop tools and launchable from Finder.
+[macos]
+game-app:
+    uv run python tools/build_game_app.py --game-dir "{{game_dir}}"
+
 # То же в release: бенчмарки и диагностика, обычный локальный цикл — just game
 game-release:
     cargo run --release --manifest-path crates/Cargo.toml -p kn-player -- --game-dir "{{game_dir}}"
