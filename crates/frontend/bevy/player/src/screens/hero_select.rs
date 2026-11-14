@@ -38,11 +38,14 @@ const PORTRAIT_HEIGHT: f32 = 87.0;
 /// The width of the description column inside the dossier.
 const DESCRIPTION_WIDTH: f32 = 520.0;
 
-/// Which preview the on-screen view was built for: a change means its
-/// captions are stale, and the view respawns wholesale — the settings
-/// screen's `BuiltLanguage` pattern.
-#[derive(Resource)]
-struct HeroSelectView(Option<u32>);
+/// Which preview and constructor draft the on-screen view was built for: a
+/// change in either means its captions are stale, and the view respawns
+/// wholesale — the settings screen's `BuiltLanguage` pattern.
+#[derive(Resource, Clone, PartialEq)]
+struct HeroSelectView {
+    preview: Option<u32>,
+    draft: kn_app::NewGameDraft,
+}
 
 /// The heroes' portraits, decoded once per process from the game's menu
 /// images (`NEWH800R.RES`, any edition's — the portraits are identical);
@@ -193,7 +196,7 @@ pub(crate) fn spawn(world: &mut World) {
             &fonts, language, &heroes, preview, &summaries, &portraits, &hints, &models, draft,
         ))
         .expect("the hero-select root spawns");
-    world.insert_resource(HeroSelectView(preview));
+    world.insert_resource(HeroSelectView { preview, draft });
 }
 
 /// The decoded menu image as a texture: straight-alpha RGBA.
@@ -229,11 +232,13 @@ fn portrait_texture(image: &k1_data::newh_res::Image) -> Image {
 /// card highlight both follow the state. Runs after the flow chain, like the
 /// settings screen's own sync.
 pub(crate) fn sync(world: &mut World) {
-    let Some(built) = world.get_resource::<HeroSelectView>().map(|view| view.0) else {
+    let Some(built) = world.get_resource::<HeroSelectView>().cloned() else {
         return;
     };
     let state = world.resource::<AppFlow>().state();
-    if state.screen != kn_app::Screen::HeroSelect || state.hero_preview == built {
+    if state.screen != kn_app::Screen::HeroSelect
+        || (state.hero_preview == built.preview && state.new_game_draft == built.draft)
+    {
         return;
     }
     let mut roots = world.query_filtered::<Entity, With<ScreenRoot>>();
@@ -870,14 +875,14 @@ pub fn spawn_hint_popup(world: &mut World, text: &str, at: Option<(f32, f32)>, l
 }
 
 /// Which constructor choice the clicked button stands for.
-#[derive(Component, Clone, Copy, Default)]
-struct ConstructorButton {
-    kind: ConstructorKind,
-    index: u8,
+#[derive(Component, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ConstructorButton {
+    pub kind: ConstructorKind,
+    pub index: u8,
 }
 
 #[derive(Component, Clone, Copy, PartialEq, Eq, Default)]
-enum ConstructorKind {
+pub enum ConstructorKind {
     #[default]
     Class,
     Combat,

@@ -6,6 +6,8 @@
 
 mod common;
 
+use bevy::feathers::controls::ButtonVariant;
+use bevy::feathers::controls::FeathersButton;
 use bevy::prelude::*;
 use bevy::ui::Checked;
 use bevy::ui::widget::Text;
@@ -13,7 +15,7 @@ use bevy::ui_widgets::Checkbox;
 use common::{all_heroes, first_hero, game_dir, player_app, player_app_with};
 use kn_app::{Action, HeroSelectAction, MainMenuAction, SettingsAction, SettingsField};
 use kn_fe_player::flow::{AppFlow, AppliedSettings};
-use kn_fe_player::screens::{HintPopup, HintSource};
+use kn_fe_player::screens::{ConstructorButton, ConstructorKind, HintPopup, HintSource};
 use kn_game::Game;
 use kn_settings::{Language, Settings};
 
@@ -370,4 +372,76 @@ fn a_hovered_line_opens_the_hint_popup_and_leaving_closes_it() {
         popups.iter(app.world()).next().is_none(),
         "no hover — no popup"
     );
+}
+
+/// Clicking an occupation redraws the constructor: the drafted button reads
+/// primary and the numbers follow the class (Воин: Сила 15 → Охотник:
+/// Сила 3).
+#[test]
+fn choosing_an_occupation_redraws_the_numbers_and_the_highlight() {
+    let Some(dir) = game_dir() else {
+        return;
+    };
+    let heroes = all_heroes(&Game::open(&dir).unwrap());
+    let mut app = player_app(Game::open(&dir).unwrap(), heroes);
+    app.update();
+
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::MainMenu(MainMenuAction::NewGame));
+    app.update();
+    // Rows render as two captions (label, then value): Воин has Сила 15,
+    // Охотник has Сила 3 — the pair is the discriminator.
+    let strength_value = |app: &mut App| {
+        let shown = strings(app);
+        let index = shown
+            .iter()
+            .position(|s| s == "Сила")
+            .expect("the Сила row stands in the dossier");
+        shown[index + 1].clone()
+    };
+    assert_eq!(
+        strength_value(&mut app),
+        "15",
+        "the default occupation is Воин"
+    );
+    // The Охотник button is not primary before the click.
+    let mut buttons = app
+        .world_mut()
+        .query_filtered::<(Entity, &ConstructorButton, &ButtonVariant), With<FeathersButton>>();
+    let hunter = buttons
+        .iter(app.world())
+        .find(|(_, button, _)| {
+            **button
+                == ConstructorButton {
+                    kind: ConstructorKind::Class,
+                    index: 1,
+                }
+        })
+        .map(|(entity, _, _)| entity)
+        .expect("the Охотник button stands on screen");
+    assert!(
+        app.world()
+            .get::<ButtonVariant>(hunter)
+            .is_none_or(|v| *v != ButtonVariant::Primary),
+        "Охотник is not primary before the click"
+    );
+
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::HeroSelect(HeroSelectAction::SetClass(1)));
+    app.update();
+
+    assert_eq!(strength_value(&mut app), "3", "the numbers follow Охотник");
+    let (_, _, variant) = buttons
+        .iter(app.world())
+        .find(|(_, button, _)| {
+            **button
+                == ConstructorButton {
+                    kind: ConstructorKind::Class,
+                    index: 1,
+                }
+        })
+        .expect("the Охотник button stands on screen");
+    assert_eq!(variant, &ButtonVariant::Primary, "Охотник reads as drafted");
 }
