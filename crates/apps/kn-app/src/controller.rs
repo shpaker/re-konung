@@ -81,6 +81,7 @@ impl AppController {
             (Screen::MainMenu, Action::MainMenu(MainMenuAction::NewGame)) => {
                 self.state.session_error = None;
                 self.state.screen = Screen::HeroSelect;
+                self.state.new_game_draft = NewGameDraft::default();
             }
             (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::Preview(hero))) => {
                 if self.state.heroes.contains(&hero) {
@@ -90,6 +91,7 @@ impl AppController {
             (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::SetClass(index))) => {
                 if usize::from(index) < NEWGAME_CLASSES {
                     self.state.new_game_draft.class = usize::from(index);
+                    self.state.new_game_draft.attributes = None;
                 }
             }
             (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::SetCombatStyle(index))) => {
@@ -102,6 +104,14 @@ impl AppController {
                     self.state.new_game_draft.secondary = usize::from(index);
                 }
             }
+            (
+                Screen::HeroSelect,
+                Action::HeroSelect(HeroSelectAction::SetAttributes { class, values }),
+            ) => {
+                if class == self.state.new_game_draft.class {
+                    self.state.new_game_draft.attributes = Some(values);
+                }
+            }
             (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::Choose(hero))) => {
                 // The offered list is the only source of valid numbers: a
                 // stale view cannot start a session for a hero this game
@@ -111,7 +121,7 @@ impl AppController {
                     self.state.screen = Screen::Loading;
                     effects.push(Effect::StartSession {
                         hero,
-                        class_row: self.state.new_game_draft.class,
+                        draft: self.state.new_game_draft,
                     });
                 }
             }
@@ -232,7 +242,7 @@ mod tests {
         SettingsField,
     };
     use crate::effect::Effect;
-    use crate::state::{SaveError, SaveStatus, Screen, SessionError};
+    use crate::state::{NewGameDraft, SaveError, SaveStatus, Screen, SessionError};
 
     /// The heroes the test game directory offers — the same numbers the real
     /// data resolves (`Game.0`–`Game.2`).
@@ -332,7 +342,13 @@ mod tests {
                 &mut controller,
                 [Action::HeroSelect(HeroSelectAction::Choose(hero))],
             );
-            assert_eq!(effects, vec![Effect::StartSession { hero, class_row: 0 }]);
+            assert_eq!(
+                effects,
+                vec![Effect::StartSession {
+                    hero,
+                    draft: NewGameDraft::default()
+                }]
+            );
             assert_eq!(controller.state().screen, Screen::Loading);
             assert_eq!(controller.state().session_error, None);
         }
@@ -404,7 +420,12 @@ mod tests {
             effects,
             vec![Effect::StartSession {
                 hero: HEROES[0],
-                class_row: 2
+                draft: NewGameDraft {
+                    class: 2,
+                    combat_style: 1,
+                    secondary: 2,
+                    attributes: None,
+                }
             }]
         );
     }
@@ -450,7 +471,7 @@ mod tests {
             effects,
             vec![Effect::StartSession {
                 hero: HEROES[1],
-                class_row: 0
+                draft: NewGameDraft::default()
             }]
         );
         assert_eq!(controller.state().screen, Screen::Loading);
@@ -876,7 +897,7 @@ mod tests {
             effects,
             vec![Effect::StartSession {
                 hero: HEROES[0],
-                class_row: 0
+                draft: NewGameDraft::default()
             }]
         );
         let effects = submit_all(
@@ -897,7 +918,7 @@ mod tests {
             effects,
             vec![Effect::StartSession {
                 hero: HEROES[2],
-                class_row: 0
+                draft: NewGameDraft::default()
             }]
         );
         assert_eq!(controller.state().screen, Screen::Loading);

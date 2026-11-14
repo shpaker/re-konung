@@ -36,7 +36,7 @@ const CARD_COLUMN_WIDTH: f32 = 148.0;
 const PORTRAIT_WIDTH: f32 = 76.0;
 const PORTRAIT_HEIGHT: f32 = 87.0;
 /// The width of the description column inside the dossier.
-const DESCRIPTION_WIDTH: f32 = 520.0;
+const DESCRIPTION_WIDTH: f32 = 440.0;
 
 /// Which preview and constructor draft the on-screen view was built for: a
 /// change in either means its captions are stale, and the view respawns
@@ -241,12 +241,63 @@ pub(crate) fn sync(world: &mut World) {
     {
         return;
     }
+    let scroll_position = world
+        .query_filtered::<&ScrollPosition, With<CreationContent>>()
+        .iter(world)
+        .next()
+        .cloned();
+    let focused = world
+        .get_resource::<bevy::input_focus::InputFocus>()
+        .and_then(|focus| focus.get());
+    let focus_attribute = focused
+        .and_then(|entity| world.get::<AttributeButton>(entity))
+        .copied();
+    let focus_constructor = focused
+        .and_then(|entity| world.get::<ConstructorButton>(entity))
+        .copied();
+    let focus_hero = focused
+        .and_then(|entity| world.get::<HeroCard>(entity))
+        .map(|card| card.0);
     let mut roots = world.query_filtered::<Entity, With<ScreenRoot>>();
     let old: Vec<Entity> = roots.iter(world).collect();
     for root in old {
         world.despawn(root);
     }
     spawn(world);
+    if let Some(previous) = scroll_position {
+        for mut position in world
+            .query_filtered::<&mut ScrollPosition, With<CreationContent>>()
+            .iter_mut(world)
+        {
+            position.0 = previous.0;
+        }
+    }
+    let next_focus = if let Some(button) = focus_attribute {
+        world
+            .query::<(Entity, &AttributeButton)>()
+            .iter(world)
+            .find(|(_, value)| **value == button)
+            .map(|(entity, _)| entity)
+    } else if let Some(button) = focus_constructor {
+        world
+            .query::<(Entity, &ConstructorButton)>()
+            .iter(world)
+            .find(|(_, value)| **value == button)
+            .map(|(entity, _)| entity)
+    } else if let Some(hero) = focus_hero {
+        world
+            .query::<(Entity, &HeroCard)>()
+            .iter(world)
+            .find(|(_, value)| value.0 == hero)
+            .map(|(entity, _)| entity)
+    } else {
+        None
+    };
+    if let Some(entity) = next_focus
+        && let Some(mut focus) = world.get_resource_mut::<bevy::input_focus::InputFocus>()
+    {
+        focus.set(entity, bevy::input_focus::FocusCause::Navigated);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -271,27 +322,42 @@ fn root(
                 .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| t(language, Text::HeroSlot(row + 1)));
             let portrait = summary
-                .map(|summary| summary.portrait)
+                .map(|summary| {
+                    if preview == Some(hero) {
+                        summary.portrait_selected
+                    } else {
+                        summary.portrait
+                    }
+                })
                 .and_then(|record| portraits.get(&record).cloned());
             hero_card(fonts, hero, name, portrait, preview == Some(hero))
         })
         .collect::<Vec<_>>();
     let dossier = preview.and_then(|hero| summaries.iter().find(|summary| summary.hero == hero));
-    let _dossier_portrait = dossier
-        .map(|summary| summary.portrait_selected)
-        .and_then(|record| portraits.get(&record).cloned());
     bsn! {
         Node {
             width: percent(100),
             height: percent(100),
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
+            justify_content: JustifyContent::SpaceBetween,
+            padding: UiRect::all(px(24.0)),
             row_gap: spacing::SPACE_16,
         }
         BackgroundColor(palette::WINDOW_BG)
         ScreenRoot
         Children [
+            Node {
+                width: percent(100),
+                flex_grow: 1.0,
+                min_height: px(0),
+                overflow: Overflow::scroll_y(),
+                flex_direction: FlexDirection::Column,
+            }
+            CreationContent
+            ScrollPosition::default()
+            on(scroll_content)
+            Children [
             {EntityScene(dossier_row(
                 fonts,
                 language,
@@ -301,6 +367,21 @@ fn root(
                 models,
                 draft,
             ))}
+            ]
+            --
+            Node {
+                width: percent(100),
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::SpaceBetween,
+                padding: UiRect::all(px(12.0)),
+                flex_shrink: 0.0,
+            }
+            BackgroundColor(palette::SURFACE)
+            Children [
+                {EntityScene(back_button(fonts, language))}
+                --
+                {EntityScene(begin_button(fonts, language, preview))}
+            ]
         ]
     }
 }
@@ -325,13 +406,17 @@ fn dossier_row(
     bsn! {
         Node {
             flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
+            width: percent(100),
+            flex_shrink: 0.0,
             column_gap: spacing::SPACE_16,
             align_items: AlignItems::Start,
         }
         Children [
             {EntityScene(card_column(cards))}
             --
-            {EntityScene(widgets::panel(fonts, dossier_list))}
+            @widgets::panel(fonts, dossier_list)
+            Node { flex_grow: 1.0, min_width: px(300), max_width: percent(100) }
         ]
     }
 }
@@ -348,13 +433,7 @@ fn card_column(cards: Vec<impl Scene>) -> impl Scene {
     }
 }
 
-/// One hero card of the list: the plain portrait above the name button, the
-/// previewed one reading as primary — exactly like the settings screen's
-/// active language. The portrait lives outside the button on purpose: an
-/// image inside a `FeathersButton` caption breaks the caption's font
-/// inheritance (the name renders in the theme's default face, without
-/// Cyrillic). Two blocks: the BSN grammar only takes component constructors,
-/// not value expressions.
+/// The whole card is one control; decorative children never intercept picking.
 fn hero_card(
     fonts: &KonungFonts,
     hero: u32,
@@ -363,42 +442,41 @@ fn hero_card(
     selected: bool,
 ) -> Box<dyn Scene> {
     if selected {
-        Box::new(bsn! {
-            Node {
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                row_gap: spacing::SPACE_8,
-                width: percent(100),
-            }
-            Children [
-                {EntityScene(portrait_view(portrait))}
-                --
-                {EntityScene(bsn! {
-                    @widgets::menu_button(fonts, label)
-                    HeroCard(hero)
-                    ButtonVariant::Primary
-                    on(click_hero_card)
-                })}
-            ]
-        })
+        Box::new(bsn! { @hero_card_control(fonts, hero, label, portrait) ButtonVariant::Primary })
     } else {
-        Box::new(bsn! {
-            Node {
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                row_gap: spacing::SPACE_8,
-                width: percent(100),
+        Box::new(bsn! { @hero_card_control(fonts, hero, label, portrait) })
+    }
+}
+
+fn hero_card_control(
+    fonts: &KonungFonts,
+    hero: u32,
+    label: &str,
+    portrait: Option<PortraitImage>,
+) -> impl Scene {
+    bsn! {
+        @bevy::feathers::controls::FeathersButton {
+            @caption: bsn! {
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    row_gap: spacing::SPACE_8,
+                }
+                bevy::picking::Pickable::IGNORE
+                Children [
+                    {EntityScene(portrait_view(portrait))}
+                    --
+                    @caption(label)
+                ]
             }
-            Children [
-                {EntityScene(portrait_view(portrait))}
-                --
-                {EntityScene(bsn! {
-                    @widgets::menu_button(fonts, label)
-                    HeroCard(hero)
-                    on(click_hero_card)
-                })}
-            ]
-        })
+        }
+        InheritableFont {
+            font: {fonts.regular.clone()},
+            font_size: typo::BODY,
+            weight: FontWeight::NORMAL,
+        }
+        HeroCard(hero)
+        on(click_hero_card)
     }
 }
 
@@ -420,8 +498,10 @@ fn dossier_list(
             @caption(t(language, Text::HeroSlot(1)))
         });
     };
-    let classes = kn_game::newgame_classes();
-    let class = &classes[draft.class.min(classes.len() - 1)];
+    let class =
+        kn_game::newgame_profile(draft.class, draft.attributes).expect("validated allocation");
+    let allocation =
+        kn_game::newgame_allocation(draft.class, draft.attributes).expect("validated allocation");
     let style = if draft.combat_style == 1 {
         kn_game::COMBAT_ACCURACY
     } else {
@@ -435,9 +515,10 @@ fn dossier_list(
     let header = bsn! {
         Node {
             flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
             column_gap: spacing::SPACE_16,
             align_items: AlignItems::Start,
-            height: px(130.0),
+            min_height: px(130.0),
         }
         Children [
             {EntityScene(portrait_view(model.clone()))}
@@ -447,6 +528,9 @@ fn dossier_list(
                     flex_direction: FlexDirection::Column,
                     row_gap: spacing::SPACE_8,
                     width: px(DESCRIPTION_WIDTH),
+                    max_width: percent(100),
+                    min_width: px(0),
+                    flex_shrink: 1.0,
                 }
                 Children [
                     {EntityScene(screens::text(
@@ -463,13 +547,13 @@ fn dossier_list(
     let attributes: Box<dyn SceneList> = Box::new(bsn_list! {
         {EntityScene(screens::text(fonts.bold.clone(), typo::BODY, t(language, Text::HeroAttributes)))}
         --
-        {EntityScene(row(fonts, t(language, Text::LabelAgility), &class.agility.to_string(), HINT_AGILITY))}
+        {EntityScene(attribute_row(fonts, t(language, Text::LabelAgility), draft, 0, HINT_AGILITY))}
         --
-        {EntityScene(row(fonts, t(language, Text::LabelCharisma), &class.charisma.to_string(), HINT_CHARISMA))}
+        {EntityScene(attribute_row(fonts, t(language, Text::LabelCharisma), draft, 1, HINT_CHARISMA))}
         --
-        {EntityScene(row(fonts, t(language, Text::LabelStrength), &class.strength.to_string(), HINT_STRENGTH))}
+        {EntityScene(attribute_row(fonts, t(language, Text::LabelStrength), draft, 2, HINT_STRENGTH))}
         --
-        {EntityScene(row(fonts, t(language, Text::LabelEndurance), &class.endurance.to_string(), HINT_ENDURANCE))}
+        {EntityScene(attribute_row(fonts, t(language, Text::LabelEndurance), draft, 3, HINT_ENDURANCE))}
         --
         {EntityScene(row(fonts, t(language, Text::LabelHealth), &summary.health.to_string(), usize::MAX))}
         --
@@ -480,13 +564,13 @@ fn dossier_list(
     let others: Box<dyn SceneList> = Box::new(bsn_list! {
         {EntityScene(screens::text(fonts.bold.clone(), typo::BODY, t(language, Text::HeroOther)))}
         --
-        {EntityScene(row(fonts, t(language, Text::LabelLevel), &summary.level.to_string(), usize::MAX))}
+        {EntityScene(row(fonts, t(language, Text::LabelLevel), &1.to_string(), usize::MAX))}
         --
         {EntityScene(row(fonts, t(language, Text::LabelExperience), &summary.experience.to_string(), usize::MAX))}
         --
         {EntityScene(row(fonts, t(language, Text::LabelGold), &summary.gold.to_string(), usize::MAX))}
         --
-        {EntityScene(row(fonts, t(language, Text::LabelFreePoints), &summary.free_points.to_string(), usize::MAX))}
+        {EntityScene(row(fonts, t(language, Text::LabelFreePoints), &allocation.free_points.to_string(), usize::MAX))}
     });
     let skills: Box<dyn SceneList> = Box::new(bsn_list! {
         {EntityScene(screens::text(fonts.bold.clone(), typo::BODY, t(language, Text::HeroSkills)))}
@@ -508,6 +592,7 @@ fn dossier_list(
     let other_skills = bsn! {
         Node {
             flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
             column_gap: spacing::SPACE_32,
             align_items: AlignItems::Start,
         }
@@ -532,9 +617,10 @@ fn dossier_list(
     let class_row = bsn! {
         Node {
             flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
             column_gap: spacing::SPACE_8,
             align_items: AlignItems::Center,
-            height: px(44.0),
+            min_height: px(44.0),
         }
         // The row label is a bare `@caption`: the theme font has no
         // Cyrillic, the bundled face is set on the row.
@@ -558,9 +644,10 @@ fn dossier_list(
     let style_row = bsn! {
         Node {
             flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
             column_gap: spacing::SPACE_8,
             align_items: AlignItems::Center,
-            height: px(44.0),
+            min_height: px(44.0),
         }
         // The row label is a bare `@caption`: the theme font has no
         // Cyrillic, the bundled face is set on the row.
@@ -580,9 +667,10 @@ fn dossier_list(
     let secondary_row = bsn! {
         Node {
             flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
             column_gap: spacing::SPACE_8,
             align_items: AlignItems::Center,
-            height: px(44.0),
+            min_height: px(44.0),
         }
         // The row label is a bare `@caption`: the theme font has no
         // Cyrillic, the bundled face is set on the row.
@@ -601,17 +689,13 @@ fn dossier_list(
             {EntityScene(choice_button(fonts, t(language, Text::LabelMedicine), draft.secondary == 2, ConstructorKind::Secondary, 2, HINT_MEDICINE))}
         ]
     };
-    let actions: Box<dyn SceneList> = Box::new(bsn_list! {
-        {EntityScene(begin_button(fonts, language, Some(summary.hero)))}
-        --
-        {EntityScene(back_button(fonts, language))}
-    });
     Box::new(bsn_list! {
         {EntityScene(header)}
         --
         {EntityScene(bsn! {
             Node {
                 flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
                 column_gap: spacing::SPACE_32,
                 align_items: AlignItems::Start,
             }
@@ -633,15 +717,7 @@ fn dossier_list(
         {EntityScene(style_row)}
         --
         {EntityScene(secondary_row)}
-        --
-        {EntityScene(bsn! {
-            Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: spacing::SPACE_16,
-                margin: UiRect::top(px(8.0)),
-            }
-            Children [{actions}]
-        })}
+
     })
 }
 
@@ -664,6 +740,7 @@ fn portrait_view(portrait: Option<PortraitImage>) -> impl Scene {
             height: px(height),
         }
         ImageNode { image: {portrait.handle} }
+        bevy::picking::Pickable::IGNORE
     }) as Box<dyn Scene>
 }
 
@@ -676,7 +753,8 @@ fn description(fonts: &KonungFonts, text: &str) -> impl Scene {
     let text = text.to_string();
     bsn! {
         Node {
-            width: px(DESCRIPTION_WIDTH),
+            width: percent(100),
+            max_width: px(DESCRIPTION_WIDTH),
         }
         InheritableFont {
             font: {fonts.regular.clone()},
@@ -708,6 +786,7 @@ fn row(fonts: &KonungFonts, label: &str, value: &str, hint_line: usize) -> impl 
             weight: FontWeight::NORMAL,
         }
         HintSource(hint_line)
+        Hovered
         Children [
             @caption(label.as_str()) TextColor(palette::TEXT_MUTED)
             --
@@ -725,16 +804,18 @@ fn begin_button(
 ) -> impl Scene {
     bsn! {
         @widgets::menu_button(fonts, t(language, Text::Start))
+        ButtonVariant::Primary
         BeginButton(preview)
         on(click_begin)
     }
 }
 
-fn back_button(fonts: &KonungFonts, language: kn_settings::Language) -> impl Scene {
-    bsn! {
-        @widgets::menu_button(fonts, t(language, Text::Back))
+fn back_button(fonts: &KonungFonts, language: kn_settings::Language) -> Box<dyn Scene> {
+    let label = format!("{} · Esc", t(language, Text::Back));
+    Box::new(bsn! {
+        @widgets::menu_button(fonts, label.as_str())
         on(click_back)
-    }
+    })
 }
 
 /// Which hero the Begin button starts with, resolved at spawn time from the
@@ -921,4 +1002,105 @@ fn click_begin(click: On<Activate>, buttons: Query<&BeginButton>, mut flow: ResM
 
 fn click_back(_click: On<Activate>, mut flow: ResMut<AppFlow>) {
     flow.submit(Action::HeroSelect(HeroSelectAction::Cancel));
+}
+
+/// Escape cancels; Enter/Space remain scoped to the focused control.
+pub(crate) fn keyboard(keys: Option<Res<ButtonInput<KeyCode>>>, mut flow: ResMut<AppFlow>) {
+    if flow.state().screen == kn_app::Screen::HeroSelect
+        && keys.is_some_and(|keys| keys.just_pressed(KeyCode::Escape))
+    {
+        flow.submit(Action::HeroSelect(HeroSelectAction::Cancel));
+    }
+}
+
+/// A typed attribute operation, used by pointer and focused keyboard activation.
+#[derive(Component, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AttributeButton {
+    pub attribute: usize,
+    pub delta: i16,
+}
+
+fn attribute_row(
+    fonts: &KonungFonts,
+    label: &str,
+    draft: kn_app::NewGameDraft,
+    attribute: usize,
+    hint: usize,
+) -> impl Scene {
+    let allocation =
+        kn_game::newgame_allocation(draft.class, draft.attributes).expect("validated allocation");
+    bsn! {
+        Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: spacing::SPACE_8 }
+        Children [
+            {EntityScene(row(fonts, label, &allocation.values[attribute].to_string(), hint))}
+            --
+            {EntityScene(attribute_button(fonts, draft, attribute, -1))}
+            --
+            {EntityScene(attribute_button(fonts, draft, attribute, 1))}
+        ]
+    }
+}
+
+fn attribute_button(
+    fonts: &KonungFonts,
+    draft: kn_app::NewGameDraft,
+    attribute: usize,
+    delta: i16,
+) -> Box<dyn Scene> {
+    let allocation =
+        kn_game::newgame_allocation(draft.class, draft.attributes).expect("validated allocation");
+    let next = allocation.adjusted(draft.class, attribute, delta);
+    let label = match next {
+        Some(next) => format!(
+            "{} {}",
+            if delta < 0 { "−" } else { "+" },
+            (allocation.free_points - next.free_points).abs()
+        ),
+        None => if delta < 0 { "−" } else { "+" }.to_string(),
+    };
+    if next.is_some() {
+        Box::new(
+            bsn! { @widgets::menu_button(fonts, label.as_str()) AttributeButton { attribute, delta } on(adjust_attribute) },
+        )
+    } else {
+        Box::new(
+            bsn! { @widgets::menu_button(fonts, label.as_str()) AttributeButton { attribute, delta } bevy::ui::InteractionDisabled on(adjust_attribute) },
+        )
+    }
+}
+
+fn adjust_attribute(
+    click: On<Activate>,
+    buttons: Query<&AttributeButton>,
+    mut flow: ResMut<AppFlow>,
+) {
+    let Ok(button) = buttons.get(click.entity) else {
+        return;
+    };
+    let draft = flow.state().new_game_draft;
+    if let Some(next) = kn_game::newgame_allocation(draft.class, draft.attributes)
+        .and_then(|allocation| allocation.adjusted(draft.class, button.attribute, button.delta))
+    {
+        flow.submit(Action::HeroSelect(HeroSelectAction::SetAttributes {
+            class: draft.class,
+            values: next.values,
+        }));
+    }
+}
+
+#[derive(Component, Clone, Default)]
+struct CreationContent;
+
+fn scroll_content(
+    event: On<bevy::picking::events::PointerScroll>,
+    mut query: Query<(&mut ScrollPosition, &ComputedNode), With<CreationContent>>,
+) {
+    if let Ok((mut position, node)) = query.single_mut() {
+        let factor = match event.unit {
+            bevy::input::mouse::MouseScrollUnit::Line => 32.0,
+            bevy::input::mouse::MouseScrollUnit::Pixel => 1.0,
+        };
+        let maximum = (node.content_size.y - node.size.y).max(0.0) * node.inverse_scale_factor;
+        position.y = (position.y - event.y * factor).clamp(0.0, maximum);
+    }
 }

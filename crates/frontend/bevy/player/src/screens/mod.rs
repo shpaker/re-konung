@@ -6,7 +6,8 @@
 pub(crate) mod hero_select;
 
 pub use hero_select::{
-    ConstructorButton, ConstructorKind, HintPopup, HintSource, NewGameHints, spawn_hint_popup,
+    AttributeButton, ConstructorButton, ConstructorKind, HintPopup, HintSource, NewGameHints,
+    spawn_hint_popup,
 };
 pub(crate) mod loading;
 pub(crate) mod main_menu;
@@ -27,6 +28,7 @@ use kn_ui::KonungFonts;
 pub(crate) fn text(font: Handle<Font>, size: FontSize, string: &str) -> impl Scene {
     bsn! {
         Node
+        bevy::feathers::theme::InheritableThemeTextColor(bevy::feathers::tokens::TEXT_MAIN)
         InheritableFont {
             font: {font},
             font_size: {size},

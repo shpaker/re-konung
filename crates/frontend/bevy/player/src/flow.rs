@@ -118,6 +118,7 @@ impl Plugin for PlayerFlowPlugin {
                 (
                     crate::screens::settings::sync.after(FlowSet),
                     crate::screens::hero_select::sync.after(FlowSet),
+                    crate::screens::hero_select::keyboard.before(FlowSet),
                     crate::screens::hero_select::hint_popup.after(FlowSet),
                 ),
             )
@@ -148,12 +149,11 @@ fn apply_effects(world: &mut World) {
     let effects = std::mem::take(&mut world.resource_mut::<PendingEffects>().0);
     for effect in effects {
         match effect {
-            Effect::StartSession { hero, class_row } => match session::init(world, hero, class_row)
-            {
+            Effect::StartSession { hero, draft } => match session::init(world, hero, draft) {
                 Ok(()) => {}
                 Err(kind) => {
-                    // init already tore its half-built session down; the
-                    // report goes back the same frame.
+                    // Also discard the constructor overlay if scene assembly failed.
+                    session::teardown(world);
                     world
                         .resource_mut::<AppFlow>()
                         .submit(Action::Loading(LoadingAction::Failed(kind)));

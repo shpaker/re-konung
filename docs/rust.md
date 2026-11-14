@@ -1494,3 +1494,14 @@ A window and a GPU are not needed for the tests: `kn-game` and `k1-game` use no 
 Округление половинок в `character_cell`/`rect_cells` — к чётному (`round_ties_even`), как `round()` в Python: обычный Rust-`round` расходился бы на `.5`.
 
 Проверка записи из AGENTS.md для Rust та же: все файлы обоих изданий после «прочитать → записать» совпадают с оригиналом побайтно.
+
+### New-game allocation cost
+
+Measured locally on macOS arm64 in the release profile with
+`cargo run --release --manifest-path crates/Cargo.toml -p kn-game --example inspect_new_game`:
+100,000 repetitions of allocation plus one decrement took **53 ns (RUS run)**
+and **71 ns (ENG run)** per operation; 100 parses of the corresponding Game.0
+averaged **121,990 ns** and **154,969 ns**. The pure allocation rule is independent
+of the edition; the two timings show run variation. Recomputing the conserved
+point budget is about 2,200 times cheaper than the neighboring state parse in
+this measurement. Rules and verification: [k1/new-game.md](k1/new-game.md).

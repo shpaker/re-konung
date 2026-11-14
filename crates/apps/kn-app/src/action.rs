@@ -57,6 +57,8 @@ pub enum HeroSelectAction {
     /// Choose the secondary set `index` (0 default, 1 trader-leaning,
     /// 2 healer-leaning). Out of range — a no-op.
     SetSecondary(u8),
+    /// Store values validated by the game layer; the session validates again.
+    SetAttributes { class: usize, values: [i16; 4] },
     /// Start a new game as the hero `Game.N` `hero`: enter
     /// [`Loading`](crate::Screen::Loading) and wait for the session build.
     /// Emits [`StartSession`](crate::Effect::StartSession) carrying the same

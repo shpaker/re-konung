@@ -277,13 +277,38 @@ fn the_hero_select_presents_every_hero_and_previews_the_details() {
         "the second hero's name sits on its card alone"
     );
 
-    // Preview moves the dossier: the second hero's name now reads on its
-    // card and again as the dossier heading.
+    // The portrait and caption must share one actual control.
+    let mut target = text_entity(&mut app, &second_name);
+    while app
+        .world()
+        .get::<bevy::ui_widgets::Button>(target)
+        .is_none()
+    {
+        target = app
+            .world()
+            .get::<ChildOf>(target)
+            .expect("caption belongs to a button")
+            .parent();
+    }
+    let portrait_inside = app
+        .world_mut()
+        .query_filtered::<Entity, With<bevy::ui::widget::ImageNode>>()
+        .iter(app.world())
+        .any(|mut image| {
+            while let Some(parent) = app.world().get::<ChildOf>(image) {
+                image = parent.parent();
+                if image == target {
+                    return true;
+                }
+            }
+            false
+        });
+    assert!(
+        portrait_inside,
+        "the portrait must be inside the clickable card"
+    );
     app.world_mut()
-        .resource_mut::<AppFlow>()
-        .submit(Action::HeroSelect(HeroSelectAction::Preview(
-            summaries[1].hero,
-        )));
+        .trigger(bevy::ui_widgets::Activate { entity: target });
     app.update();
     let shown = strings(&mut app);
     assert_eq!(
@@ -444,4 +469,73 @@ fn choosing_an_occupation_redraws_the_numbers_and_the_highlight() {
         })
         .expect("the Охотник button stands on screen");
     assert_eq!(variant, &ButtonVariant::Primary, "Охотник reads as drafted");
+}
+
+#[test]
+fn attribute_buttons_refund_spend_reset_and_preserve_keyboard_focus() {
+    use bevy::input_focus::InputFocus;
+    use kn_fe_player::screens::AttributeButton;
+    let Some(dir) = game_dir() else {
+        return;
+    };
+    let game = Game::open(&dir).unwrap();
+    let heroes = all_heroes(&game);
+    let mut app = player_app(game, heroes);
+    app.init_resource::<InputFocus>();
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::MainMenu(MainMenuAction::NewGame));
+    app.update();
+    let button = |app: &mut App, attribute, delta| {
+        app.world_mut()
+            .query::<(Entity, &AttributeButton)>()
+            .iter(app.world())
+            .find(|(_, button)| button.attribute == attribute && button.delta == delta)
+            .unwrap()
+            .0
+    };
+    let minus = button(&mut app, 2, -1);
+    app.world_mut()
+        .insert_resource(InputFocus::from_entity(minus));
+    app.world_mut()
+        .trigger(bevy::ui_widgets::Activate { entity: minus });
+    app.update();
+    let draft = app.world().resource::<AppFlow>().state().new_game_draft;
+    assert_eq!(draft.attributes, Some([3, 3, 14, 10]));
+    let focused = app.world().resource::<InputFocus>().get().unwrap();
+    assert_eq!(
+        app.world().get::<AttributeButton>(focused).unwrap().delta,
+        -1
+    );
+    let plus = button(&mut app, 0, 1);
+    app.world_mut()
+        .trigger(bevy::ui_widgets::Activate { entity: plus });
+    app.update();
+    let draft = app.world().resource::<AppFlow>().state().new_game_draft;
+    assert_eq!(draft.attributes, Some([4, 3, 14, 10]));
+    assert_eq!(
+        kn_game::newgame_allocation(draft.class, draft.attributes)
+            .unwrap()
+            .free_points,
+        3
+    );
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::HeroSelect(HeroSelectAction::SetClass(1)));
+    app.update();
+    assert_eq!(
+        app.world()
+            .resource::<AppFlow>()
+            .state()
+            .new_game_draft
+            .attributes,
+        None
+    );
+    let draft = app.world().resource::<AppFlow>().state().new_game_draft;
+    assert_eq!(
+        kn_game::newgame_allocation(draft.class, draft.attributes)
+            .unwrap()
+            .free_points,
+        0
+    );
 }

@@ -82,10 +82,7 @@ pub struct SettingsScreen {
     // appears when a second entry point exists.
 }
 
-/// The character-constructor draft of the hero-select screen. The class is
-/// what the session's character record carries (the original writes it in
-/// `Update8`, `game.cpp:2453-2472`); the specializations shape the skill
-/// numbers the screen shows.
+/// The complete menu selection, frozen into the session effect on confirmation.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct NewGameDraft {
     /// The row of the occupation table: 0 Воин, 1 Охотник, 2 Купец, 3 Вождь.
@@ -94,6 +91,8 @@ pub struct NewGameDraft {
     pub combat_style: usize,
     /// The secondary-skill set row: 0 default, 1 trader, 2 healer.
     pub secondary: usize,
+    /// Optional allocated values, in the game facade's attribute order.
+    pub attributes: Option<[i16; 4]>,
 }
 
 /// The whole application state of the player, minus the running game.

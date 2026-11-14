@@ -487,8 +487,7 @@ fn the_specialization_tables_match_the_original() {
 }
 
 /// The model preview of a hero composes from `GRAPH.RES`: a non-empty RGBA
-/// image, and different heroes differ — their starting equipment is
-/// assigned per hero in the original's code.
+/// image, and different heroes retain their own model and palette.
 #[test]
 fn the_hero_preview_composes_from_graph_res() {
     let roots = game_roots();
@@ -516,7 +515,7 @@ fn the_hero_preview_composes_from_graph_res() {
         let same = previews.windows(2).all(|pair| pair[0].rgba == pair[1].rgba);
         assert!(
             !same,
-            "{edition}: different heroes compose to the same model — the starting              equipment is per hero"
+            "{edition}: different heroes compose to the same model"
         );
     }
 }

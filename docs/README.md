@@ -41,3 +41,6 @@
 ## «Князь 2» и «Князь 2.5»
 
 Пока ничего: нужны копии игр. План и гипотезы — в [games.md](games.md).
+
+The new-game constructor repair, its runtime contract and pending acceptance checks:
+[k1/new-game.md](k1/new-game.md).

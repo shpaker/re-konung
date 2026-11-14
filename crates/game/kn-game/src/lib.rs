@@ -15,6 +15,8 @@ pub mod rules;
 pub mod simulation;
 pub mod step_durations;
 
+pub use k1_game::new_game::{Allocation as NewGameAllocation, allocation as newgame_allocation};
+
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -305,12 +307,26 @@ pub fn newgame_classes() -> [NewGameClass; 4] {
             carrying: ((i32::from(endurance) * 1000) / 3 + 10_000) as f32 * 0.001,
             max_party: max_party_size(class_id, charisma),
         };
+    let classes = [CLASS_VOIN, CLASS_OHOTNIK, CLASS_KUPETC, CLASS_VOJD];
+    std::array::from_fn(|row| {
+        let [agility, charisma, strength, endurance] = k1_game::new_game::DEFAULT_ATTRIBUTES[row];
+        CLASS(classes[row], agility, charisma, strength, endurance)
+    })
+}
+
+/// The displayed attributes and derived limits of a validated allocation.
+pub fn newgame_profile(class: usize, attributes: Option<[i16; 4]>) -> Option<NewGameClass> {
+    let allocation = newgame_allocation(class, attributes)?;
+    let mut profile = *newgame_classes().get(class)?;
     [
-        CLASS(CLASS_VOIN, 3, 3, 15, 10),    // Воин, the default (case 6)
-        CLASS(CLASS_OHOTNIK, 15, 3, 3, 10), // Охотник (case 4)
-        CLASS(CLASS_KUPETC, 3, 3, 10, 12),  // Купец (case 3)
-        CLASS(CLASS_VOJD, 3, 25, 7, 7),     // Вождь (case 5)
-    ]
+        profile.agility,
+        profile.charisma,
+        profile.strength,
+        profile.endurance,
+    ] = allocation.values;
+    profile.carrying = ((i32::from(profile.endurance) * 1000) / 3 + 10_000) as f32 * 0.001;
+    profile.max_party = max_party_size(profile.class_id, profile.charisma);
+    Some(profile)
 }
 
 /// The occupation id constants of the character record (Slavik game.h:298-301).
@@ -481,15 +497,96 @@ fn overlays(options: &SceneOptions) -> k1_game::scene::Overlays {
 pub struct Game {
     dir: GameDir,
     resources: Resources,
+    session_state: Option<(u32, GameState)>,
 }
 
 impl Game {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let dir = GameDir::new(root);
         Ok(Self {
+            session_state: None,
             resources: Resources::load(&dir)?,
             dir,
         })
+    }
+
+    /// Applies the constructor to an in-memory starting state. Disk files stay intact.
+    pub fn configure_new_game(
+        &mut self,
+        hero: u32,
+        class: usize,
+        combat: usize,
+        secondary: usize,
+        attributes: Option<[i16; 4]>,
+    ) -> Result<()> {
+        let invalid = || GameError::Io(std::io::Error::other("invalid new-game configuration"));
+        let occupation = *newgame_classes().get(class).ok_or_else(invalid)?;
+        if hero > 2 || combat > 1 || secondary > 2 {
+            return Err(invalid());
+        }
+        let allocation = newgame_allocation(class, attributes).ok_or_else(invalid)?;
+        let mut state = game_state::parse(&self.dir.state_bytes(hero, GAME_FILES)?)?;
+        let slot = game_state::on_map(
+            &state,
+            game_state::start_map(hero as usize),
+            Some(hero as usize),
+        )
+        .start
+        .and_then(|group| group.members().next())
+        .ok_or_else(invalid)?;
+        let character = state.characters[slot].as_mut().ok_or_else(invalid)?;
+        let style = if combat == 0 {
+            COMBAT_FENCING
+        } else {
+            COMBAT_ACCURACY
+        };
+        let skills = [SECONDARY_DEFAULT, SECONDARY_TRADING, SECONDARY_MEDICINE][secondary];
+        character.class_id = occupation.class_id;
+        character.level = 1;
+        character.free_points = allocation.free_points;
+        character.direction = 5;
+        character.name_id = [10, 124, 151][hero as usize];
+        character.sprite_set = hero as u8;
+        character.palette_offset = [74, 33, 39][hero as usize] * 512;
+        character.attributes[0] = allocation.values[0];
+        character.attributes[1] = allocation.values[0];
+        character.attributes[2] = allocation.values[1];
+        character.attributes[3] = allocation.values[1];
+        character.attributes[5] = allocation.values[2];
+        character.attributes[6] = allocation.values[2];
+        character.attributes[7] = allocation.values[3];
+        character.attributes[8] = allocation.values[3];
+        character.skills[..7].copy_from_slice(&[
+            style.fencing,
+            skills.trading,
+            style.accuracy,
+            style.carpentry,
+            skills.medicine,
+            skills.identification,
+            style.smithery,
+        ]);
+        self.session_state = Some((hero, state));
+        Ok(())
+    }
+
+    /// Drops the session overlay when leaving or retrying a session.
+    pub fn clear_new_game(&mut self) {
+        self.session_state = None;
+    }
+
+    fn session_or_original(
+        &self,
+        bytes: &[u8],
+        source: MapSource,
+        hero: Option<usize>,
+    ) -> Result<GameState> {
+        if source == MapSource::Game
+            && let Some((chosen, state)) = &self.session_state
+            && hero == Some(*chosen as usize)
+        {
+            return Ok(state.clone());
+        }
+        Ok(game_state::parse(bytes)?)
     }
 
     pub fn root(&self) -> &std::path::Path {
@@ -653,7 +750,7 @@ impl Game {
         };
         let state = state_bytes
             .as_ref()
-            .map(|bytes| game_state::parse(bytes))
+            .map(|bytes| self.session_or_original(bytes, map_ref.source, hero))
             .transpose()?;
         let entities = state
             .as_ref()
@@ -734,48 +831,48 @@ impl Game {
             .unwrap_or_default()
     }
 
-    /// The model preview of the chosen hero, the way the original's new-game
-    /// menu drew it (`DrawNewGameChar`, `game_newgame.cpp:188-280`): the
-    /// hero's base model in state 0, facing the original's start direction
-    /// (5), with the hero's starting equipment composed over it and the
-    /// hero's own palette (`Resources::CharBasePal`, `resources.cpp:13`;
-    /// assigned in code by `Update8`, `game.cpp:2455-2465`). The equipment
-    /// tables are the original's per-hero assignments
-    /// (`game_newgame.cpp:276-365`). Returns a straight-alpha RGBA image
-    /// over the composed layers' bounding box.
+    /// Actual starting equipment from Game.N, composed with the chosen hero's
+    /// original model and palette. Unlike the original menu's demonstration
+    /// outfit, this preview agrees with the playable record.
     pub fn hero_preview(&self, hero: u32) -> Result<HeroPreview> {
-        const START_DIRECTION: u8 = 5;
-        const HERO_PALETTES: [u32; 3] = [74, 33, 39]; // CharBasePal, by base
-        // The per-hero starting equipment, ESLT_0..=ESLT_5
-        // (game_newgame.cpp:276-365): Драгомир [3,4,0,1,8,11], Михаил
-        // [0,4,5,0,7,10], Волк [0,4,5,2,6,9].
-        const HERO_EQUIPMENT: [[i16; 6]; 3] =
-            [[0, 4, 5, 2, 6, 9], [3, 4, 0, 1, 8, 11], [0, 4, 5, 0, 7, 10]];
-        let files = MapSource::Game.file_set();
-        let state_bytes = self.dir.state_bytes(hero, files)?;
-        let state = game_state::parse(&state_bytes)?;
-        let entities = game_state::on_map(
-            &state,
+        if hero >= 3 {
+            return Err(GameError::Io(std::io::Error::other("invalid hero")));
+        }
+        let state = game_state::parse(&self.dir.state_bytes(hero, GAME_FILES)?)?;
+        self.preview_state(hero, &state)
+    }
+
+    /// Composes the actual configured session record, including its original equipment.
+    pub fn configured_hero_preview(&self, hero: u32) -> Result<HeroPreview> {
+        let state = self
+            .session_state
+            .as_ref()
+            .filter(|(chosen, _)| *chosen == hero)
+            .map(|(_, state)| state)
+            .ok_or_else(|| GameError::Io(std::io::Error::other("no configured hero")))?;
+        self.preview_state(hero, state)
+    }
+
+    fn preview_state(&self, hero: u32, state: &GameState) -> Result<HeroPreview> {
+        let slot = game_state::on_map(
+            state,
             game_state::start_map(hero as usize),
             Some(hero as usize),
-        );
-        let base = (hero % 3) as usize;
-        let mut character = entities
-            .start
-            .and_then(|group| group.members().next())
-            .and_then(|member| {
-                state
-                    .characters
-                    .get(member)
-                    .and_then(Option::as_ref)
-                    .cloned()
-            })
-            .ok_or_else(|| GameError::Io(std::io::Error::other("no player record")))?;
-        character.palette_offset = (i32::from(u16::try_from(HERO_PALETTES[base]).unwrap_or(0))) * 2;
-        character.direction = START_DIRECTION;
+        )
+        .start
+        .and_then(|group| group.members().next())
+        .ok_or_else(|| GameError::Io(std::io::Error::other("no player record")))?;
+        let mut character = state
+            .characters
+            .get(slot)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| GameError::Io(std::io::Error::other("missing player record")))?
+            .clone();
+        character.sprite_set = hero as u8;
+        character.palette_offset = [74, 33, 39][hero as usize] * 512;
+        character.direction = 5;
         character.state = 0;
         character.frame = 0;
-        character.equipment = HERO_EQUIPMENT[base];
         let sprite = self
             .resources
             .with_graphics(|graph, objects| {
@@ -783,7 +880,7 @@ impl Game {
                     &character,
                     0,
                     0,
-                    &state,
+                    state,
                     graph,
                     objects,
                     &self.resources.tables,
@@ -880,7 +977,7 @@ impl Game {
         };
         let state = state_bytes
             .as_ref()
-            .map(|bytes| game_state::parse(bytes))
+            .map(|bytes| self.session_or_original(bytes, map_ref.source, hero))
             .transpose()?;
         let state = state
             .ok_or_else(|| GameError::Io(std::io::Error::other("no game state for simulation")))?;
@@ -924,7 +1021,7 @@ impl Game {
         let files = map_ref.source.file_set();
         let hero = self.hero_for(map_ref.source, hero)?;
         let state_bytes = self.dir.state_bytes(hero.unwrap_or(0) as u32, files)?;
-        let state = game_state::parse(&state_bytes)?;
+        let state = self.session_or_original(&state_bytes, map_ref.source, hero)?;
         Ok(self.resources.with_graphics(|graph, objects| {
             let graphics = k1_game::scene::Graphics::new(graph, objects, &self.resources.tables);
             let roster = k1_game::creatures::roster(&state, map_ref.number as usize, hero);
@@ -1494,6 +1591,156 @@ impl std::fmt::Display for CheckReport {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn constructor_configuration_reaches_all_runtime_consumers() {
+        for edition in ["rus", "eng"] {
+            let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../original/k1")
+                .join(edition)
+                .join("game");
+            if !root.is_dir() {
+                continue;
+            }
+            let mut game = super::Game::open(&root).unwrap();
+            for hero in 0..3 {
+                let bytes = game
+                    .dir
+                    .state_bytes(hero, k1_data::repo::GAME_FILES)
+                    .unwrap();
+                let original = k1_data::game_state::parse(&bytes).unwrap();
+                let baseline = game
+                    .simulation_with_hero(game.start_map(hero), 42, Some(hero))
+                    .unwrap();
+                for class in 0..4 {
+                    for combat in 0..2 {
+                        for secondary in 0..3 {
+                            game.configure_new_game(hero, class, combat, secondary, None)
+                                .unwrap();
+                            let loaded = game
+                                .session_or_original(
+                                    &bytes,
+                                    super::MapSource::Game,
+                                    Some(hero as usize),
+                                )
+                                .unwrap();
+                            let slot = k1_data::game_state::on_map(
+                                &loaded,
+                                k1_data::game_state::start_map(hero as usize),
+                                Some(hero as usize),
+                            )
+                            .start
+                            .unwrap()
+                            .members()
+                            .next()
+                            .unwrap();
+                            let character = loaded.characters[slot].as_ref().unwrap();
+                            assert_eq!(
+                                character.class_id,
+                                super::newgame_classes()[class].class_id
+                            );
+                            assert_eq!(
+                                character.attributes[0],
+                                super::newgame_classes()[class].agility
+                            );
+                            assert_eq!(character.skills[2], if combat == 1 { 100 } else { 0 });
+                            assert_eq!(character.skills[4], if secondary == 2 { 100 } else { 50 });
+                            assert_eq!(character.name_id, [10, 124, 151][hero as usize]);
+                            assert_eq!(character.level, 1);
+                            assert_eq!(
+                                character.equipment,
+                                original.characters[slot].as_ref().unwrap().equipment
+                            );
+                            assert_eq!(
+                                character.weapon_slot,
+                                original.characters[slot].as_ref().unwrap().weapon_slot
+                            );
+                            for (index, npc) in original.characters.iter().enumerate() {
+                                if index != slot {
+                                    assert_eq!(&loaded.characters[index], npc);
+                                }
+                            }
+                            let serialized = k1_data::game_state::serialize(&loaded).unwrap();
+                            let item_bytes =
+                                k1_data::game_state::ITEM_SLOTS * k1_data::game_state::ITEM_SIZE;
+                            assert!(
+                                serialized[..item_bytes] == bytes[..item_bytes],
+                                "item bytes stay intact, including NaNs"
+                            );
+                        }
+                    }
+                }
+                let allocation = newgame_allocation(0, None)
+                    .unwrap()
+                    .adjusted(0, 2, -1)
+                    .unwrap()
+                    .adjusted(0, 0, 1)
+                    .unwrap();
+                game.configure_new_game(hero, 0, 1, 2, Some(allocation.values))
+                    .unwrap();
+                let configured = &game.session_state.as_ref().unwrap().1;
+                let slot = game_state::on_map(
+                    configured,
+                    game_state::start_map(hero as usize),
+                    Some(hero as usize),
+                )
+                .start
+                .unwrap()
+                .members()
+                .next()
+                .unwrap();
+                let character = configured.characters[slot].as_ref().unwrap();
+                assert_eq!(character.attributes[0], 4);
+                assert_eq!(character.attributes[6], 14);
+                assert_eq!(character.free_points, 3);
+                let menu = game.hero_preview(hero).unwrap();
+                let playing = game.configured_hero_preview(hero).unwrap();
+                assert_eq!((menu.width, menu.height), (playing.width, playing.height));
+                assert!(
+                    menu.rgba == playing.rgba,
+                    "menu and session equipment must render identically"
+                );
+                assert!(
+                    game.configure_new_game(hero, 0, 0, 0, Some([99; 4]))
+                        .is_err()
+                );
+                let map = game.start_map(hero);
+                let scene = game
+                    .scene(
+                        map,
+                        &super::SceneOptions {
+                            characters: true,
+                            hero: Some(hero),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                assert!(!scene.creature_pieces.is_empty());
+                assert!(
+                    !game
+                        .creature_animations_with_hero(map, Some(hero))
+                        .unwrap()
+                        .is_empty()
+                );
+                let configured = game.simulation_with_hero(map, 42, Some(hero)).unwrap();
+                assert_eq!(
+                    configured.spawn_failures(),
+                    baseline.spawn_failures(),
+                    "constructor adds no placement failures"
+                );
+                game.clear_new_game();
+                let restored = game
+                    .session_or_original(&bytes, super::MapSource::Game, Some(hero as usize))
+                    .unwrap();
+                assert!(k1_data::game_state::serialize(&restored).unwrap() == bytes);
+
+                assert_eq!(
+                    std::fs::read(root.join(format!("Game.{hero}"))).unwrap(),
+                    bytes
+                );
+            }
+        }
+    }
+
     use super::*;
 
     fn piece(texture: TextureKey) -> Piece {
