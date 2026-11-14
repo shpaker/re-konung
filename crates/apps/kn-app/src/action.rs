@@ -34,7 +34,11 @@ pub enum SettingsField {
     Vsync(bool),
 }
 
-/// Hero selection intents — the second step of the new-game flow.
+/// Hero selection intents — the second step of the new-game flow, a
+/// character constructor: the hero (the prototype: name, portrait, starting
+/// equipment, world), the occupation (base attributes) and the two
+/// specializations (combat style and secondary set) are chosen
+/// independently, exactly like the original's new-game menu lets you.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HeroSelectAction {
     /// Highlight the offered hero `hero` on the screen (the detail panel
@@ -43,6 +47,16 @@ pub enum HeroSelectAction {
     /// off-screen action. No effect: the session starts from
     /// [`Choose`](HeroSelectAction::Choose) only.
     Preview(u32),
+    /// Choose the occupation `index` — the row of [`crate::AppState::new_game`]'s
+    /// occupation table the game layer resolves (`newgame_classes()`):
+    /// 0 Воин, 1 Охотник, 2 Купец, 3 Вождь. Out of range — a no-op.
+    SetClass(u8),
+    /// Choose the combat specialization `index` (0 fencing, 1 accuracy).
+    /// Out of range — a no-op.
+    SetCombatStyle(u8),
+    /// Choose the secondary set `index` (0 default, 1 trader-leaning,
+    /// 2 healer-leaning). Out of range — a no-op.
+    SetSecondary(u8),
     /// Start a new game as the hero `Game.N` `hero`: enter
     /// [`Loading`](crate::Screen::Loading) and wait for the session build.
     /// Emits [`StartSession`](crate::Effect::StartSession) carrying the same

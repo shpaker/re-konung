@@ -82,6 +82,20 @@ pub struct SettingsScreen {
     // appears when a second entry point exists.
 }
 
+/// The character-constructor draft of the hero-select screen. The class is
+/// what the session's character record carries (the original writes it in
+/// `Update8`, `game.cpp:2453-2472`); the specializations shape the skill
+/// numbers the screen shows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct NewGameDraft {
+    /// The row of the occupation table: 0 Воин, 1 Охотник, 2 Купец, 3 Вождь.
+    pub class: usize,
+    /// The combat specialization row: 0 fencing, 1 accuracy.
+    pub combat_style: usize,
+    /// The secondary-skill set row: 0 default, 1 trader, 2 healer.
+    pub secondary: usize,
+}
+
 /// The whole application state of the player, minus the running game.
 #[derive(Clone, PartialEq, Debug)]
 pub struct AppState {
@@ -99,6 +113,13 @@ pub struct AppState {
     /// The session still starts from `HeroSelectAction::Choose`, which
     /// carries its own number.
     pub hero_preview: Option<u32>,
+    /// The character-constructor draft of the hero-select screen: the
+    /// chosen occupation row and the two specializations, indexes into the
+    /// tables the game layer resolves (`newgame_classes()`, the combat
+    /// styles and the secondary sets — 0 is each table's default). The
+    /// defaults are the original's: Воин, fencing, the default set
+    /// (`game.cpp:2301-2327`).
+    pub new_game_draft: NewGameDraft,
     /// The last applied-and-persisted settings; the main menu and the whole UI
     /// render in `applied.language`, the settings screen previews
     /// `draft.language`.

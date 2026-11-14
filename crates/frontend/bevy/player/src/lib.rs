@@ -11,7 +11,7 @@ pub mod flow;
 pub mod i18n;
 pub mod session;
 
-mod screens;
+pub mod screens;
 
 use std::path::PathBuf;
 
@@ -139,9 +139,6 @@ pub fn run_player(config: PlayerConfig) {
     app.run();
 }
 
-/// The k1 reading of `k1_game::lighting::params` into the render contract —
-/// the same mapping the viewer applies: the ambient fade for every surface,
-/// the ground tile-light colour and its window gate.
 fn lighting_state(params: lighting::LightingParams) -> LightingState {
     LightingState {
         terrain_blend: Vec3::from(params.ambient),

@@ -22,6 +22,13 @@ use kn_render::{
 #[derive(Resource)]
 pub struct SessionInit;
 
+/// The occupation the constructor drafted for this session, as the
+/// character record's class byte. The original writes it into the hero
+/// record at start (`Update8`, `game.cpp:2453-2472`); the patch belongs to
+/// the character-record work (M4+), the number travels here meanwhile.
+#[derive(Resource)]
+pub struct NewGameClassId(pub u8);
+
 /// Seed of the creature simulation of the start map: fixed, so two runs of the
 /// same hero walk the same routes, and the same value the viewer uses for its
 /// "Reset positions" — one map, one reproducible spawn in either window.
@@ -78,7 +85,11 @@ fn request_start_creatures(
 /// A texture that fails to decode fails the whole session: a map drawn with
 /// holes is not a session. The old startup loader only warned and continued —
 /// the all-or-nothing rule of the app plan replaces that.
-pub fn init(world: &mut World, hero: u32) -> Result<(), SessionError> {
+pub fn init(world: &mut World, hero: u32, class_row: usize) -> Result<(), SessionError> {
+    let classes = kn_game::newgame_classes();
+    let class_id = classes
+        .get(class_row)
+        .map_or(kn_game::CLASS_VOIN, |class| class.class_id);
     let (map_ref, scene) = world.resource_scope::<CreatureMotion, _>(|world, mut motion| {
         let game = world.resource::<GameResource>();
         request_start_creatures(&game.0, hero, &mut motion)
@@ -163,6 +174,7 @@ pub fn init(world: &mut World, hero: u32) -> Result<(), SessionError> {
     if let Some(pool) = pool {
         world.insert_resource(pool);
     }
+    world.insert_resource(NewGameClassId(class_id));
     // Inserted last: from this moment the watcher may observe the request this
     // build just made.
     world.insert_resource(SessionInit);

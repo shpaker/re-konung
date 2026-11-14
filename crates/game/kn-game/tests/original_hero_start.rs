@@ -324,13 +324,13 @@ fn a_marked_start_map_replays_deterministically() {
     }
 }
 
-/// The hero presentation of the original's new-game menu, resolvable from the
-/// facade. The numbers the menu shows are the original's own constants,
-/// identical across the heroes and pinned here (facts from the code,
-/// `game.cpp:2301-2327` — they are not file data); the names and the
-/// descriptions resolve from the executable's tables and are distinct; the
-/// portraits sit in the original's screen-box order (Драгомир 3/4, Михаил
-/// 5/6, Волк 7/8 — selected/plain).
+/// The hero presentation of the original's new-game menu, resolvable from
+/// the facade: names and descriptions resolve from the executable's tables
+/// and are distinct, the portraits sit in the original's screen-box order
+/// (Драгомир 3/4, Михаил 5/6, Волк 7/8 — selected/plain), and the menu's
+/// numbers live in the occupation/specialization tables, pinned here (facts
+/// from the original's code, `game_newgame.cpp:367-462` and
+/// `game.cpp:2301-2327` — they are not file data).
 #[test]
 fn the_menu_can_present_every_hero() {
     let roots = game_roots();
@@ -357,63 +357,10 @@ fn the_menu_can_present_every_hero() {
                 "{edition} hero {}: the hero's description resolves",
                 summary.hero
             );
-            // The original's own menu constants.
-            assert_eq!(summary.agility, 3, "{edition} hero {}", summary.hero);
-            assert_eq!(summary.charisma, 3, "{edition} hero {}", summary.hero);
-            assert_eq!(summary.strength, 15, "{edition} hero {}", summary.hero);
-            assert_eq!(summary.endurance, 10, "{edition} hero {}", summary.hero);
-            assert_eq!(summary.fencing, 100, "{edition} hero {}", summary.hero);
-            assert_eq!(summary.trading, 10, "{edition} hero {}", summary.hero);
-            assert_eq!(summary.accuracy, 0, "{edition} hero {}", summary.hero);
-            assert_eq!(summary.carpentry, 1, "{edition} hero {}", summary.hero);
-            assert_eq!(summary.medicine, 50, "{edition} hero {}", summary.hero);
-            assert_eq!(
-                summary.identification, 20,
-                "{edition} hero {}",
-                summary.hero
-            );
-            assert_eq!(summary.smithery, 10, "{edition} hero {}", summary.hero);
-            assert_eq!(summary.free_points, 0, "{edition} hero {}", summary.hero);
-            assert_eq!(summary.max_party, 1, "{edition} hero {}", summary.hero);
-            // The original prints it as "%4.1f" (13.3); the value itself is
-            // 13 1/3 — 10 endurance through the original's formula.
-            assert!(
-                (summary.carrying - 13.333).abs() < 0.01,
-                "{edition} hero {}: carrying {}",
-                summary.hero,
-                summary.carrying
-            );
+            assert_eq!(summary.level, 1, "{edition} hero {}", summary.hero);
+            assert_eq!(summary.gold, 100, "{edition} hero {}", summary.hero);
+            assert_eq!(summary.health, 100, "{edition} hero {}", summary.hero);
         }
-        // Identical numbers across the heroes: what distinguishes them is
-        // the name, the portrait, the description and the world.
-        let numbers = |summary: &kn_game::HeroSummary| -> Vec<i64> {
-            [
-                summary.agility as i64,
-                summary.charisma as i64,
-                summary.strength as i64,
-                summary.endurance as i64,
-                summary.fencing as i64,
-                summary.trading as i64,
-                summary.accuracy as i64,
-                summary.carpentry as i64,
-                summary.medicine as i64,
-                summary.identification as i64,
-                summary.smithery as i64,
-                summary.free_points as i64,
-                summary.max_party as i64,
-            ]
-            .into_iter()
-            .chain([summary.carrying.to_bits() as i64])
-            .collect()
-        };
-        for summary in &summaries[1..] {
-            assert_eq!(
-                numbers(summary),
-                numbers(&summaries[0]),
-                "{edition}: the heroes' menu numbers differ"
-            );
-        }
-        // Names and descriptions are distinct.
         let mut names: Vec<_> = summaries.iter().map(|s| s.name.clone()).collect();
         names.sort();
         names.dedup();
@@ -438,5 +385,138 @@ fn the_menu_can_present_every_hero() {
             .map(|s| (s.portrait_selected, s.portrait))
             .collect();
         assert_eq!(portraits, vec![(7, 8), (3, 4), (5, 6)]);
+    }
+}
+
+/// The occupation table of the new-game screen, exactly the original's
+/// click-branch numbers (`game_newgame.cpp:367-413`) and the derived
+/// carry/party numbers.
+#[test]
+fn the_occupation_table_matches_the_original() {
+    let classes = kn_game::newgame_classes();
+    assert_eq!(classes.len(), 4);
+    // Warrior — the default the menu opens with.
+    let warrior = &classes[0];
+    assert_eq!(warrior.class_id, kn_game::CLASS_VOIN);
+    assert_eq!(
+        (
+            warrior.agility,
+            warrior.charisma,
+            warrior.strength,
+            warrior.endurance
+        ),
+        (3, 3, 15, 10)
+    );
+    assert_eq!(warrior.max_party, 1);
+    assert!((warrior.carrying - 13.333).abs() < 0.01);
+    // Hunter.
+    let hunter = &classes[1];
+    assert_eq!(hunter.class_id, kn_game::CLASS_OHOTNIK);
+    assert_eq!(
+        (
+            hunter.agility,
+            hunter.charisma,
+            hunter.strength,
+            hunter.endurance
+        ),
+        (15, 3, 3, 10)
+    );
+    // Merchant.
+    let merchant = &classes[2];
+    assert_eq!(merchant.class_id, kn_game::CLASS_KUPETC);
+    assert_eq!(
+        (
+            merchant.agility,
+            merchant.charisma,
+            merchant.strength,
+            merchant.endurance
+        ),
+        (3, 3, 10, 12)
+    );
+    assert!((merchant.carrying - 14.0).abs() < 0.01);
+    // Chief: the only occupation with a charisma high enough to gather more
+    // than one companion.
+    let chief = &classes[3];
+    assert_eq!(chief.class_id, kn_game::CLASS_VOJD);
+    assert_eq!(
+        (
+            chief.agility,
+            chief.charisma,
+            chief.strength,
+            chief.endurance
+        ),
+        (3, 25, 7, 7)
+    );
+    assert_eq!(chief.max_party, 3);
+}
+
+/// The combat styles and the secondary sets, exactly the original's
+/// click-branch numbers (`game_newgame.cpp:420-462`).
+#[test]
+fn the_specialization_tables_match_the_original() {
+    let (fencing, accuracy) = (kn_game::COMBAT_FENCING, kn_game::COMBAT_ACCURACY);
+    assert_eq!(
+        (
+            fencing.fencing,
+            fencing.accuracy,
+            fencing.carpentry,
+            fencing.smithery
+        ),
+        (100, 0, 1, 10)
+    );
+    assert_eq!(
+        (
+            accuracy.fencing,
+            accuracy.accuracy,
+            accuracy.carpentry,
+            accuracy.smithery
+        ),
+        (0, 100, 2, 5)
+    );
+    let sets = [
+        kn_game::SECONDARY_DEFAULT,
+        kn_game::SECONDARY_TRADING,
+        kn_game::SECONDARY_MEDICINE,
+    ];
+    assert_eq!(
+        sets.iter()
+            .map(|s| (s.trading, s.medicine, s.identification))
+            .collect::<Vec<_>>(),
+        vec![(10, 50, 20), (20, 50, 10), (10, 100, 10)]
+    );
+}
+
+/// The model preview of a hero composes from `GRAPH.RES`: a non-empty RGBA
+/// image, and different heroes differ — their starting equipment is
+/// assigned per hero in the original's code.
+#[test]
+fn the_hero_preview_composes_from_graph_res() {
+    let roots = game_roots();
+    if roots.is_empty() {
+        return;
+    }
+    for (edition, root) in roots {
+        let game = Game::open(&root).unwrap();
+        let heroes = game.heroes(MapSource::Game).unwrap();
+        let mut previews = Vec::new();
+        for hero in &heroes {
+            let preview = game
+                .hero_preview(*hero)
+                .unwrap_or_else(|error| panic!("{edition} hero {hero}: {error}"));
+            assert!(
+                preview.width > 0 && preview.height > 0,
+                "{edition} hero {hero}: the preview has a size"
+            );
+            assert!(
+                preview.rgba.chunks(4).any(|px| px[3] > 0),
+                "{edition} hero {hero}: the preview is not empty"
+            );
+            previews.push(preview);
+        }
+        let same = previews.windows(2).all(|pair| pair[0].rgba == pair[1].rgba);
+        assert!(
+            !same,
+            "{edition}: different heroes compose to the same model — the starting              equipment is per hero"
+        );
     }
 }

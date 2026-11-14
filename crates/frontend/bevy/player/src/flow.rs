@@ -118,6 +118,7 @@ impl Plugin for PlayerFlowPlugin {
                 (
                     crate::screens::settings::sync.after(FlowSet),
                     crate::screens::hero_select::sync.after(FlowSet),
+                    crate::screens::hero_select::hint_popup.after(FlowSet),
                 ),
             )
             .add_systems(
@@ -147,7 +148,8 @@ fn apply_effects(world: &mut World) {
     let effects = std::mem::take(&mut world.resource_mut::<PendingEffects>().0);
     for effect in effects {
         match effect {
-            Effect::StartSession { hero } => match session::init(world, hero) {
+            Effect::StartSession { hero, class_row } => match session::init(world, hero, class_row)
+            {
                 Ok(()) => {}
                 Err(kind) => {
                     // init already tore its half-built session down; the

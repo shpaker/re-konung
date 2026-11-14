@@ -271,49 +271,127 @@ const HERO_NAME_IDS: [u8; 3] = [10, 124, 151];
 /// hero 1 line 0, hero 2 line 1.
 const HERO_DESCRIPTION_INDEXES: [usize; 3] = [2, 0, 1];
 
-/// The hero's numbers at the new-game screen: the original fills the menu
-/// with its own constants and never reads them from the record
-/// (`game.cpp:2301-2327`; docs/k1/formats/game-state.md). Identical for all
-/// three heroes — what distinguishes them is the name, the portrait, the
-/// starting equipment and the world of the `Game.N` file.
-const NEWGAME_HERO: NewGameHero = NewGameHero {
-    agility: 3,
-    charisma: 3,
-    strength: 15,
-    endurance: 10,
-    fencing: 100,
-    trading: 10,
-    accuracy: 0,
-    carpentry: 1,
-    medicine: 50,
-    identification: 20,
-    smithery: 10,
-    free_points: 0,
-};
-
-/// The constants of the new-game screen (see the doc above).
-#[derive(Debug, Clone, Copy)]
-struct NewGameHero {
-    agility: i16,
-    charisma: i16,
-    strength: i16,
-    endurance: i16,
-    fencing: i16,
-    trading: i16,
-    accuracy: i16,
-    carpentry: i16,
-    medicine: i16,
-    identification: i16,
-    smithery: i16,
-    free_points: i32,
+/// The four occupations the new-game screen offers, with the numbers the
+/// original assigns on a click (`game_newgame.cpp:367-413`): the occupation
+/// id (the character record's class, `CLASS_*`, game.h:298-301) and the base
+/// attributes; every occupation also zeroes the free points.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NewGameClass {
+    /// The character record's class byte (`CLASS_KUPETC=2`, `CLASS_OHOTNIK=3`,
+    /// `CLASS_VOJD=4`, `CLASS_VOIN=5`).
+    pub class_id: u8,
+    pub agility: i16,
+    pub charisma: i16,
+    pub strength: i16,
+    pub endurance: i16,
+    /// Carrying capacity, the original's formula over the occupation's
+    /// endurance (`game_newgame.cpp:152-154`).
+    pub carrying: f32,
+    /// The largest party the occupation can lead: the charisma thresholds
+    /// (`game_state.cpp:173-190`) over the occupation's charisma.
+    pub max_party: usize,
 }
 
-/// One hero of the new-game flow, the way the original's new-game menu
-/// presented them (`game_newgame.cpp:115-186`): the numbers the menu showed
-/// are the original's own constants (identical across the heroes,
-/// docs/k1/formats/game-state.md), health and the record facts come from the
-/// hero's record of the starting state (offsets 0x33–0x5C, confirmed for
-/// both editions), the derived ones by the original's own formulas.
+/// The four occupations in the original's screen order (Воин is the default
+/// the menu opens with, `game.cpp:2323`).
+pub fn newgame_classes() -> [NewGameClass; 4] {
+    const CLASS: fn(u8, i16, i16, i16, i16) -> NewGameClass =
+        |class_id, agility, charisma, strength, endurance| NewGameClass {
+            class_id,
+            agility,
+            charisma,
+            strength,
+            endurance,
+            carrying: ((i32::from(endurance) * 1000) / 3 + 10_000) as f32 * 0.001,
+            max_party: max_party_size(class_id, charisma),
+        };
+    [
+        CLASS(CLASS_VOIN, 3, 3, 15, 10),    // Воин, the default (case 6)
+        CLASS(CLASS_OHOTNIK, 15, 3, 3, 10), // Охотник (case 4)
+        CLASS(CLASS_KUPETC, 3, 3, 10, 12),  // Купец (case 3)
+        CLASS(CLASS_VOJD, 3, 25, 7, 7),     // Вождь (case 5)
+    ]
+}
+
+/// The occupation id constants of the character record (Slavik game.h:298-301).
+pub const CLASS_KUPETC: u8 = 2;
+pub const CLASS_OHOTNIK: u8 = 3;
+pub const CLASS_VOJD: u8 = 4;
+pub const CLASS_VOIN: u8 = 5;
+
+/// The two combat specializations of the new-game screen (click boxes 15 and
+/// 16, `game_newgame.cpp:420-438`): the fencing/accuracy trade-off plus the
+/// craft skills it drags along.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NewGameCombatStyle {
+    pub fencing: i16,
+    pub accuracy: i16,
+    pub carpentry: i16,
+    pub smithery: i16,
+}
+
+/// Fencing first (box 15), the menu's default.
+pub const COMBAT_FENCING: NewGameCombatStyle = NewGameCombatStyle {
+    fencing: 100,
+    accuracy: 0,
+    carpentry: 1,
+    smithery: 10,
+};
+
+/// Accuracy first (box 16).
+pub const COMBAT_ACCURACY: NewGameCombatStyle = NewGameCombatStyle {
+    fencing: 0,
+    accuracy: 100,
+    carpentry: 2,
+    smithery: 5,
+};
+
+/// The three secondary-skill sets of the new-game screen (click boxes 17-19,
+/// `game_newgame.cpp:440-462`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NewGameSecondarySet {
+    pub trading: i16,
+    pub medicine: i16,
+    pub identification: i16,
+}
+
+/// The default set (box 17).
+pub const SECONDARY_DEFAULT: NewGameSecondarySet = NewGameSecondarySet {
+    trading: 10,
+    medicine: 50,
+    identification: 20,
+};
+
+/// The trader-leaning set (box 18).
+pub const SECONDARY_TRADING: NewGameSecondarySet = NewGameSecondarySet {
+    trading: 20,
+    medicine: 50,
+    identification: 10,
+};
+
+/// The healer-leaning set (box 19).
+pub const SECONDARY_MEDICINE: NewGameSecondarySet = NewGameSecondarySet {
+    trading: 10,
+    medicine: 100,
+    identification: 10,
+};
+
+/// The composed model preview of a hero: straight-alpha RGBA over the
+/// layers' bounding box.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeroPreview {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// One hero of the new-game flow: what depends on the hero (the name, the
+/// description, the portraits) plus the record facts of the starting state
+/// (level, experience, gold, free points, health — offsets 0x33–0x5C,
+/// confirmed for both editions). The menu's attribute and skill numbers do
+/// NOT depend on the hero: they come from the occupation and the
+/// specialization choices — [`newgame_classes`], [`COMBAT_FENCING`] and
+/// friends.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeroSummary {
     /// The `Game.N` starting-state number.
@@ -332,35 +410,10 @@ pub struct HeroSummary {
     pub level: u8,
     pub experience: i32,
     pub gold: i32,
-    /// The unspent points the original's menu printed.
     pub free_points: i32,
-    /// The base attributes the menu printed (0x56/0x5A/0x60/0x64), not the
-    /// current ones.
-    pub agility: i16,
-    pub charisma: i16,
-    pub strength: i16,
-    pub endurance: i16,
     /// Health on the interface scale: the file holds 0…1600 and the original
-    /// interface prints `(HP + 15) / 16` points (`game_state.cpp:47`). The
-    /// menu itself never printed it — our addition from the record.
+    /// interface prints `(HP + 15) / 16` points (`game_state.cpp:47`).
     pub health: i16,
-    /// Carrying capacity, the original's formula over the current endurance
-    /// (`game_newgame.cpp:152-154`).
-    pub carrying: f32,
-    /// The largest party the hero can lead, the original's charisma
-    /// thresholds over the occupation class (`game_state.cpp:173-190`).
-    pub max_party: usize,
-    /// The seven skills the menu showed, file order (0x40–0x4C): fencing,
-    /// trading, accuracy, carpentry, medicine, identification, smithery.
-    /// The armor and poisoning slots (0x4E/0x50) are combat states, not
-    /// starting facts, and stay out.
-    pub fencing: i16,
-    pub trading: i16,
-    pub accuracy: i16,
-    pub carpentry: i16,
-    pub medicine: i16,
-    pub identification: i16,
-    pub smithery: i16,
 }
 
 /// The original's max party size (`game_state.cpp:173-190`): the number of
@@ -491,13 +544,10 @@ impl Game {
     /// the name in code (`game_newgame.cpp:305-351`), because the
     /// player-group record the starting states carry is the same in every
     /// `Game.N` of both editions (measured) and is not the hero's identity.
-    /// The numbers the menu showed are the original's own constants
-    /// (`game.cpp:2301-2327`, identical across the heroes); level,
-    /// experience, gold and health are our additions from the record (the
-    /// menu never printed them). The derived numbers ride the original's
-    /// formulas over those constants. An unknown hero number, or texts the
-    /// exe does not carry, yield empty strings the caller renders with its
-    /// own fallback.
+    /// Level, experience, gold, free points and health are our additions
+    /// from the record (the menu never printed them). An unknown hero
+    /// number, or texts the exe does not carry, yield empty strings the
+    /// caller renders with its own fallback.
     pub fn hero_summaries(&self, source: MapSource) -> Result<Vec<HeroSummary>> {
         let files = source.file_set();
         let texts = self.resources.tables.texts.as_ref();
@@ -547,28 +597,11 @@ impl Game {
                     experience: 0,
                     gold: 0,
                     free_points: 0,
-                    agility: 0,
-                    charisma: 0,
-                    strength: 0,
-                    endurance: 0,
                     health: 0,
-                    carrying: 0.0,
-                    max_party: 0,
-                    fencing: 0,
-                    trading: 0,
-                    accuracy: 0,
-                    carpentry: 0,
-                    medicine: 0,
-                    identification: 0,
-                    smithery: 0,
                 });
                 continue;
             };
-            // Health rides the interface scale: the file holds 0…1600, the
-            // interface prints points. The derived numbers ride the
-            // original's formulas over the new-game constants.
             let health = (i32::from(character.attributes[4]) + 15) / 16;
-            let carrying = ((i32::from(NEWGAME_HERO.endurance) * 1000) / 3 + 10_000) as f32 * 0.001;
             summaries.push(HeroSummary {
                 hero,
                 name,
@@ -578,21 +611,8 @@ impl Game {
                 level: character.level,
                 experience: character.experience,
                 gold: character.gold,
-                free_points: NEWGAME_HERO.free_points,
-                agility: NEWGAME_HERO.agility,
-                charisma: NEWGAME_HERO.charisma,
-                strength: NEWGAME_HERO.strength,
-                endurance: NEWGAME_HERO.endurance,
+                free_points: character.free_points,
                 health: health as i16,
-                carrying,
-                max_party: max_party_size(character.class_id, NEWGAME_HERO.charisma),
-                fencing: NEWGAME_HERO.fencing,
-                trading: NEWGAME_HERO.trading,
-                accuracy: NEWGAME_HERO.accuracy,
-                carpentry: NEWGAME_HERO.carpentry,
-                medicine: NEWGAME_HERO.medicine,
-                identification: NEWGAME_HERO.identification,
-                smithery: NEWGAME_HERO.smithery,
             });
         }
         Ok(summaries)
@@ -692,6 +712,152 @@ impl Game {
     /// creatures walk, rules decide, engine ticks.
     pub fn simulation(&self, map_ref: MapRef, seed: u64) -> Result<simulation::Simulation> {
         self.simulation_with_hero(map_ref, seed, None)
+    }
+
+    /// The 20 lines of the original's new-game menu from the executable's
+    /// tables (docs/k1/formats/executable.md): 0–2 the heroes' descriptions
+    /// in the screen-box order, 3–6 the occupations' descriptions, 7–19 the
+    /// hover hints of the menu's numbers. Trimmed; empty when the edition
+    /// carries no texts. Our presentation shows them as tooltips.
+    pub fn newgame_texts(&self) -> Vec<String> {
+        self.resources
+            .tables
+            .texts
+            .as_ref()
+            .map(|texts| {
+                texts
+                    .newgame
+                    .iter()
+                    .map(|text| text.trim().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The model preview of the chosen hero, the way the original's new-game
+    /// menu drew it (`DrawNewGameChar`, `game_newgame.cpp:188-280`): the
+    /// hero's base model in state 0, facing the original's start direction
+    /// (5), with the hero's starting equipment composed over it and the
+    /// hero's own palette (`Resources::CharBasePal`, `resources.cpp:13`;
+    /// assigned in code by `Update8`, `game.cpp:2455-2465`). The equipment
+    /// tables are the original's per-hero assignments
+    /// (`game_newgame.cpp:276-365`). Returns a straight-alpha RGBA image
+    /// over the composed layers' bounding box.
+    pub fn hero_preview(&self, hero: u32) -> Result<HeroPreview> {
+        const START_DIRECTION: u8 = 5;
+        const HERO_PALETTES: [u32; 3] = [74, 33, 39]; // CharBasePal, by base
+        // The per-hero starting equipment, ESLT_0..=ESLT_5
+        // (game_newgame.cpp:276-365): Драгомир [3,4,0,1,8,11], Михаил
+        // [0,4,5,0,7,10], Волк [0,4,5,2,6,9].
+        const HERO_EQUIPMENT: [[i16; 6]; 3] =
+            [[0, 4, 5, 2, 6, 9], [3, 4, 0, 1, 8, 11], [0, 4, 5, 0, 7, 10]];
+        let files = MapSource::Game.file_set();
+        let state_bytes = self.dir.state_bytes(hero, files)?;
+        let state = game_state::parse(&state_bytes)?;
+        let entities = game_state::on_map(
+            &state,
+            game_state::start_map(hero as usize),
+            Some(hero as usize),
+        );
+        let base = (hero % 3) as usize;
+        let mut character = entities
+            .start
+            .and_then(|group| group.members().next())
+            .and_then(|member| {
+                state
+                    .characters
+                    .get(member)
+                    .and_then(Option::as_ref)
+                    .cloned()
+            })
+            .ok_or_else(|| GameError::Io(std::io::Error::other("no player record")))?;
+        character.palette_offset = (i32::from(u16::try_from(HERO_PALETTES[base]).unwrap_or(0))) * 2;
+        character.direction = START_DIRECTION;
+        character.state = 0;
+        character.frame = 0;
+        character.equipment = HERO_EQUIPMENT[base];
+        let sprite = self
+            .resources
+            .with_graphics(|graph, objects| {
+                k1_data::characters::compose(
+                    &character,
+                    0,
+                    0,
+                    &state,
+                    graph,
+                    objects,
+                    &self.resources.tables,
+                    None,
+                )
+            })
+            .map_err(|error| GameError::Io(std::io::Error::other(error.to_string())))?
+            .map_err(|error| GameError::Io(std::io::Error::other(error.to_string())))?;
+        let Some(sprite) = sprite else {
+            return Err(GameError::Io(std::io::Error::other(
+                "the hero model has no idle frame",
+            )));
+        };
+        // Composite the layers over their bounding box: body first, gear
+        // over it, in the compose order.
+        let mut origin_x = i32::MAX;
+        let mut origin_y = i32::MAX;
+        let mut right = i32::MIN;
+        let mut bottom = i32::MIN;
+        for layer in &sprite.layers {
+            origin_x = origin_x.min(layer.x);
+            origin_y = origin_y.min(layer.y);
+            right = right.max(layer.x + layer.image.width as i32);
+            bottom = bottom.max(layer.y + layer.image.height as i32);
+        }
+        let width = (right - origin_x).max(0) as u32;
+        let height = (bottom - origin_y).max(0) as u32;
+        let mut rgba = vec![0u8; usize::try_from(width * height * 4).unwrap_or(usize::MAX)];
+        for layer in &sprite.layers {
+            let Some(key_rgba) = self
+                .resources
+                .with_graphics(|graph, objects| {
+                    k1_game::textures::decode(
+                        &k1_game::textures::TextureKey::SpriteImage {
+                            source: layer.source,
+                            image_id: layer.image_id as u16,
+                            palette: layer.palette_offset as u32,
+                        },
+                        graph,
+                        objects,
+                        &self.resources.lights,
+                        &self.resources.flames,
+                    )
+                })
+                .map_err(|error| GameError::Io(std::io::Error::other(error.to_string())))?
+                .map_err(|error| GameError::Io(std::io::Error::other(error.to_string())))?
+            else {
+                continue;
+            };
+            // Paste with alpha.
+            for row in 0..key_rgba.height {
+                for column in 0..key_rgba.width {
+                    let source = (row * key_rgba.width + column) as usize * 4;
+                    let alpha = key_rgba.data.get(source + 3).copied().unwrap_or(0);
+                    if alpha == 0 {
+                        continue;
+                    }
+                    let (px, py) = (
+                        layer.x - origin_x + column as i32,
+                        layer.y - origin_y + row as i32,
+                    );
+                    if px < 0 || py < 0 || px >= width as i32 || py >= height as i32 {
+                        continue;
+                    }
+                    let target = (py as u32 * width + px as u32) as usize * 4;
+                    rgba[target..target + 4].copy_from_slice(&key_rgba.data[source..source + 4]);
+                }
+            }
+        }
+        Ok(HeroPreview {
+            width,
+            height,
+            rgba,
+        })
     }
 
     /// The same, for a chosen hero: `hero` selects the `Game.N` whose state and

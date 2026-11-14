@@ -13,6 +13,7 @@ use bevy::ui_widgets::Checkbox;
 use common::{all_heroes, first_hero, game_dir, player_app, player_app_with};
 use kn_app::{Action, HeroSelectAction, MainMenuAction, SettingsAction, SettingsField};
 use kn_fe_player::flow::{AppFlow, AppliedSettings};
+use kn_fe_player::screens::{HintPopup, HintSource};
 use kn_game::Game;
 use kn_settings::{Language, Settings};
 
@@ -236,8 +237,8 @@ fn the_hero_select_presents_every_hero_and_previews_the_details() {
     app.update();
     let shown = strings(&mut app);
     assert!(
-        shown.iter().any(|s| s.contains("Выбор героя")),
-        "the hero-select screen opened"
+        shown.iter().any(|s| s.contains("Атрибуты")),
+        "the hero-select screen opened with the dossier, got {shown:?}"
     );
     for summary in &summaries {
         assert!(
@@ -301,5 +302,72 @@ fn the_hero_select_presents_every_hero_and_previews_the_details() {
     assert!(
         strings(&mut app).iter().any(|s| s.contains("Новая игра")),
         "Cancel returned to the main menu"
+    );
+}
+
+/// The hint popups: hovering a dossier line opens the original's hover hint
+/// (`Texts::newgame`), leaving closes it. `Hovered` is inserted by hand —
+/// the headless world has no pointer.
+#[test]
+fn a_hovered_line_opens_the_hint_popup_and_leaving_closes_it() {
+    let Some(dir) = game_dir() else {
+        return;
+    };
+    let game = Game::open(&dir).unwrap();
+    let heroes = all_heroes(&game);
+    let hints = game.newgame_texts();
+    assert!(
+        hints.iter().all(|text| !text.is_empty()),
+        "the game's hint lines must resolve for this test to be meaningful"
+    );
+    let mut app = player_app(game, heroes);
+    app.update();
+
+    // Open the hero select, then hover the first dossier row (its label is
+    // Ловкость — hint line 9, the original's agility hint).
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::MainMenu(MainMenuAction::NewGame));
+    app.update();
+    let mut popups = app.world_mut().query_filtered::<Entity, With<HintPopup>>();
+    assert!(
+        popups.iter(app.world()).next().is_none(),
+        "no hover — no popup yet"
+    );
+    let target = {
+        let mut sources = app.world_mut().query_filtered::<Entity, With<HintSource>>();
+        sources
+            .iter(app.world())
+            .find(|entity| {
+                app.world()
+                    .get::<HintSource>(*entity)
+                    .is_some_and(|hint| hint.0 == 9)
+            })
+            .expect("the agility row carries the hint source")
+    };
+    app.world_mut()
+        .entity_mut(target)
+        .insert(bevy::picking::hover::Hovered(true));
+    app.update();
+    let mut popups = app.world_mut().query_filtered::<Entity, With<HintPopup>>();
+    let popup = popups
+        .iter(app.world())
+        .next()
+        .expect("the hint popup opened");
+    let text = app
+        .world()
+        .get::<bevy::ui::widget::Text>(popup)
+        .expect("the popup carries the hint text")
+        .0
+        .clone();
+    assert_eq!(text, hints[9], "the popup shows the hovered line's hint");
+
+    // Leaving closes it.
+    app.world_mut().despawn(target);
+    app.update();
+    let mut popups = app.world_mut().query_filtered::<Entity, With<HintPopup>>();
+    assert!(
+        popups.iter(app.world()).next().is_none(),
+        "no hover — no popup"
     );
 }

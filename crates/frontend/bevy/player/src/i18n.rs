@@ -18,6 +18,16 @@ pub enum Text {
     NewGame,
     /// The hero selection screen's heading.
     HeroTitle,
+    /// The character constructor's occupation section, and the four
+    /// occupations.
+    HeroClass,
+    /// The two specialization groups of the constructor.
+    HeroSpec,
+    HeroSecondary,
+    ClassWarrior,
+    ClassHunter,
+    ClassMerchant,
+    ClassChief,
     /// A hero button when the game data carries no name for it (no texts, an
     /// unnamed record, no game at all); `n` is the 1-based row, not the
     /// `Game.N` number.
@@ -82,6 +92,34 @@ pub fn t(language: Language, text: Text) -> &'static str {
         Text::HeroTitle => match language {
             Language::Russian => "Выбор героя",
             Language::English => "Choose your hero",
+        },
+        Text::HeroClass => match language {
+            Language::Russian => "Класс",
+            Language::English => "Class",
+        },
+        Text::HeroSpec => match language {
+            Language::Russian => "Боевой стиль",
+            Language::English => "Combat style",
+        },
+        Text::HeroSecondary => match language {
+            Language::Russian => "Вторичные навыки",
+            Language::English => "Secondary skills",
+        },
+        Text::ClassWarrior => match language {
+            Language::Russian => "Воин",
+            Language::English => "Warrior",
+        },
+        Text::ClassHunter => match language {
+            Language::Russian => "Охотник",
+            Language::English => "Hunter",
+        },
+        Text::ClassMerchant => match language {
+            Language::Russian => "Купец",
+            Language::English => "Merchant",
+        },
+        Text::ClassChief => match language {
+            Language::Russian => "Вождь",
+            Language::English => "Chief",
         },
         Text::HeroSlot(n) => match language {
             Language::Russian => match n {
@@ -256,6 +294,13 @@ mod tests {
             Text::Title,
             Text::NewGame,
             Text::HeroTitle,
+            Text::HeroClass,
+            Text::HeroSpec,
+            Text::HeroSecondary,
+            Text::ClassWarrior,
+            Text::ClassHunter,
+            Text::ClassMerchant,
+            Text::ClassChief,
             Text::Back,
             Text::Start,
             Text::HeroAttributes,
@@ -321,6 +366,10 @@ mod tests {
         for key in [
             Text::NewGame,
             Text::Start,
+            Text::ClassWarrior,
+            Text::ClassHunter,
+            Text::ClassMerchant,
+            Text::ClassChief,
             Text::Settings,
             Text::Exit,
             Text::Fullscreen,

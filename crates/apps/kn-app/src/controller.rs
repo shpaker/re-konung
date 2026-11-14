@@ -10,7 +10,13 @@ use crate::action::{
     SettingsField,
 };
 use crate::effect::Effect;
-use crate::state::{AppState, SaveStatus, Screen, SettingsScreen};
+use crate::state::{AppState, NewGameDraft, SaveStatus, Screen, SettingsScreen};
+
+/// The table sizes the game layer resolves for the character constructor
+/// (`newgame_classes()`, the combat styles, the secondary sets).
+const NEWGAME_CLASSES: usize = 4;
+const NEWGAME_COMBAT_STYLES: usize = 2;
+const NEWGAME_SECONDARY_SETS: usize = 3;
 
 /// The MVU controller of the player application.
 ///
@@ -34,6 +40,7 @@ impl AppController {
                 // The screen opens on the first offered hero; an empty offer
                 // stays `None`.
                 hero_preview: heroes.first().copied(),
+                new_game_draft: NewGameDraft::default(),
                 applied,
                 settings_screen: None,
                 saving: None,
@@ -80,6 +87,21 @@ impl AppController {
                     self.state.hero_preview = Some(hero);
                 }
             }
+            (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::SetClass(index))) => {
+                if usize::from(index) < NEWGAME_CLASSES {
+                    self.state.new_game_draft.class = usize::from(index);
+                }
+            }
+            (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::SetCombatStyle(index))) => {
+                if usize::from(index) < NEWGAME_COMBAT_STYLES {
+                    self.state.new_game_draft.combat_style = usize::from(index);
+                }
+            }
+            (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::SetSecondary(index))) => {
+                if usize::from(index) < NEWGAME_SECONDARY_SETS {
+                    self.state.new_game_draft.secondary = usize::from(index);
+                }
+            }
             (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::Choose(hero))) => {
                 // The offered list is the only source of valid numbers: a
                 // stale view cannot start a session for a hero this game
@@ -87,7 +109,10 @@ impl AppController {
                 if self.state.heroes.contains(&hero) {
                     self.state.session_error = None;
                     self.state.screen = Screen::Loading;
-                    effects.push(Effect::StartSession { hero });
+                    effects.push(Effect::StartSession {
+                        hero,
+                        class_row: self.state.new_game_draft.class,
+                    });
                 }
             }
             (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::Cancel)) => {
@@ -307,7 +332,7 @@ mod tests {
                 &mut controller,
                 [Action::HeroSelect(HeroSelectAction::Choose(hero))],
             );
-            assert_eq!(effects, vec![Effect::StartSession { hero }]);
+            assert_eq!(effects, vec![Effect::StartSession { hero, class_row: 0 }]);
             assert_eq!(controller.state().screen, Screen::Loading);
             assert_eq!(controller.state().session_error, None);
         }
@@ -354,6 +379,53 @@ mod tests {
     }
 
     #[test]
+    fn hero_select_set_actions_shape_the_constructor_draft() {
+        let mut controller = controller_at(Screen::HeroSelect);
+        let effects = submit_all(
+            &mut controller,
+            [
+                Action::HeroSelect(HeroSelectAction::SetClass(2)),
+                Action::HeroSelect(HeroSelectAction::SetCombatStyle(1)),
+                Action::HeroSelect(HeroSelectAction::SetSecondary(2)),
+            ],
+        );
+        assert!(effects.is_empty());
+        let draft = &controller.state().new_game_draft;
+        assert_eq!(
+            (draft.class, draft.combat_style, draft.secondary),
+            (2, 1, 2)
+        );
+        // The choice rides into the session: Start carries the drafted row.
+        let effects = submit_all(
+            &mut controller,
+            [Action::HeroSelect(HeroSelectAction::Choose(HEROES[0]))],
+        );
+        assert_eq!(
+            effects,
+            vec![Effect::StartSession {
+                hero: HEROES[0],
+                class_row: 2
+            }]
+        );
+    }
+
+    #[test]
+    fn hero_select_set_actions_out_of_range_are_no_ops() {
+        let mut controller = controller_at(Screen::HeroSelect);
+        let before = controller.state().clone();
+        let effects = submit_all(
+            &mut controller,
+            [
+                Action::HeroSelect(HeroSelectAction::SetClass(4)),
+                Action::HeroSelect(HeroSelectAction::SetCombatStyle(2)),
+                Action::HeroSelect(HeroSelectAction::SetSecondary(3)),
+            ],
+        );
+        assert!(effects.is_empty());
+        assert_eq!(controller.state(), &before);
+    }
+
+    #[test]
     fn hero_select_cancel_returns_to_main_menu() {
         let mut controller = controller_at(Screen::HeroSelect);
         let effects = submit_all(
@@ -374,7 +446,13 @@ mod tests {
         controller.submit(Action::MainMenu(MainMenuAction::NewGame));
         controller.submit(Action::HeroSelect(HeroSelectAction::Choose(HEROES[1])));
         let effects = controller.flush();
-        assert_eq!(effects, vec![Effect::StartSession { hero: HEROES[1] }]);
+        assert_eq!(
+            effects,
+            vec![Effect::StartSession {
+                hero: HEROES[1],
+                class_row: 0
+            }]
+        );
         assert_eq!(controller.state().screen, Screen::Loading);
         assert!(controller.flush().is_empty());
     }
@@ -794,7 +872,13 @@ mod tests {
                 Action::HeroSelect(HeroSelectAction::Choose(HEROES[0])),
             ],
         );
-        assert_eq!(effects, vec![Effect::StartSession { hero: HEROES[0] }]);
+        assert_eq!(
+            effects,
+            vec![Effect::StartSession {
+                hero: HEROES[0],
+                class_row: 0
+            }]
+        );
         let effects = submit_all(
             &mut controller,
             [Action::Loading(LoadingAction::Failed(SessionError::Map))],
@@ -809,7 +893,13 @@ mod tests {
                 Action::HeroSelect(HeroSelectAction::Choose(HEROES[2])),
             ],
         );
-        assert_eq!(effects, vec![Effect::StartSession { hero: HEROES[2] }]);
+        assert_eq!(
+            effects,
+            vec![Effect::StartSession {
+                hero: HEROES[2],
+                class_row: 0
+            }]
+        );
         assert_eq!(controller.state().screen, Screen::Loading);
         assert_eq!(controller.state().session_error, None);
     }

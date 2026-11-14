@@ -45,4 +45,6 @@ pub use action::{
 };
 pub use controller::AppController;
 pub use effect::Effect;
-pub use state::{AppState, SaveError, SaveStatus, Screen, SessionError, SettingsScreen};
+pub use state::{
+    AppState, NewGameDraft, SaveError, SaveStatus, Screen, SessionError, SettingsScreen,
+};
