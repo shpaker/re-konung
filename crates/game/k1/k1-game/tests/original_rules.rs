@@ -1,5 +1,5 @@
 //! The villager and monster rules over the real rosters of both editions
-//! (skipped when `original/` is absent — docs/k1/editions.md).
+//! (skipped when `original/` is absent — docs/research/k1/editions.md).
 //!
 //! Criteria 3 and 4 of #36 on shipped data: the same seed must decide the
 //! same way twice, every order a creature gets must land strictly inside its
@@ -29,7 +29,7 @@ fn game_dirs() -> Vec<(&'static str, GameDir)> {
             if game.root().is_dir() {
                 Some((edition, game))
             } else {
-                eprintln!("skipping: no original/k1/{edition}/game (docs/k1/editions.md)");
+                eprintln!("skipping: no original/k1/{edition}/game (docs/research/k1/editions.md)");
                 None
             }
         })
@@ -37,7 +37,7 @@ fn game_dirs() -> Vec<(&'static str, GameDir)> {
     assert!(
         !root.is_dir() || !dirs.is_empty(),
         "{} exists but holds no edition with a game/ folder: the tests on data would \
-         not have run. How to unpack one — docs/k1/editions.md",
+         not have run. How to unpack one — docs/research/k1/editions.md",
         root.display()
     );
     dirs
@@ -240,7 +240,7 @@ fn rules_hold_their_invariants_on_every_map_of_both_editions() {
                     // can hold a state: the file's `ai_state` is 0x80 for
                     // every squad in `Game.0`–`Game.2` and no rule reads it,
                     // so these states are recomputed from positions alone
-                    // (docs/k1/creatures.md).
+                    // (docs/research/k1/creatures/behavior.md).
                     match rules::classify(creature) {
                         CreatureType::RoamingMonster => {
                             if squad_state == GroupState::Calm {
@@ -270,7 +270,7 @@ fn rules_hold_their_invariants_on_every_map_of_both_editions() {
 
                 // Job holders that start on their place are turned or left
                 // alone, never sent away: the starting data stands every
-                // holder exactly on its cell (docs/k1/creatures.md).
+                // holder exactly on its cell (docs/research/k1/creatures/README.md).
                 for job in &jobs {
                     if job.character <= 0 {
                         continue;
@@ -298,7 +298,7 @@ fn rules_hold_their_invariants_on_every_map_of_both_editions() {
                 // The workplace fix in real data: record 0 is the player's
                 // hero and never owns a slot, and every filled slot points
                 // at a villager of this map's village squad
-                // (docs/k1/creatures.md).
+                // (docs/research/k1/creatures/behavior.md).
                 for creature in &roster {
                     if creature.group_kind == PLAYER {
                         assert!(
@@ -484,7 +484,7 @@ fn roaming_squads_are_re_placed_on_free_cells_inside_their_areas() {
 /// not, and the squad itself earns no decision at all. Both variants see one
 /// ground on purpose: the squad's physical cells DO shift villager walk
 /// draws in a full world (the walk rule's occupancy test over the shared
-/// decision RNG, a documented difference of ours — docs/rust.md, "The
+/// decision RNG, a documented difference of ours — docs/development/rust/simulation.md, "The
 /// marked hero's footprint"), and that coupling is hero-agnostic. What must
 /// not exist is hero-specific leakage into the decision inputs, which this
 /// comparison would catch.

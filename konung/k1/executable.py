@@ -1,9 +1,6 @@
-"""Таблицы из исполняемого файла игры (docs/k1/formats/executable.md).
+"""Embedded graphics/text tables, discovered by structure rather than edition offsets.
 
-Снаряжение персонажа рисуется наборами спрайтов GRAPH.RES, а какой набор
-у какого предмета, игра берёт из таблицы в exe. В RUS это `konung.res`
-(переименованный установщиком PE), в ENG — `KONUNG.EXE`. Таблицы ищутся
-по строению, а не по смещению: в изданиях они лежат в разных местах.
+Format contract: docs/research/k1/formats/executable.md.
 """
 
 import struct

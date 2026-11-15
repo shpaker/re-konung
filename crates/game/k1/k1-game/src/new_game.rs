@@ -1,4 +1,4 @@
-//! Creation-time attribute allocation. Source and edition checks: docs/k1/new-game.md.
+//! Creation-time attribute allocation. Source and edition checks: docs/research/k1/new-game.md.
 
 /// Attribute order: agility, charisma, strength, endurance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -22,7 +22,7 @@ fn game_roots() -> Vec<(&'static str, PathBuf)> {
             if game.is_dir() {
                 Some((edition, game))
             } else {
-                eprintln!("skip: no original/k1/{edition}/game (docs/k1/editions.md)");
+                eprintln!("skip: no original/k1/{edition}/game (docs/research/k1/editions.md)");
                 None
             }
         })
@@ -30,7 +30,7 @@ fn game_roots() -> Vec<(&'static str, PathBuf)> {
     assert!(
         !root.is_dir() || !dirs.is_empty(),
         "{} exists but holds no edition with a game/ folder: the data-backed \
-         test could not run. How to unpack — docs/k1/editions.md",
+         test could not run. How to unpack — docs/research/k1/editions.md",
         root.display()
     );
     dirs

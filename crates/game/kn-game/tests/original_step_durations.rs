@@ -1,5 +1,5 @@
 //! Step durations the movement engine reads from real K1 data (skipped when
-//! `original/` is absent — docs/k1/editions.md).
+//! `original/` is absent — docs/research/k1/editions.md).
 //!
 //! This is the seam between the two halves of epic #36: the K1 layer counts the
 //! walk animation's frames (`k1_game::creatures`), the engine asks
@@ -26,7 +26,7 @@ fn game_dirs() -> Vec<(&'static str, GameDir)> {
             if game.root().is_dir() {
                 Some((edition, game))
             } else {
-                eprintln!("skipping: no original/k1/{edition}/game (docs/k1/editions.md)");
+                eprintln!("skipping: no original/k1/{edition}/game (docs/research/k1/editions.md)");
                 None
             }
         })
@@ -34,7 +34,7 @@ fn game_dirs() -> Vec<(&'static str, GameDir)> {
     assert!(
         !root.is_dir() || !dirs.is_empty(),
         "{} exists but holds no edition with a game/ folder: the tests on data would \
-         not have run. How to unpack one — docs/k1/editions.md",
+         not have run. How to unpack one — docs/research/k1/editions.md",
         root.display()
     );
     dirs

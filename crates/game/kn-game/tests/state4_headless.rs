@@ -18,13 +18,13 @@ use k1_game::{
 use kn_game::{Game, MapRef, MapSource};
 
 /// Ion the werewolf stands on map 37 in the shipped files, one record per
-/// `Game.N` (docs/k1/creatures.md, "Our measurement").
+/// `Game.N` (docs/research/k1/creatures/README.md, "Our measurement").
 const ION_MAP: u32 = 37;
 
 /// The shipped ENG game data, or `None` when `original/` is absent. The three
 /// data-backed tests in this file skip on `None` the way the rest of the
 /// suite does; returning here rather than panicking is what keeps CI green —
-/// it checks out without the copyrighted, gitignored data (`docs/k1/editions.md`).
+/// it checks out without the copyrighted, gitignored data (`docs/research/k1/editions.md`).
 fn game_root() -> Option<PathBuf> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../original/k1/eng/game");
     root.is_dir().then_some(root)
@@ -37,7 +37,7 @@ fn game_root() -> Option<PathBuf> {
 #[test]
 fn the_idle_pose_after_the_special_matches_the_pose_built_from_the_record_in_state_six() {
     let Some(root) = game_root() else {
-        eprintln!("skipping: no original/k1/eng/game (docs/k1/editions.md)");
+        eprintln!("skipping: no original/k1/eng/game (docs/research/k1/editions.md)");
         return;
     };
     let game = Game::open(&root).unwrap();
@@ -86,7 +86,7 @@ fn the_idle_pose_after_the_special_matches_the_pose_built_from_the_record_in_sta
 #[test]
 fn a_state_four_record_and_its_state_six_pair_compose_the_same_layers() {
     let Some(root) = game_root() else {
-        eprintln!("skipping: no original/k1/eng/game (docs/k1/editions.md)");
+        eprintln!("skipping: no original/k1/eng/game (docs/research/k1/editions.md)");
         return;
     };
     let dir = GameDir::new(root);
@@ -121,7 +121,7 @@ fn a_state_four_record_and_its_state_six_pair_compose_the_same_layers() {
             };
             // Compose again from state 0 — the pair with the weapon bit — to
             // prove the collapse in `sprites_for` makes them equal for a
-            // dynamic sprite (docs/k1/creatures.md, "Our measurement").
+            // dynamic sprite (docs/research/k1/creatures/README.md, "Our measurement").
             let alt = PoseKind {
                 state: 0,
                 direction: record.direction,
@@ -197,7 +197,7 @@ fn two_state_four_creatures_are_independent_and_a_new_event_replays_one() {
 /// Idle boundary and asserts the derivation matches the machine's forward run.
 #[test]
 fn shown_state_on_rewind_equals_shown_state_of_that_tick_in_a_forward_run() {
-    const FRAMES: u32 = 13; // Eechetik, docs/k1/creatures.md
+    const FRAMES: u32 = 13; // Eechetik, docs/research/k1/creatures/README.md
     let mut forward = Machine::new();
     forward.enter_world([Seed {
         id: 1,
@@ -323,7 +323,7 @@ fn counted_run_shows_one_rebuild_per_state_change_and_none_per_frame() {
 #[test]
 fn a_real_map_creature_matches_the_tick_derivation_through_the_boundary() {
     let Some(root) = game_root() else {
-        eprintln!("skipping: no original/k1/eng/game (docs/k1/editions.md)");
+        eprintln!("skipping: no original/k1/eng/game (docs/research/k1/editions.md)");
         return;
     };
     let game = Game::open(&root).unwrap();

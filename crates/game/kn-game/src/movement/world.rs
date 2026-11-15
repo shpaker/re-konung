@@ -16,7 +16,7 @@ use super::route::{self, RouteRules};
 use super::walk::{Step, WalkState, Walker};
 
 /// World policy: numbers the engine chose itself because nothing is known
-/// about them (docs/rust.md, "Decision: repathing without thrash" and
+/// about them (docs/development/rust/movement.md, "Decision: repathing without thrash" and
 /// "Decision: who yields a cell").
 #[derive(Debug, Clone, Copy)]
 pub struct WorldRules {
@@ -123,13 +123,13 @@ struct Actor {
     goal: Option<Cell>,
     /// The last goal an order named, kept across arrival so a tick loop that
     /// re-sends the same order is recognized as a no-op rather than a new
-    /// search (docs/rust.md, "Decision: a repeated order is idempotent").
+    /// search (docs/development/rust/movement.md, "Decision: a repeated order is idempotent").
     last_commanded: Option<Cell>,
     /// The goal whose last route search found no route, kept only until that
     /// order is retried, replaced or withdrawn: it is what the repeat order is
     /// throttled against, and cannot be `last_commanded` — that one has to stay
     /// cleared so a retry after a crowd clears is not a silent no-op
-    /// (docs/rust.md, "Decision: a failed goal is retried on a cooldown").
+    /// (docs/development/rust/movement.md, "Decision: a failed goal is retried on a cooldown").
     failed_goal: Option<Cell>,
     /// A new order not yet turned into a route: it arrived while the creature
     /// was mid-step and will be executed at the cell border.
@@ -166,7 +166,7 @@ pub struct World<P: Passage, K: Pace> {
     /// creature's number, so a removal shifts nobody.
     actors: Vec<Option<Actor>>,
     /// Number for the next creature: it only ever grows, so a removed
-    /// creature's number is never handed to another (docs/rust.md, "Decision:
+    /// creature's number is never handed to another (docs/development/rust/README.md, "Decision:
     /// taking a creature out keeps the numbers").
     next_creature: u32,
     /// The taken slots in ascending order: the tick walks the creatures that
@@ -294,13 +294,13 @@ impl<P: Passage, K: Pace> World<P, K> {
     /// it neither resets the waiting counter nor forces a new search, and
     /// returns the steps the current route still has (or `0` once arrived). A
     /// tick loop that re-sends the same order every tick must not disturb the
-    /// repath timing (docs/rust.md, "Decision: a repeated order is idempotent").
+    /// repath timing (docs/development/rust/movement.md, "Decision: a repeated order is idempotent").
     ///
     /// A repeated order to a goal whose last search found no route is refused
     /// the same way it would be by a real search — `Err(NoRoute)` — but without
     /// running one and without a new [`Event::NoRoute`], until
     /// [`WorldRules::repath_cooldown_ticks`] have passed since that failed
-    /// search (docs/rust.md, "Decision: a failed goal is retried on a
+    /// search (docs/development/rust/movement.md, "Decision: a failed goal is retried on a
     /// cooldown"). The refusal reaches the caller through the return value; the
     /// event channel carries only the search that actually ran.
     ///
@@ -356,7 +356,7 @@ impl<P: Passage, K: Pace> World<P, K> {
 
     /// Take a creature out of the world: it frees every cell the creature
     /// stood on or reserved with a step, and its movement state is dropped
-    /// (docs/rust.md, "Decision: taking a creature out keeps the numbers").
+    /// (docs/development/rust/movement.md, "Decision: taking a creature out keeps the numbers").
     ///
     /// No [`Event`] is emitted: removal is an order from outside, and the
     /// outer world is the one that knows a creature died or left the map —
@@ -510,7 +510,7 @@ impl<P: Passage, K: Pace> World<P, K> {
     ///
     /// Creatures are visited by their numbers: that is deterministic, and it
     /// settles a dispute over a cell because a reservation is exclusive
-    /// (docs/rust.md, "Decision: who yields a cell").
+    /// (docs/development/rust/movement.md, "Decision: who yields a cell").
     fn start_steps(&mut self, events: &mut Vec<Event>) {
         for position in 0..self.live.len() {
             let index = self.live[position];

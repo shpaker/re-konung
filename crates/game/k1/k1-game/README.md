@@ -1,27 +1,12 @@
 # k1-game
 
-Специфика «Князя 1» поверх форматов [`k1-data`](../k1-data): ресурсы игры,
-текстуры и правила отображения карты. Без Bevy — логика проверяется headless.
+K1 resources, scene assembly and recovered rules, independent of Bevy.
 
-## Модули
+- resources/textures supply graphics and RGBA decoding; scene constructs an ordered draw list.
+- creatures, placement, rules and creature_anim hold game-specific knowledge.
+- new_game, time_of_day and lighting expose pure rule/model operations.
+- Consumers see this through kn-game. This crate does not import the shared engine.
 
-- `resources` — загрузка GRAPH.RES, Objects.res, LIGHTS.RES, FLAMES.RES и
-  таблиц EXE из `GameDir`; GRAPH.RES/OBJECTS.RES разбираются на время операции
-  (`with_graphics`), владеющие данные (таблицы, маски, огни) — один раз.
-- `textures` — ключи текстур и их декодирование в RGBA: чистые функции,
-  кэшируются потребителем по ключу. Цвета и формы оверлеев — из эталона
-  `konung/k1/render.py`.
-- `scene` — список отрисовки карты в порядке наложения: земля, верхний слой,
-  декорации, тени, объекты с огнями и персонажи (сортировка по нижнему краю),
-  оверлеи (проходимость, свет, маркеры Game.N). Порядок и позиции повторяют
-  `render.py`.
-
-Общая модель сцены и фасад — в [`kn-game`](../../kn-game); подробности —
-[docs/rust.md](../../../../docs/rust.md).
-
-## Проверки
-
-```bash
-just cargo-test   # синтетические всегда, на данных — если есть original/
-just cargo-lint
-```
+Details: [topic documentation](../../../../docs/development/rust/simulation.md).
+Checks: `just cargo-test`, `just cargo-lint`. Pure logic tests need no window/GPU;
+real-data cases use local original/ and skip when absent.

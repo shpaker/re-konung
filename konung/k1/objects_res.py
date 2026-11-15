@@ -1,7 +1,6 @@
-"""OBJECTS.RES — объекты карты: 30 динамических и 482 простых (docs/k1/formats/objects-res.md).
+"""OBJECTS.RES simple/dynamic sprite blocks, offsets and flame points.
 
-Простой объект — до 8 кадров (картинка + тень) со смещениями и точками огней.
-Динамический объект — монстр: анимации по 8 направлениям, как спрайт персонажа.
+Format contract: docs/research/k1/formats/objects-res.md.
 """
 
 from dataclasses import dataclass

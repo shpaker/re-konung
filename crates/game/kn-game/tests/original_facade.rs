@@ -13,7 +13,7 @@ fn game_roots() -> Vec<(&'static str, PathBuf)> {
             if game.is_dir() {
                 Some((edition, game))
             } else {
-                eprintln!("пропуск: нет original/k1/{edition}/game (docs/k1/editions.md)");
+                eprintln!("пропуск: нет original/k1/{edition}/game (docs/research/k1/editions.md)");
                 None
             }
         })
@@ -21,7 +21,7 @@ fn game_roots() -> Vec<(&'static str, PathBuf)> {
     assert!(
         !root.is_dir() || !dirs.is_empty(),
         "{} существует, но ни одного издания с папкой game/ в нём нет: \
-         тесты на данных не выполнились бы. Как распаковать — docs/k1/editions.md",
+         тесты на данных не выполнились бы. Как распаковать — docs/research/k1/editions.md",
         root.display()
     );
     dirs

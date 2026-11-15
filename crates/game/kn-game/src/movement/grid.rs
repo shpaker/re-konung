@@ -146,7 +146,7 @@ impl Direction {
     ///
     /// Rounding up is deliberate: a step must never cost less than its real
     /// length, which is what keeps the search heuristic admissible
-    /// (docs/rust.md, "Decision: step cost and the A* heuristic").
+    /// (docs/development/rust/movement.md, "Decision: step cost and the A* heuristic").
     pub const fn cost(self) -> u32 {
         match self {
             Direction::East | Direction::West => COST_UNITS_PER_PIXEL * STEP_X as u32,

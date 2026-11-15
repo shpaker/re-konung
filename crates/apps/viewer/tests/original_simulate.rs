@@ -1,9 +1,9 @@
 //! The headless `simulate` report over the shipped files of both editions
-//! (skipped when `original/` is absent — docs/k1/editions.md).
+//! (skipped when `original/` is absent — docs/research/k1/editions.md).
 //!
 //! Issue #82: the runs over every map of both editions must exit clean,
 //! the load-time refusals must be exactly the confirmed data facts of
-//! docs/k1/creatures.md («Load-time refusals»), nothing may be trimmed,
+//! docs/research/k1/creatures/placement.md («Load-time refusals»), nothing may be trimmed,
 //! and the goal-reach counters of the village runs must count real
 //! arrivals — deterministically under the seed.
 
@@ -36,7 +36,7 @@ fn editions() -> Vec<(&'static str, PathBuf)> {
     assert!(
         !root.is_dir() || !found.is_empty(),
         "{} exists but holds no edition with a game/ folder: the tests on data would \
-         not have run. How to unpack one — docs/k1/editions.md",
+         not have run. How to unpack one — docs/research/k1/editions.md",
         root.display()
     );
     found
@@ -63,7 +63,7 @@ fn cli(game_dir: PathBuf) -> Cli {
 #[test]
 fn every_map_of_every_edition_simulates_clean_and_refuses_only_the_documented_records() {
     // Map number → refused roster records, in report order. The facts and
-    // their diagnosis: docs/k1/creatures.md, «Load-time refusals».
+    // their diagnosis: docs/research/k1/creatures/placement.md, «Load-time refusals».
     const REFUSALS: &[(u32, &[(usize, &str)])] = &[
         (7, &[(433, "CellTaken")]),
         (10, &[(507, "ImpassableCell")]),
@@ -177,7 +177,7 @@ fn village_runs_count_arrivals_and_replay_under_the_same_seed() {
 
         // The static-work arrival: record 369 of map 1 carries the merchant
         // job bits, its slot is occupied by 357, and the order sends it to a
-        // free neighbour of the place (docs/k1/creatures.md, «Goal reach»).
+        // free neighbour of the place (docs/research/k1/creatures/placement.md, «Goal reach»).
         let map1 = by_number(1);
         let merchant = map1
             .goal_reaches

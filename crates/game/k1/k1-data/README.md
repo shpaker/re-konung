@@ -1,29 +1,12 @@
 # k1-data
 
-Данные игры «Князь: Легенды Лесной страны» (1999): репозиторий и форматы.
-Часть Cargo-workspace [`crates/`](../../../Cargo.toml); эталон — Python-пакет
-`konung/`, при расхождении прав Python (AGENTS.md).
+K1 binary formats and repository access, without Bevy or game rules.
 
-## Слои
+- repo::GameDir handles case-insensitive file discovery; parsers consume bytes separately.
+- Maps, light and starting states support byte-exact writing; graphics and EXE tables are read-only.
+- game_edit preserves dense roster reserves and cross-references.
+- Unknown bytes are preserved. Python is authoritative on format disagreements.
 
-- `repo` — `GameDir`: поиск файлов игры без учёта регистра, номера карт и
-  состояний, чтение байтов; наборы `GAME_FILES` / `TUTORIAL_FILES`.
-- Форматы — чистые `parse(&[u8])`, файловую систему не трогают:
-  - запись: `map` (`Konung.N`, `LIGHTS.N`), `game_state` (`Game.N`),
-    `game_edit` (правки состава);
-  - только чтение: `graph_res` (тайлы, спрайты), `objects_res` (объекты),
-    `lights_res` (маски света), `flames_res` (огни), `executable` (таблицы
-    из EXE), `characters` (сборка кадра персонажа), `rle`, `palette`.
-
-Форматы описаны в [docs/k1/formats/](../../../../docs/k1/formats/); общая картина —
-[docs/rust.md](../../../../docs/rust.md).
-
-## Проверки
-
-```bash
-just cargo-test   # тесты: синтетические всегда, на данных — если есть original/
-just cargo-lint   # cargo fmt --check + clippy -D warnings
-```
-
-Тесты на данных (`tests/original*.rs`) берут файлы из `original/` и
-пропускаются без них; как их получить — [docs/k1/editions.md](../../../../docs/k1/editions.md).
+Details: [topic documentation](../../../../docs/research/k1/README.md).
+Checks: `just cargo-test`, `just cargo-lint`. Pure logic tests need no window/GPU;
+real-data cases use local original/ and skip when absent.

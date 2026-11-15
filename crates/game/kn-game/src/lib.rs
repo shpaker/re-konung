@@ -265,7 +265,7 @@ pub struct MapRef {
 
 /// The hero each `Game.N` stands for, by the executable's name-table index
 /// the original assigns in code (`game_newgame.cpp:305-351`): hero 0 → entry
-/// 10, hero 1 → 124, hero 2 → 151 (docs/k1/formats/game-state.md). The
+/// 10, hero 1 → 124, hero 2 → 151 (docs/research/k1/formats/game-state.md). The
 /// player-group records of the starting states carry one shared name and are
 /// not the heroes' identity.
 const HERO_NAME_IDS: [u8; 3] = [10, 124, 151];
@@ -626,7 +626,7 @@ impl Game {
 
     /// The name of each hero, the way the original's new-game menu shows it:
     /// the first record of the player group, assembled by the game's own rule
-    /// from the executable's name tables (docs/k1/formats/game-state.md,
+    /// from the executable's name tables (docs/research/k1/formats/game-state.md,
     /// bytes 0xD4/0xD5; `game_newgame.cpp:306-351`). Game data, not interface
     /// strings — an edition without the tables, or a record without a name,
     /// yields an empty string the caller renders with its own fallback.
@@ -815,7 +815,7 @@ impl Game {
     }
 
     /// The 20 lines of the original's new-game menu from the executable's
-    /// tables (docs/k1/formats/executable.md): 0–2 the heroes' descriptions
+    /// tables (docs/research/k1/formats/executable.md): 0–2 the heroes' descriptions
     /// in the screen-box order, 3–6 the occupations' descriptions, 7–19 the
     /// hover hints of the menu's numbers. Trimmed; empty when the edition
     /// carries no texts. Our presentation shows them as tooltips.
@@ -1043,7 +1043,7 @@ impl Game {
                     i32::from(creature.cell.1),
                 );
                 // A state-4 record's resting clip is its idle pair (state 6 for
-                // a dynamic creature, docs/k1/creatures.md); the record's own
+                // a dynamic creature, docs/research/k1/creatures/animation.md); the record's own
                 // state 4 becomes the `special` clip the viewer swaps to while
                 // the machine plays it. Every other record shows the state its
                 // file carries.
@@ -1070,7 +1070,7 @@ impl Game {
                     .collect();
                 // Only a state-4 record can have a special; a human's state 4 is
                 // the shot, which is out of #70's scope and must not be routed
-                // through the appearance clip (docs/k1/creatures.md).
+                // through the appearance clip (docs/research/k1/creatures/README.md).
                 let special = is_special
                     .then(|| {
                         k1_game::scene::pose_in(
@@ -1355,7 +1355,7 @@ pub struct CreatureClips {
 
 /// What a creature shows resting, walking and — for the three dynamic classes
 /// that record state 4 in `Game.N` — playing their one-shot appearance or
-/// transformation animation (docs/k1/creatures.md, "State 4 — two meanings
+/// transformation animation (docs/research/k1/creatures/animation.md, "State 4 — two meanings
 /// under one number", issue #70).
 ///
 /// `walk[direction]` is the walk pose facing that sprite direction, `None`
@@ -1396,7 +1396,7 @@ fn creature_layer(piece: k1_game::scene::DrawPiece, key: LayerKey) -> CreatureLa
 
 /// The resting [`Pose`] a creature shows when neither walking nor playing a
 /// special: its idle pair. A state-4 record rests on state 6 (a dynamic
-/// creature's idle, docs/k1/creatures.md) so its static base and clips match the
+/// creature's idle, docs/research/k1/creatures/animation.md) so its static base and clips match the
 /// idle it returns to; every other record rests on the state its file carries.
 ///
 /// Shared by [`Game::creature_animations`] and [`creature_geometry`] so the
@@ -1498,7 +1498,7 @@ fn creature_geometry(
 }
 
 /// The animation state a walking creature draws: the walk row of its sprite
-/// table (docs/k1/creatures.md), shared with [`k1_data::characters::walk_frame_counts`].
+/// table (docs/research/k1/creatures/README.md), shared with [`k1_data::characters::walk_frame_counts`].
 const WALK_STATE: u8 = WALK_ANIMATION as u8;
 
 /// Итог headless-проверки одной карты.

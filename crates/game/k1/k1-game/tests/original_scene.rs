@@ -24,7 +24,7 @@ fn game_dirs() -> Vec<(&'static str, GameDir)> {
             if game.root().is_dir() {
                 Some((edition, game))
             } else {
-                eprintln!("пропуск: нет original/k1/{edition}/game (docs/k1/editions.md)");
+                eprintln!("пропуск: нет original/k1/{edition}/game (docs/research/k1/editions.md)");
                 None
             }
         })
@@ -32,7 +32,7 @@ fn game_dirs() -> Vec<(&'static str, GameDir)> {
     assert!(
         !root.is_dir() || !dirs.is_empty(),
         "{} существует, но ни одного издания с папкой game/ в нём нет: \
-         тесты на данных не выполнились бы. Как распаковать — docs/k1/editions.md",
+         тесты на данных не выполнились бы. Как распаковать — docs/research/k1/editions.md",
         root.display()
     );
     dirs
@@ -356,8 +356,8 @@ fn animated_pieces_keep_their_layer_and_base_frame() {
 
 #[test]
 fn flame_pieces_cover_the_frames_of_their_kind() {
-    // Таблица огней в exe задаёт диапазон кадров вида, оба конца включены
-    // (docs/k1/formats/executable.md): кусок огня обязан пройтись по нему целиком
+    // A flame sequence traverses the full inclusive EXE range.
+    // See docs/research/k1/formats/executable.md.
     for (edition, game) in game_dirs() {
         let resources = Resources::load(&game).unwrap();
         let kinds = resources.tables.flame_animations;
@@ -410,9 +410,8 @@ fn flame_pieces_cover_the_frames_of_their_kind() {
 
 #[test]
 fn animated_objects_play_all_their_frames_at_their_frame_time() {
-    // OBJECTS.RES: у анимированного объекта `frame_count` кадров, кадр меняется
-    // раз в `frame_time` тиков (docs/k1/formats/objects-res.md). Объект с
-    // несколькими кадрами, но без frame_time игра не анимирует.
+    // Object frames last frame_time ticks; multiple frames without frame_time do not animate.
+    // See docs/research/k1/formats/objects-res.md.
     for (edition, game) in game_dirs() {
         let resources = Resources::load(&game).unwrap();
         let expected: HashMap<usize, (usize, u32)> = resources
@@ -676,7 +675,7 @@ fn poses_build_for_every_direction_and_both_locomotion_states() {
                 for number in maps {
                     let entities = game_state::on_map(&state, number, Some(0));
                     // Dynamic set 3 has no walk frames at all: it is not a pose the
-                    // game builds while moving (docs/k1/movement.md)
+                    // game builds while moving (docs/research/k1/movement.md)
                     let built = characters::placed(&entities, &state)
                         .into_iter()
                         .filter(|(character, _, _)| {
@@ -1108,7 +1107,7 @@ fn a_pose_frame_is_the_recorded_one_unless_asked_otherwise() {
 
                 // An explicit frame beyond the animation is clamped, not wrapped:
                 // the original's own sequence lookup falls back to the first frame
-                // (docs/k1/formats/graph-res.md), never to an index outside it.
+                // (docs/research/k1/formats/graph-res.md), never to an index outside it.
                 let clamped = scene::pose_in(
                     character,
                     px,

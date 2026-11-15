@@ -1,7 +1,7 @@
 //! Measurement of what advancing game time costs per tick (issue #95).
 //!
 //! An `#[ignore]`d test: it measures in release and prints a table, so it does
-//! not get in the way of an ordinary `cargo test`. The numbers go to `docs/rust.md`.
+//! not get in the way of an ordinary `cargo test`. The numbers go to `docs/development/rust/simulation.md`.
 //!
 //! ```bash
 //! cargo test --release --manifest-path crates/Cargo.toml -p k1-game \
@@ -9,7 +9,7 @@
 //! ```
 //!
 //! Needs no `original/`: the model is arithmetic over the tables recorded in
-//! `docs/k1/time-of-day.md`, so the measurement runs anywhere.
+//! `docs/research/k1/lighting.md`, so the measurement runs anywhere.
 
 use std::hint::black_box;
 use std::time::{Duration, Instant};

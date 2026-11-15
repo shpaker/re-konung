@@ -1,4 +1,7 @@
-"""Konung.N — карта локации N; LIGHTS.N — её освещение (docs/k1/formats/map.md)."""
+"""Konung.N and LIGHTS.N codecs preserve unknown fields and raw decoration slots.
+
+Format contract: docs/research/k1/formats/map.md.
+"""
 
 import struct
 from dataclasses import dataclass
@@ -76,10 +79,9 @@ class Decoration:
 
     @property
     def is_raw(self) -> bool:
-        """Запись с тайлом за пределами GRAPH.RES: её не нарисовать, она хранится как есть.
+        """Keep an out-of-bank decoration in its raw slot, including tutorial slot 994.
 
-        Такая одна в Tutorial.4 и Tutorial.5 (слот 994). Запись пишется обратно
-        в свой слот, а не подряд с обычными (docs/k1/formats/map.md, «Запись»).
+        See docs/research/k1/formats/map.md#raw-tutorial-slot-994.
         """
         return self.tile >= TILE_SLOTS
 

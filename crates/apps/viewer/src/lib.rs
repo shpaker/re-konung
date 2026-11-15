@@ -143,7 +143,7 @@ pub fn simulate_reports(
             Ok(mut sim) => {
                 let creatures = sim.creature_count();
                 // The world refused to place these at load: the records
-                // carry cells no creature can stand on (docs/k1/creatures.md,
+                // carry cells no creature can stand on (docs/research/k1/creatures/placement.md,
                 // «Load-time refusals»). That is a fact about the file, so
                 // the report presents it — it does not fail the run.
                 let unplaced: Vec<String> = sim
@@ -331,7 +331,7 @@ pub struct SimReport {
     /// Roster numbers of squad members the load rule trimmed for want of
     /// room in the spawn area — the original's `GroupSize` shrink.
     pub trimmed: Vec<usize>,
-    /// Completed confirmed orders per creature (docs/k1/creatures.md,
+    /// Completed confirmed orders per creature (docs/research/k1/creatures/placement.md,
     /// "Goal reach"): arrivals on the workplace and on walk targets.
     pub goal_reaches: Vec<GoalReachCount>,
     /// Build failures and orders rejected for a reason other than "no route".

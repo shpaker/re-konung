@@ -5,7 +5,7 @@ resolver = "3"
 # One Bevy feature set for the whole workspace: everything the 2D sprite scene,
 # the Feathers panel, text, picking and the window need; the default 3D/PBR/
 # glTF/audio/gizmos/gilrs chain is off (both apps are 2D-only, no asset loading
-# except the embedded default font). Audited in docs/rust.md, "Build profiles".
+# except the embedded default font). Audited in docs/development/building.md, "Build profiles".
 [workspace.dependencies]
 bevy = { version = "0.20", default-features = false, features = [
     "std",

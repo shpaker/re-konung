@@ -20,7 +20,7 @@ pub(crate) fn game_dir() -> Option<PathBuf> {
             return Some(dir);
         }
     }
-    eprintln!("skip: no original/k1/{{rus,eng}}/game (docs/k1/editions.md)");
+    eprintln!("skip: no original/k1/{{rus,eng}}/game (docs/research/k1/editions.md)");
     None
 }
 

@@ -1,52 +1,13 @@
 # kn-game
 
-Общий фасад игр серии «Князь»: Bevy-независимая модель сцены и подготовка
-данных для отображения. Потребители (`kn-render`, бинарники) видят только этот
-крейт; специфика частей серии спрятана за фасадом (сейчас — `k1-game`,
-позже `k2-game`).
+The shared facade, scene model, movement engine and simulation, without Bevy.
 
-## API
+- Game::open/maps/heroes/scene/textures/check exposes K1 through common types.
+- Scene/Piece/TextureId/Animation/PieceGroup carry presentation data without frontend types.
+- movement owns Grid, Cell, Direction, Occupancy, find_route, Walker and World; Passage/Pace supply game-specific data.
+- Simulation evaluates K1 decisions and applies orders through the shared world, including failed-order cooldowns.
+- The movement engine never decides where to go; recovered behavior is evaluated in k1-game.
 
-- `Game::open(путь)` — открыть каталог установленной игры.
-- `Game::maps()` / `Game::heroes()` — список карт (игра + обучение) и `Game.N`.
-- `Game::scene(map, options)` — `Scene`: упорядоченный список кусков
-  (позиция, размер, ключ текстуры). Порядок = порядок наложения.
-- `Game::textures(ids)` — RGBA-картинки ключей; рендер кэширует по `TextureId`.
-  Каждому ключу соответствует `DecodedTexture`: картинка, пустой слот или
-  причина, по которой картинку не собрать.
-- `Game::check(maps)` — headless-проверка: сцена строится, все текстуры
-  декодируются, статистика детерминирована (`CheckReport`, текст и JSON).
-  Начальное состояние берётся по источнику карт (`Game.N` для игры,
-  `TGame.N` для обучения), а ошибка одной карты попадает в её строку отчёта,
-  не прерывая проверку остальных.
-
-## Movement
-
-`kn_game::movement` — the shared movement engine: the isometric fine grid, cell
-walkability and occupancy, route search, walking a route and the game tick. It
-knows neither Bevy nor K1: the layer lives in `kn-game` because the movement
-mechanics of K1 and K2 are presumably the same
-([docs/k1/movement.md](../../../docs/k1/movement.md) — the facts,
-[docs/rust.md](../../../docs/rust.md) — the project decisions).
-
-- `Grid`/`Cell`/`Direction` — the grid, eight directions, cell ↔ pixels.
-- `Passage` — whose trait: a data supplier brings cell walkability.
-- `Pace` — whose trait: the supplier brings the step duration in ticks too.
-- `find_route(request, rng)` — A\* over the grid; `Route` — steps to the goal, or
-  to the nearest free cell beside it; `None` — there is no route.
-- `Walker` — walking a finished route: `start_step`, `tick`, `state`.
-- `World::add` / `move_to` / `tick_step` — several creatures, the tick, disputes
-  over cells and repathing; outward `WalkState` and `Event`.
-
-No game rules here (who goes where, and why) — epic #33 part 3 adds them.
-
-The facade and the scene model exist for `kn-render` and the binaries; the crate has
-no "shared game rules" and gains none: the engine walks where it is told and
-never decides where to go (AGENTS.md, docs/rust.md).
-
-## Проверки
-
-```bash
-just cargo-test   # синтетические всегда, на данных — если есть original/
-just cargo-lint
-```
+Details: [topic documentation](../../../docs/development/rust/README.md).
+Checks: `just cargo-test`, `just cargo-lint`. Pure logic tests need no window/GPU;
+real-data cases use local original/ and skip when absent.

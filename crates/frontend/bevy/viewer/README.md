@@ -1,22 +1,12 @@
 # kn-fe-viewer
 
-Bevy frontend of the «Князь» map viewer: viewer state (`Viewer`), the Feathers
-panel, overlay and playback toggles, diagnostics, the camera binding and the
-App assembly. The app hands over a `ViewerConfig` (an opened game, its
-directory, the map list and the startup selection); this crate knows no CLI.
+The viewer Bevy app: Viewer state, Feathers controls, overlays, playback and diagnostics.
 
-Not here:
+- Receives ViewerConfig; CLI parsing stays in kn-viewer.
+- Builds maps with all layers; toggles visibility rather than rebuilding.
+- Adds creature labels and measurements around the shared render/creature pipeline.
+- Remains read-only: no map/state file writing.
 
-- CLI parsing, startup resolution and the headless `check` — the app crate
-  [crates/apps/viewer](../../../apps/viewer) (`kn-viewer`, bin
-  `re-konung-viewer`);
-- rendering, input and UI mechanics — `kn-render`, `kn-input`, `kn-ui`.
-
-Details of the display layer: [docs/rust.md](../../../../docs/rust.md).
-
-## Checks
-
-```bash
-just cargo-test
-just cargo-lint
-```
+Details: [topic documentation](../../../../docs/development/rust/viewer.md).
+Checks: `just cargo-test`, `just cargo-lint`. Pure logic tests need no window/GPU;
+real-data cases use local original/ and skip when absent.

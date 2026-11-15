@@ -8,9 +8,9 @@
 //! leaving the static source list untouched.
 //!
 //! The subject is map 17: six calm roaming squads, twenty-eight monsters, in
-//! both shipped editions (docs/k1/creatures.md), the same set
+//! both shipped editions (docs/research/k1/creatures/README.md), the same set
 //! `original_simulation.rs` counts through the roster. Tests skip when
-//! `original/` is absent (docs/k1/editions.md).
+//! `original/` is absent (docs/research/k1/editions.md).
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -47,7 +47,7 @@ fn game_dirs() -> Vec<(&'static str, PathBuf)> {
             if game.is_dir() {
                 Some((edition, game))
             } else {
-                eprintln!("skipping: no original/k1/{edition}/game (docs/k1/editions.md)");
+                eprintln!("skipping: no original/k1/{edition}/game (docs/research/k1/editions.md)");
                 None
             }
         })
@@ -55,7 +55,7 @@ fn game_dirs() -> Vec<(&'static str, PathBuf)> {
     assert!(
         !root.is_dir() || !dirs.is_empty(),
         "{root:?} exists but holds no edition with a game/ folder: the data-backed \
-         tests would not have run (docs/k1/editions.md)"
+         tests would not have run (docs/research/k1/editions.md)"
     );
     dirs
 }

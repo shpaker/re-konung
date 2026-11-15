@@ -175,7 +175,7 @@ impl Walker {
     ///
     /// The route replaces the old one whole, and only while the creature is not
     /// mid-step: a cell already given up cannot be taken back during a step, so
-    /// a repath is waited for at the cell border (docs/rust.md, "Decision:
+    /// a repath is waited for at the cell border (docs/development/rust/README.md, "Decision:
     /// repathing without thrash"). `false` — a step is running and the route
     /// stayed as it was.
     pub fn set_route(&mut self, route: &Route) -> bool {

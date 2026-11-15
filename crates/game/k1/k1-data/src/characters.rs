@@ -1,10 +1,5 @@
-//! Кадр персонажа на карте: модель или монстр, снаряжение, тень
-//! (docs/k1/formats/graph-res.md, эталон — `konung/k1/characters.py`).
-//!
-//! Воин — модель GRAPH.RES по Character.sprite_set с его палитрой, поверх неё —
-//! наборы снаряжения надетых предметов в порядке слотов для его направления.
-//! Монстры, женщины и дети — динамический объект OBJECTS.RES с тем же номером,
-//! без снаряжения.
+//! Character frames from base/dynamic sprites, equipment and shadows.
+//! Reference: `konung/k1/characters.py`; docs/research/k1/formats/graph-res.md.
 
 use crate::executable::{EQUIPMENT_PALETTES, Executable};
 use crate::game_state::{Character, GameState, MapEntities};
@@ -18,7 +13,7 @@ pub const COLORS_PER_PALETTE: usize = 256;
 pub const DYNAMIC_ANIMATIONS: u8 = 6;
 
 /// Walking is animation 1 of a sprite table: state 1 and state 7 (a weapon in
-/// hand) share its frame count: the animation-states table of docs/k1/creatures.md.
+/// hand) share its frame count: the animation-states table of docs/research/k1/creatures/animation.md.
 pub const WALK_ANIMATION: usize = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -134,7 +129,7 @@ pub fn frame_count(character: &Character, graph: &GraphRes<'_>, objects: &Object
 /// Frame counts of the walk animation in every direction, in the order of the
 /// original's direction table ([`DIRECTIONS`]).
 ///
-/// A step to a neighbouring cell lasts this many ticks (docs/k1/movement.md,
+/// A step to a neighbouring cell lasts this many ticks (docs/research/k1/movement.md,
 /// "Step duration"), so a duration supplier reads it once per creature instead of
 /// once per step. Missing walk frames and a missing sprite table both answer 0.
 pub fn walk_frame_counts(

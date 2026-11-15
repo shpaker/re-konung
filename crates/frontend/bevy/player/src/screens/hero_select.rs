@@ -50,7 +50,7 @@ struct HeroSelectView {
 struct HeroPortraits(Option<HashMap<u8, PortraitImage>>);
 
 // The original's hover-hint lines: the `Texts::newgame` row each element
-// points at (docs/k1/formats/executable.md, `Locale::NewGameMenu`).
+// points at (docs/research/k1/formats/executable.md, `Locale::NewGameMenu`).
 const HINT_CLASS_WARRIOR: usize = 6;
 const HINT_CLASS_HUNTER: usize = 4;
 const HINT_CLASS_MERCHANT: usize = 3;

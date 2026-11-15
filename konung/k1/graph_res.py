@@ -1,4 +1,7 @@
-"""GRAPH.RES — палитры, курсоры, тайлы земли и спрайты персонажей (docs/k1/formats/graph-res.md)."""
+"""GRAPH.RES color bank and sprite blocks; offsets and block sizes are format-specific.
+
+Format contract: docs/research/k1/formats/graph-res.md.
+"""
 
 from dataclasses import dataclass, field
 from pathlib import Path

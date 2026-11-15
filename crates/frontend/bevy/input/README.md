@@ -1,18 +1,11 @@
 # kn-input
 
-Input mechanisms for the «Князь» frontends: keyboard direction
-(`pan_direction`), left-button drag (`drag_delta`) and wheel accumulation
-(`ZoomScroll`, `wheel_steps`). Only `bevy` — no camera types, no UI, no game
-rules.
+Shared Bevy input mechanisms; camera bindings belong to frontends.
 
-The mechanisms are not systems: each app binds them to its own camera in a
-small binding system registered in the `CameraInput` set of
-[`kn-render`](../render). The layout and the set order are described in
-[docs/rust.md](../../../../docs/rust.md).
+- pan_direction reads keyboard direction; drag_delta supplies mouse movement.
+- ZoomScroll/wheel_steps accumulate wheel/trackpad input into bounded zoom steps.
+- No camera types, UI state or game rules; pointer capture belongs to kn-ui.
 
-## Checks
-
-```bash
-just cargo-test   # wheel accumulation, key map, drag gate
-just cargo-lint
-```
+Details: [topic documentation](../../../../docs/development/rust/rendering.md#camera-and-input-seam).
+Checks: `just cargo-test`, `just cargo-lint`. Pure logic tests need no window/GPU;
+real-data cases use local original/ and skip when absent.

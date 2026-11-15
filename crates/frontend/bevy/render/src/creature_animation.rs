@@ -1172,7 +1172,7 @@ fn apply_clip(animator: &mut Animator, clip: &Clip, base: (i32, i32), at_tick: u
 /// only local offsets and per-frame deltas, so they follow the node untouched and
 /// body, equipment and shadow stay in lockstep (review #68). The node sits on the
 /// simulation cell's pixel for the whole step: the glide to the next cell lives in
-/// the walk frames' own offsets (docs/k1/movement.md, "Step duration"), so sliding
+/// the walk frames' own offsets (docs/research/k1/movement.md, "Step duration"), so sliding
 /// the node along with them would double the travel and snap the image back by a
 /// cell at every cycle wrap.
 #[allow(clippy::type_complexity)]

@@ -82,7 +82,7 @@ pub const DEFAULT_PLAYBACK: PlayState = PlayState::Playing;
 /// with the missing `Checked` on the `Constant day` checkbox in [panel]:
 /// the default is the cycle, because the original's saved-options default is
 /// unconfirmed (a `.bss` global whose writers copy from the settings table;
-/// see `docs/k1/time-of-day.md` and the divergence note below).
+/// see `docs/research/k1/time.md` and the divergence note below).
 pub const DEFAULT_CONSTANT_DAY: bool = false;
 
 /// Что показывает просмотрщик. Правится интерфейсом, читается системами.
@@ -197,7 +197,7 @@ pub struct Stats {
 /// exact spawn of the first build (same seed, same map → same initial state).
 const SIM_SEED: u64 = 42;
 
-/// Benchmark knobs of the "Viewer costs" measurements (docs/rust.md): a var
+/// Benchmark knobs of the "Viewer costs" measurements (docs/development/rust/viewer.md): a var
 /// set to anything but `0` turns its factor on, a var set to `0` or absent
 /// keeps the shipped default. They exist so a benchmark run can hold one
 /// factor at a time — the id labels (`KN_VIEWER_LABELS`) or the playback
@@ -367,7 +367,7 @@ fn setup_lighting(
 struct ScrubSlider;
 
 /// A time-of-day preset button carrying its cycle position
-/// (`docs/k1/time-of-day.md`, "Camera presets" — places to stand in the cycle,
+/// (`docs/development/rust/viewer.md`, "Camera presets" — places to stand in the cycle,
 /// not boundaries). `Default` exists for the template macro; every button in
 /// the panel names its own tick.
 #[derive(Component, Clone, Copy, Default)]
@@ -769,7 +769,7 @@ enum BenchmarkPhase {
 /// `AppExit::Success` on a pass, `AppExit::Error(1)` on a fail, so `cargo
 /// run` and `just viewer-gate` carry the verdict to their own exit codes. No
 /// screenshot is taken. `max_ms` is the worst measured frame (the "worst
-/// frame" measurement of docs/rust.md); `max_at` is its 1-based position in
+/// frame" measurement of docs/development/rust/viewer.md); `max_at` is its 1-based position in
 /// the measured window and `max_on_tick` says whether a simulation tick
 /// executed inside the wall-clock interval that sample measured — the two
 /// attributes the frame-time gate's cause attribution reads. `ticks` is how
@@ -2008,7 +2008,7 @@ fn playback_label(playback: PlayState) -> &'static str {
 /// (a map whose simulation failed to build) shows nothing: a clock of its own
 /// would read 06:00 over a frozen scene and look like a running day. The four
 /// phase words are our reading of the cycle, not a property of the original;
-/// the derivation and the 06:00 offset are recorded in `docs/k1/time-of-day.md`.
+/// the derivation and the 06:00 offset are recorded in `docs/development/rust/viewer.md`.
 fn game_time_line(tick: Option<u64>) -> String {
     let Some(tick) = tick else {
         return String::new();
@@ -2088,12 +2088,8 @@ fn phase_label(phase: DayPhase) -> &'static str {
     }
 }
 
-/// Сколько спрайтов видно и сколько собрано.
-///
-/// `InheritedVisibility` пишет Bevy, и в неё уже входит и скрытая группа, и кадр
-/// анимации без картинки — счёт по детям групп завышал бы первое. Это линейный
-/// обход, а не сумма по девяти узлам: он на три порядка дешевле переключения,
-/// которое за ним следует (замеры — «Цена переключения слоёв» в docs/rust.md).
+/// Count inherited sprite visibility, including hidden groups/empty frames; group child counts would overcount.
+/// See docs/development/rust/rendering.md.
 fn piece_counts(pieces: &Query<&InheritedVisibility, With<ScenePiece>>) -> (usize, usize) {
     pieces.iter().fold((0, 0), |(shown, total), visibility| {
         (shown + usize::from(visibility.get()), total + 1)
@@ -2289,7 +2285,7 @@ mod tests {
         assert!(anim.observe_steps(&[state((58, 0), None, 0, 0)]).is_empty());
     }
 
-    /// The measurement behind the display model (docs/k1/movement.md, "Step
+    /// The measurement behind the display model (docs/research/k1/movement.md, "Step
     /// duration"): a walk sequence carries the cell travel in its own frame
     /// offsets — from the first frame to the last it slides to within ~10 px of
     /// the step vector in every direction. The node must not interpolate along
@@ -2763,7 +2759,7 @@ mod tests {
 
     #[test]
     fn the_benchmark_knobs_default_to_the_shipped_behavior() {
-        // The "Viewer costs" knobs (docs/rust.md) change a run only when the
+        // The "Viewer costs" knobs (docs/development/rust/viewer.md) change a run only when the
         // var is set, and `0` is the only off value: absent means shipped
         // behavior, and any other value means the factor is deliberately on.
         assert!(knob_value(None, true), "absent keeps the default");
@@ -2813,7 +2809,7 @@ mod tests {
     fn default_constant_day_is_off() {
         // Agreed with the missing `Checked` on the Constant day checkbox in
         // panel(): the default is the cycle on, the original's saved-options
-        // default is unconfirmed (docs/k1/time-of-day.md, "The four globals").
+        // default is unconfirmed (docs/research/k1/lighting.md, "The four globals").
         let state = viewer(DEFAULT_OVERLAYS);
         assert!(!state.constant_day);
         assert!(!constant_day_checked(&state));
@@ -3013,7 +3009,7 @@ mod tests {
                 return Some((dir, map_ref));
             }
         }
-        eprintln!("пропуск: нет original/k1/{{rus,eng}}/game (docs/k1/editions.md)");
+        eprintln!("пропуск: нет original/k1/{{rus,eng}}/game (docs/research/k1/editions.md)");
         None
     }
 
@@ -3254,7 +3250,7 @@ mod tests {
 
     /// The readout is the model's answer for the scene clock's tick — the single
     /// time source — so day and position always agree with the lighting and the
-    /// scrubbed thumb: 317 ticks are window 1 of `docs/k1/time-of-day.md` —
+    /// scrubbed thumb: 317 ticks are window 1 of `docs/development/rust/viewer.md` —
     /// neutral ambient, no ground light, 21 minutes past the 06:00 our clock
     /// face starts the cycle at; a full day on the clock shows as day 1.
     #[test]
@@ -3276,7 +3272,7 @@ mod tests {
         assert_eq!(game_time_line(None), "");
     }
 
-    /// The four words are ours, not the original's (`docs/k1/time-of-day.md`), so
+    /// The four words are ours, not the original's (`docs/research/k1/time.md`), so
     /// the panel is pinned to exactly the phases the model derives.
     #[test]
     fn the_panel_names_the_four_phases_we_derived() {
@@ -3386,7 +3382,7 @@ mod tests {
     /// simulation's own tick, so there is no second accumulator on the tracker or
     /// in the viewer to carry a running day across. This is a tool convention for
     /// the viewer's independent scenes, not a game rule: a game-side map
-    /// transition in the Player keeps the session's day (docs/k1/time-of-day.md,
+    /// transition in the Player keeps the session's day (docs/research/k1/time.md,
     /// "The day travels through a game transition").
     #[test]
     fn switching_to_another_map_recreates_the_day_with_the_new_simulation() {
@@ -4250,7 +4246,7 @@ mod tests {
                 }
                 // Each complete step must land the image on the next cell: the
                 // frames carry the travel, so last minus first ≈ the step vector
-                // (walk frames stop 1-11 px short of the cell, docs/k1/movement.md).
+                // (walk frames stop 1-11 px short of the cell, docs/research/k1/movement.md).
                 let mut step_start = 0;
                 for position in 1..=segment.len() {
                     let ends_step = position == segment.len()
@@ -4600,7 +4596,7 @@ mod tests {
     /// so a 30-minute session's rewind must stay sub-second in the shipped
     /// (release) build — measured 306 ms, 10 µs/tick, on an Apple M-series;
     /// the same test build runs ~4.3 s, hence the debug-sized bound (review
-    /// #68; numbers also in docs/rust.md, "Decision: no reverse tick — replay").
+    /// #68; numbers also in docs/development/rust/README.md, "Decision: no reverse tick — replay").
     #[test]
     fn replaying_a_long_session_stays_a_bargain() {
         let Some((dir, map_ref)) = game_and_first_map() else {
@@ -4728,7 +4724,9 @@ mod tests {
                 return Some(dir);
             }
         }
-        eprintln!("skip: no original/k1/{{rus,eng}}/game and no GAME_DIR (docs/k1/editions.md)");
+        eprintln!(
+            "skip: no original/k1/{{rus,eng}}/game and no GAME_DIR (docs/research/k1/editions.md)"
+        );
         None
     }
 
@@ -4790,7 +4788,7 @@ mod tests {
     /// no other per-tick work. Headless (no window, no GPU): this is the
     /// CPU update cost, the same app minus the window the player's tests
     /// run. Measured in release and printed — the numbers land in
-    /// docs/rust.md, "Viewer costs"; no bound is asserted beyond the frame
+    /// docs/development/rust/viewer.md, "Viewer costs"; no bound is asserted beyond the frame
     /// classes existing.
     ///
     /// ```bash
@@ -4940,7 +4938,7 @@ mod tests {
     /// the shadow's slot, and as `creature_z` for the body z whenever a
     /// creature's bottom moves; the per-frame extrapolation multiplies the
     /// call by the population. Measured in release and printed; the numbers
-    /// land in docs/rust.md, "Viewer costs".
+    /// land in docs/development/rust/viewer.md, "Viewer costs".
     ///
     /// ```bash
     /// GAME_DIR=original/k1/rus/game cargo test --release \

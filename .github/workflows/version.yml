@@ -1,5 +1,5 @@
-# Ручной релиз: следующая версия по коммитам с последнего тега (git-cliff),
-# тег и GitHub Release. Сам по себе не запускается — docs/releases.md
+# Manual release only: version workflow creates the tag and GitHub Release.
+# See docs/development/releases.md.
 name: version
 
 on:

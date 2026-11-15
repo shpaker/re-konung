@@ -14,7 +14,7 @@
 //!
 //! The pre-reset lockstep assertion is what makes each falsifiable: the animator
 //! must be showing frame `K` before the reset. Tests on real data skip when
-//! `original/` is absent (docs/k1/editions.md).
+//! `original/` is absent (docs/research/k1/editions.md).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -64,7 +64,7 @@ fn game_dir() -> Option<PathBuf> {
             return Some(dir);
         }
     }
-    eprintln!("skipping: no original/k1/{{rus,eng}}/game (docs/k1/editions.md)");
+    eprintln!("skipping: no original/k1/{{rus,eng}}/game (docs/research/k1/editions.md)");
     None
 }
 

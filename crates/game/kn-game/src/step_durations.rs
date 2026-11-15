@@ -36,7 +36,7 @@ impl StepDurations {
 impl Pace for StepDurations {
     /// One tick is the floor: neither a creature the table does not know nor an
     /// animation without frames may ask the engine for a step of no length
-    /// (docs/k1/movement.md, "Step duration"; the rule is ours, not the game's).
+    /// (docs/research/k1/movement.md, "Step duration"; the rule is ours, not the game's).
     fn step_ticks(&self, creature: CreatureId, direction: Direction) -> u32 {
         self.rows
             .get(creature.raw() as usize)

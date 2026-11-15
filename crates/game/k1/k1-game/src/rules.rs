@@ -5,7 +5,7 @@
 //! ([`Live`], [`Ground`], [`Random`]). This module owns neither `kn-game` nor
 //! `World`; application lives in kn-game where those types exist.
 //!
-//! Confirmed rules — docs/k1/creatures.md, "The villager decision" and "The
+//! Confirmed rules — docs/research/k1/creatures/behavior.md, "The villager decision" and "The
 //! monster decision": women and children walk on a quarter roll, work comes
 //! from bits 3–5 of the class or from the village slot the creature itself
 //! holds, and a jobless villager walks on a half roll; a roaming squad stands
@@ -31,7 +31,7 @@ pub mod group {
     pub const LONE_NPC: u8 = 0x53;
     /// Village villager groups (жители деревень), lower 2 bits = side.
     pub const VILLAGE_FIRST: u8 = 0x80;
-    /// Last documented villager group kind. `docs/k1/formats/game-state.md`
+    /// Last documented villager group kind. `docs/research/k1/formats/game-state.md`
     /// records only 0x80–0x82; higher kinds are unconfirmed and not villagers.
     pub const VILLAGE_LAST: u8 = 0x82;
 }
@@ -132,7 +132,7 @@ pub trait Random {
 
 /// Group state byte 0x1D, recomputed by [`group_states`] — never read from
 /// the file. The three meanings the game itself writes for roaming squads
-/// (docs/k1/creatures.md, "The group state of a roaming squad").
+/// (docs/research/k1/creatures/behavior.md, "The group state of a roaming squad").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupState {
     /// Calm: 0. A roaming squad stands; every other group is always this.
@@ -168,7 +168,7 @@ pub struct Context<'a, G: Ground, R: Random> {
 }
 
 /// Whether the creature still acts: the original's own test — class bit 0x80
-/// is dead, states 3 and 9 are the dying and the dead (docs/k1/creatures.md).
+/// is dead, states 3 and 9 are the dying and the dead (docs/research/k1/creatures/behavior.md).
 pub fn is_alive(creature: &Creature) -> bool {
     creature.class_id & 0x80 == 0 && creature.state != 3 && creature.state != 9
 }
@@ -210,7 +210,7 @@ pub fn evaluate<G: Ground, R: Random>(
 /// else `Calm`. Every other group — villagers, the player squad, lone NPCs,
 /// unknown kinds — is `Calm`. The byte stored in `Game.N` is never read: the
 /// game rewrites it for roaming squads within the first ticks, and in our
-/// data it is the unknown `0x80` for every squad (docs/k1/creatures.md, "The
+/// data it is the unknown `0x80` for every squad (docs/research/k1/creatures/behavior.md, "The
 /// group state of a roaming squad").
 ///
 /// A creature with no live picture — a `None` entry, or none at all — is
@@ -302,7 +302,7 @@ pub fn classify(creature: &Creature) -> CreatureType {
 /// The peaceful villager decision (Slavik `game_play.cpp:2288-2385`), in the
 /// order the original itself uses: a woman or a child first, then the static
 /// work from bits 3–5 of the class, then the village slot the creature holds,
-/// then the half roll. `docs/k1/creatures.md`, "The villager decision".
+/// then the half roll. `docs/research/k1/creatures/behavior.md`, "The villager decision".
 fn villager_decision<G: Ground, R: Random>(
     creature: &Creature,
     live: &Live,
@@ -322,7 +322,7 @@ fn villager_decision<G: Ground, R: Random>(
     // creature to join it. An empty slot falls through to the dynamic
     // workplace; the original also clears the bits in memory (`ClassID &=
     // ~(7 << 3)`), which we do not — the branch is deterministic, so the
-    // next tick takes the same path (docs/k1/creatures.md).
+    // next tick takes the same path (docs/research/k1/creatures/README.md).
     let job = usize::from((creature.class_id >> 3) & 7);
     if job != 0 {
         // Bits 5..7 read past the five slots in the original
@@ -375,7 +375,7 @@ fn static_work<G: Ground>(live: &Live, place: &Workplace, ground: &G) -> Decisio
 /// A walk to a free cell strictly inside the creature's spawn area: ten
 /// uniform picks, then no order. The original offsets from the creature's own
 /// cell by `ViewTiles * 2` — a window-size-dependent radius
-/// (`game_play.cpp:1889-1949`) we replace (docs/k1/creatures.md).
+/// (`game_play.cpp:1889-1949`) we replace (docs/research/k1/creatures/behavior.md).
 fn walk_target<G: Ground, R: Random>(
     creature: &Creature,
     context: &mut Context<'_, G, R>,
@@ -404,7 +404,7 @@ fn walk_target<G: Ground, R: Random>(
 const NOT_MONSTER: [u8; 3] = [class::WOMAN, class::CHILD, 0x53];
 
 /// The roaming monster's decision, from its squad's recomputed state (Slavik
-/// `game_play.cpp:3156-3181`, `3286`, `3337-3392`; docs/k1/creatures.md,
+/// `game_play.cpp:3156-3181`, `3286`, `3337-3392`; docs/research/k1/creatures/combat.md,
 /// "The monster decision"). Calm stands; `PlayerInside` would start combat —
 /// target choice, attack and shooting are not reverse-engineered, so we give
 /// no order rather than invent one; `MemberOutside` returns. A creature of a
@@ -485,14 +485,14 @@ fn pick<G: Ground, R: Random>(context: &mut Context<'_, G, R>, limit: u64) -> i6
 /// original's player-proximity test (`game_play.cpp:1035-1042`). The
 /// "outside" the game tests for its own members is tangled by `&&`/`||`
 /// precedence into `y < top`; we use the plain negation of this test
-/// (docs/k1/creatures.md). `placement` shares it for the same reason.
+/// (docs/research/k1/creatures/placement.md). `placement` shares it for the same reason.
 pub(crate) fn inside(spawn: &Rect, cell: (i16, i16)) -> bool {
     spawn.left <= cell.0 && cell.0 <= spawn.right && spawn.top <= cell.1 && cell.1 <= spawn.bottom
 }
 
 /// Neighbour offsets by direction index, for an even and an odd row — the
 /// table of `kn_game::movement::Direction::offset` re-declared here because
-/// `k1-game` must not depend on `kn-game` (docs/rust.md, "Creature rules").
+/// `k1-game` must not depend on `kn-game` (docs/development/rust/movement.md, "Creature rules").
 /// Rows grow downward, odd rows are shifted right; direction 0 is west, then
 /// clockwise. Public for the one test that holds the two copies together
 /// (`kn-game/tests/movement_grid.rs`); the engine's table is the reference.
@@ -533,14 +533,14 @@ fn checked_cell(x: i64, y: i64) -> Option<(i16, i16)> {
 /// direction lookup `FUN_0041165c`: standing on `to` itself is NOT adjacency,
 /// so a stranger on the workplace is sent to a free neighbour. Public for
 /// the simulation's goal-reach counters, which classify a completed order by
-/// the target the rule aimed at (docs/k1/creatures.md, "Goal reach").
+/// the target the rule aimed at (docs/research/k1/creatures/placement.md, "Goal reach").
 pub fn is_adjacent(from: (i16, i16), to: (i16, i16)) -> bool {
     (0..8).any(|index| neighbour(to, index) == Some(from))
 }
 
 /// The first free neighbour of `cell` in direction order 0..7 — the original
 /// tests terrain only (`FUN_00410ffc`); with us nobody may stand there
-/// either (docs/k1/creatures.md).
+/// either (docs/research/k1/creatures/README.md).
 fn first_free_neighbour<G: Ground>(cell: (i16, i16), ground: &G) -> Option<(i16, i16)> {
     (0..8)
         .filter_map(|index| neighbour(cell, index))
@@ -1559,7 +1559,7 @@ mod tests {
     fn player_inside_stands_because_combat_is_not_recovered() {
         // `PlayerInside` in the original starts combat — target choice,
         // attack, shooting — none of it reverse-engineered. We give no
-        // order rather than invent one (docs/k1/creatures.md).
+        // order rather than invent one (docs/research/k1/creatures/behavior.md).
         let monster = small_squad();
         let decision = decide_monster(
             &monster,

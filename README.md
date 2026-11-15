@@ -1,83 +1,34 @@
 # re-konung
 
-Изучение и воссоздание движка игр серии «Князь» (1С/Snowball): «Князь: Легенды Лесной страны» (1999), затем «Князь 2» и «Князь 2.5».
+Study and recreation of the engine behind «Князь: Легенды Лесной страны»
+(*Konung: Legends of the North*, 1999), then K2 and K2.5 if a shared engine is
+confirmed. An unofficial fan project, unaffiliated with 1C or Snowball; the games
+and their names belong to their respective owners.
 
-Сейчас (этап 1) карты первой части открываются в [Tiled](https://www.mapeditor.org) напрямую из оригинальных файлов, редактируются и сохраняются обратно в формат игры. Форматы карт, тайлов и объектов разобраны и описаны в [docs/](docs/README.md).
+The original supplies the rules, content, atmosphere and visual identity. The
+project improves responsiveness, controls and obsolete technical limits; the
+[product principles](docs/development/design.md) explain the reference for that work.
 
-Неофициальный фанатский проект, с 1С и Snowball не связан. Права на игры серии и их название принадлежат правообладателям.
+## Start here
 
-## Что воссоздаём, а что улучшаем
+You need your own licensed copy: your disc or a store purchase. No game assets
+are distributed. [Prepare the files](docs/guides/game-files.md), then follow
+[environment setup](docs/guides/setup.md).
 
-Цель — живая и отзывчивая игра, а не побайтовая копия движка 1999 года. Форматы, геймплей и атмосферу оригинала сохраняем: данные читаются и записываются побайтно точно, а правила поведения существ берутся из оригинала, а не придумываются. Устаревшие механики и технические ограничения улучшаем; внутренние алгоритмы и искусственные лимиты оригинала не воспроизводим — они были платой за железо того времени. Ориентир в управлении, камере и интерфейсах — современные CRPG студии Larian, прежде всего Baldur's Gate 3 и Divinity: Original Sin 2: они задают планку отзывчивости и понятности — от камеры и выделения объектов до HUD, инвентаря, диалогов и подсказок. Их интерфейсы, ассеты, 3D-представление и чужие игровые механики не копируем; принципы — в [docs/design.md](docs/design.md). Что подтверждено, что нет и что мы намеренно делаем иначе — в [docs/](docs/README.md).
+| Goal | Start |
+|---|---|
+| Run the player and create a character | [Player guide](docs/guides/player.md) — `just game` |
+| Open, edit and save original maps | [Tiled guide](docs/guides/tiled.md) — `just tiled-install` |
+| Inspect maps, creatures and lighting | [Viewer guide](docs/guides/viewer.md) — `just viewer 17` |
+| Develop the engine or tools | [Development](docs/development/README.md) |
+| Read the formats and recovered game rules | [Research](docs/research/README.md) |
 
-## Файлы игры
+The Rust player and viewer render maps and run the creature simulation. The
+player has menus, settings and a new-game constructor; a complete playable loop
+is still in progress. Python and the Tiled extension remain independent
+reference tools, and Python wins format disagreements.
 
-Файлов игры в репозитории нет и не будет. Нужна своя лицензионная копия: образ своего CD или установленная игра. Сейчас первая часть продаётся в цифровом виде, например на [GOG](https://www.gog.com/en/game/konung_1_2). Как подготовить файлы — [docs/k1/editions.md](docs/k1/editions.md).
-
-## Быстрый старт
-
-Нужны [uv](https://docs.astral.sh/uv/), [just](https://just.systems), 7-Zip, Tiled 1.12.
-
-```bash
-just setup
-```
-
-```bash
-just k1-unpack rus
-```
-
-```bash
-uv run konung k1 map original/k1/rus/game out/k1/maps -n 1
-```
-
-```bash
-just tiled-install
-```
-
-После этого в Tiled: «Файл → Открыть» → `original/k1/rus/game/Konung.1`.
-
-## Устройство
-
-Рядом живут две реализации. Python-пакет `konung/` и расширение `tiled/konung/` — эталон разбора форматов: при расхождении прав Python. Rust в `crates/` — будущий движок на [Bevy](https://bevyengine.org): два бинарника, их Bevy-фронтенды и чистый Rust без Bevy под ними. Состав, границы слоёв, фактические зависимости крейтов и целевая форма — в документе [Архитектура](ARCHITECTURE.md). Форматы описаны в [docs/k1/formats/](docs/k1/formats/), Rust-сторона — в [docs/rust.md](docs/rust.md).
-
-## Просмотр карты в Bevy
-
-```bash
-just viewer 17
-```
-
-Обычный локальный цикл — профиль `dev-runtime` (быстрая повторная сборка, Bevy в `bevy_dylib.dll`); release-сборка того же окна — `just viewer-release`. Профили и замеры — в разделе «Build profiles» документа [docs/rust.md](docs/rust.md).
-
-Панель слева: выбор карты и отладочные оверлеи — проходимость, свет, маркеры `Game.N` и персонажи (включены по умолчанию). При открытии карта целиком вписывается в окно; камера: WASD и стрелки или перетаскивание левой кнопкой, колесо — масштаб ступенями, на целых ступенях картинка пиксель-в-пиксель. Переключение оверлея кадр не сбрасывает, а колесо над панелью карту не масштабирует. Неверный номер карты — ошибка, а не тихий переход на первую.
-
-Проверка без окна и GPU — для CI и агентов:
-
-```bash
-cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- \
-    --game-dir original/k1/rus/game check --all --format json
-```
-
-Ненулевой код возврата, если карта не собралась или её текстура не декодировалась.
-
-## Через агента
-
-Репозиторий — плагин для Claude Code, Codex и Qwen Code с навыком `konung-tiled-install`: агент ставит расширение в Tiled и проверяет, что карта открывается. Клон и `just` для этого не нужны, только Tiled 1.12 и своя копия игры.
-
-Claude Code:
-
-```
-/plugin marketplace add shpaker/re-konung
-/plugin install konung@re-konung
-```
-
-Codex: `codex plugin marketplace add shpaker/re-konung`, затем `konung` в `/plugins`.
-
-Qwen Code:
-
-```bash
-qwen extensions install https://github.com/shpaker/re-konung
-```
-
-Потом попросить агента поставить расширение «Князя» для Tiled и открыть карту.
-
-Как вносить изменения — [CONTRIBUTING.md](CONTRIBUTING.md); правила для агентов — [AGENTS.md](AGENTS.md).
+The [architecture](ARCHITECTURE.md) owns components, boundaries and current status.
+The [documentation index](docs/README.md) connects the guides, implementation
+notes and research. To contribute, read [CONTRIBUTING.md](CONTRIBUTING.md);
+agent instructions are in [AGENTS.md](AGENTS.md).
