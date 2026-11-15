@@ -70,6 +70,10 @@ pub enum Text {
     AllocationReset,
     UnspentPointsHelp,
     Baseline,
+    ChooseHero,
+    ChooseClass,
+    RequiredChoices,
+    Reset,
 
     Settings,
     Exit,
@@ -155,7 +159,7 @@ pub fn t(language: Language, text: Text) -> &'static str {
             Language::English => "Start",
         },
         Text::HeroAttributes => match language {
-            Language::Russian => "Атрибуты",
+            Language::Russian => "Характеристики",
             Language::English => "Attributes",
         },
         Text::HeroSkills => match language {
@@ -284,6 +288,22 @@ pub fn t(language: Language, text: Text) -> &'static str {
             Language::Russian => "Исходное",
             Language::English => "Default",
         },
+        Text::ChooseHero => match language {
+            Language::Russian => "Выберите персонажа",
+            Language::English => "Choose a character",
+        },
+        Text::ChooseClass => match language {
+            Language::Russian => "Выберите класс",
+            Language::English => "Choose a class",
+        },
+        Text::RequiredChoices => match language {
+            Language::Russian => "Выберите",
+            Language::English => "Choose",
+        },
+        Text::Reset => match language {
+            Language::Russian => "Сбросить",
+            Language::English => "Reset",
+        },
         Text::Settings => match language {
             Language::Russian => "Настройки",
             Language::English => "Settings",
@@ -404,6 +424,10 @@ mod tests {
             Text::AllocationReset,
             Text::UnspentPointsHelp,
             Text::Baseline,
+            Text::ChooseHero,
+            Text::ChooseClass,
+            Text::RequiredChoices,
+            Text::Reset,
             Text::Settings,
             Text::Exit,
             Text::Loading,

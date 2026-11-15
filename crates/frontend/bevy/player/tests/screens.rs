@@ -15,7 +15,10 @@ use bevy::ui_widgets::Checkbox;
 use common::{all_heroes, first_hero, game_dir, player_app, player_app_with};
 use kn_app::{Action, HeroSelectAction, MainMenuAction, SettingsAction, SettingsField};
 use kn_fe_player::flow::{AppFlow, AppliedSettings};
-use kn_fe_player::screens::{ConstructorButton, ConstructorKind, HintPopup, HintSource};
+use kn_fe_player::screens::{ConstructorButton, ConstructorKind};
+use kn_fe_player::widgets::character_sheet::{
+    DetailSource, DetailText, HistoryText, SheetInteraction,
+};
 use kn_game::Game;
 use kn_settings::{Language, Settings};
 
@@ -208,6 +211,16 @@ fn the_loading_screen_shows_while_the_session_builds() {
     app.world_mut()
         .resource_mut::<AppFlow>()
         .submit(Action::MainMenu(MainMenuAction::NewGame));
+    for choice in [
+        HeroSelectAction::Preview(hero),
+        HeroSelectAction::SetClass(0),
+        HeroSelectAction::SetCombatStyle(0),
+        HeroSelectAction::SetSecondary(0),
+    ] {
+        app.world_mut()
+            .resource_mut::<AppFlow>()
+            .submit(Action::HeroSelect(choice));
+    }
     app.world_mut()
         .resource_mut::<AppFlow>()
         .submit(Action::HeroSelect(HeroSelectAction::Choose(hero)));
@@ -239,7 +252,7 @@ fn the_hero_select_presents_every_hero_and_previews_the_details() {
     app.update();
     let shown = strings(&mut app);
     assert!(
-        shown.iter().any(|s| s.contains("Атрибуты")),
+        shown.iter().any(|s| s.contains("Характеристики")),
         "the hero-select screen opened with the dossier, got {shown:?}"
     );
     for summary in &summaries {
@@ -254,14 +267,8 @@ fn the_hero_select_presents_every_hero_and_previews_the_details() {
         );
     }
     // The dossier of the default preview (the first hero), sectioned.
-    for part in [
-        "Атрибуты",
-        "Навыки",
-        "Прочее",
-        "Сила",
-        "Фехтование",
-        "Начать",
-    ] {
+    for part in ["Характеристики", "Навыки", "Сила", "Фехтование", "Начать"]
+    {
         assert!(
             shown.iter().any(|s| s.contains(part)),
             "the dossier holds {part:?}, got {shown:?}"
@@ -338,70 +345,88 @@ fn the_hero_select_presents_every_hero_and_previews_the_details() {
     );
 }
 
-/// The hint popups: hovering a dossier line opens the original's hover hint
-/// (`Texts::newgame`), leaving closes it. `Hovered` is inserted by hand —
-/// the headless world has no pointer.
 #[test]
-fn a_hovered_line_opens_the_hint_popup_and_leaving_closes_it() {
+fn history_is_readable_on_hover_without_selection_and_persists_after_selection() {
     let Some(dir) = game_dir() else {
         return;
     };
     let game = Game::open(&dir).unwrap();
     let heroes = all_heroes(&game);
-    let hints = game.newgame_texts();
-    assert!(
-        hints.iter().all(|text| !text.is_empty()),
-        "the game's hint lines must resolve for this test to be meaningful"
-    );
-    let mut app = player_app(game, heroes);
-    app.update();
-
-    // Open the hero select, then hover the first dossier row (its label is
-    // Ловкость — hint line 9, the original's agility hint).
+    let summaries = game.hero_summaries(kn_game::MapSource::Game).unwrap();
+    let mut app = player_app(game, heroes.clone());
     app.world_mut()
         .resource_mut::<AppFlow>()
         .submit(Action::MainMenu(MainMenuAction::NewGame));
     app.update();
-    let mut popups = app.world_mut().query_filtered::<Entity, With<HintPopup>>();
     assert!(
-        popups.iter(app.world()).next().is_none(),
-        "no hover — no popup yet"
+        app.world()
+            .resource::<AppFlow>()
+            .state()
+            .new_game_draft
+            .hero
+            .is_none()
     );
-    let target = {
-        let mut sources = app.world_mut().query_filtered::<Entity, With<HintSource>>();
-        sources
-            .iter(app.world())
-            .find(|entity| {
-                app.world()
-                    .get::<HintSource>(*entity)
-                    .is_some_and(|hint| hint.0 == 9)
-            })
-            .expect("the agility row carries the hint source")
-    };
+    assert!(
+        strings(&mut app)
+            .iter()
+            .any(|text| text == "Выберите персонажа")
+    );
+    let target = app
+        .world_mut()
+        .query::<(Entity, &DetailSource)>()
+        .iter(app.world())
+        .find(|(_, source)| source.0 == 1000 + heroes[1] as usize)
+        .unwrap()
+        .0;
     app.world_mut()
         .entity_mut(target)
         .insert(bevy::picking::hover::Hovered(true));
     app.update();
-    let mut popups = app.world_mut().query_filtered::<Entity, With<HintPopup>>();
-    let popup = popups
-        .iter(app.world())
-        .next()
-        .expect("the hint popup opened");
-    let text = app
-        .world()
-        .get::<bevy::ui::widget::Text>(popup)
-        .expect("the popup carries the hint text")
-        .0
-        .clone();
-    assert_eq!(text, hints[9], "the popup shows the hovered line's hint");
-
-    // Leaving closes it.
-    app.world_mut().despawn(target);
-    app.update();
-    let mut popups = app.world_mut().query_filtered::<Entity, With<HintPopup>>();
+    let details = |app: &mut App| {
+        app.world_mut()
+            .query_filtered::<&Text, With<DetailText>>()
+            .single(app.world())
+            .unwrap()
+            .0
+            .clone()
+    };
+    assert!(details(&mut app).contains(&summaries[1].description));
     assert!(
-        popups.iter(app.world()).next().is_none(),
-        "no hover — no popup"
+        app.world()
+            .resource::<AppFlow>()
+            .state()
+            .new_game_draft
+            .hero
+            .is_none()
+    );
+    app.world_mut()
+        .entity_mut(target)
+        .insert(bevy::picking::hover::Hovered(false));
+    app.update();
+    assert!(details(&mut app).contains(&summaries[1].description));
+    app.world_mut()
+        .trigger(bevy::ui_widgets::Activate { entity: target });
+    app.update();
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::HeroSelect(HeroSelectAction::SetClass(0)));
+    app.update();
+    assert_eq!(
+        app.world_mut()
+            .query_filtered::<&Text, With<HistoryText>>()
+            .single(app.world())
+            .unwrap()
+            .0,
+        summaries[1].description
+    );
+    app.init_resource::<ButtonInput<KeyCode>>();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::Escape);
+    app.update();
+    assert_eq!(
+        app.world().resource::<AppFlow>().state().screen,
+        kn_app::Screen::MainMenu
     );
 }
 
@@ -433,8 +458,8 @@ fn choosing_an_occupation_redraws_the_numbers_and_the_highlight() {
     };
     assert_eq!(
         strength_value(&mut app),
-        "15",
-        "the default occupation is Воин"
+        "—",
+        "an unselected occupation must not expose hidden defaults"
     );
     // The Охотник button is not primary before the click.
     let mut buttons = app
@@ -491,6 +516,9 @@ fn attribute_buttons_refund_spend_reset_and_preserve_keyboard_focus() {
     app.world_mut()
         .resource_mut::<AppFlow>()
         .submit(Action::MainMenu(MainMenuAction::NewGame));
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::HeroSelect(HeroSelectAction::SetClass(0)));
     app.update();
     let button = |app: &mut App, attribute, delta| {
         app.world_mut()
@@ -506,11 +534,23 @@ fn attribute_buttons_refund_spend_reset_and_preserve_keyboard_focus() {
             .iter()
             .filter(|text| text.as_str() == "Свободные очки: 0")
             .count(),
-        2
+        1
     );
-    assert!(captions.iter().any(|text| text == "Повысить: 2 очка"));
-    assert!(captions.iter().any(|text| text == "Понизить: +5 очков"));
-    assert!(captions.iter().any(|text| text == "Не хватает очков"));
+    assert!(
+        captions
+            .iter()
+            .any(|text| text.contains("Повысить: 2 очка"))
+    );
+    assert!(
+        captions
+            .iter()
+            .any(|text| text.contains("Понизить: +2 очка"))
+    );
+    assert!(
+        captions
+            .iter()
+            .any(|text| text.contains("Не хватает очков"))
+    );
     assert!(
         !captions
             .iter()
@@ -542,7 +582,11 @@ fn attribute_buttons_refund_spend_reset_and_preserve_keyboard_focus() {
             .iter()
             .any(|text| text == "Свободные очки: 5")
     );
-    assert!(strings(&mut app).iter().any(|text| text == "Исходное: 15"));
+    assert!(
+        strings(&mut app)
+            .iter()
+            .any(|text| text.contains("Исходное: 15"))
+    );
     let focused = app.world().resource::<InputFocus>().get().unwrap();
     assert_eq!(
         app.world().get::<AttributeButton>(focused).unwrap().delta,
@@ -550,15 +594,10 @@ fn attribute_buttons_refund_spend_reset_and_preserve_keyboard_focus() {
     );
     app.insert_resource(bevy::input_focus::InputFocusVisible(true));
     app.update();
-    let hint = app
-        .world_mut()
-        .query::<&HintPopup>()
-        .iter(app.world())
-        .next()
-        .unwrap();
     assert_eq!(
-        hint.0, 8,
-        "keyboard focus exposes the strength hint without hovering"
+        app.world().resource::<SheetInteraction>().selected,
+        Some(2),
+        "keyboard focus selects strength without hovering"
     );
     // This headless app omits the renderer's visibility propagation.
     for mut visibility in app
@@ -588,7 +627,7 @@ fn attribute_buttons_refund_spend_reset_and_preserve_keyboard_focus() {
     let draft = app.world().resource::<AppFlow>().state().new_game_draft;
     assert_eq!(draft.attributes, Some([4, 3, 14, 10]));
     assert_eq!(
-        kn_game::newgame_allocation(draft.class, draft.attributes)
+        kn_game::newgame_allocation(draft.class.unwrap(), draft.attributes)
             .unwrap()
             .free_points,
         3
@@ -630,7 +669,7 @@ fn attribute_buttons_refund_spend_reset_and_preserve_keyboard_focus() {
     );
     let draft = app.world().resource::<AppFlow>().state().new_game_draft;
     assert_eq!(
-        kn_game::newgame_allocation(draft.class, draft.attributes)
+        kn_game::newgame_allocation(draft.class.unwrap(), draft.attributes)
             .unwrap()
             .free_points,
         0

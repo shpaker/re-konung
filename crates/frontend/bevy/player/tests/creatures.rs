@@ -57,6 +57,16 @@ fn play_to_playing(app: &mut App, hero: u32) {
     app.world_mut()
         .resource_mut::<AppFlow>()
         .submit(Action::MainMenu(MainMenuAction::NewGame));
+    for action in [
+        HeroSelectAction::Preview(hero),
+        HeroSelectAction::SetClass(0),
+        HeroSelectAction::SetCombatStyle(0),
+        HeroSelectAction::SetSecondary(0),
+    ] {
+        app.world_mut()
+            .resource_mut::<AppFlow>()
+            .submit(Action::HeroSelect(action));
+    }
     app.world_mut()
         .resource_mut::<AppFlow>()
         .submit(Action::HeroSelect(HeroSelectAction::Choose(hero)));
@@ -191,6 +201,16 @@ fn play_to_loading(app: &mut App, hero: u32) {
     app.world_mut()
         .resource_mut::<AppFlow>()
         .submit(Action::MainMenu(MainMenuAction::NewGame));
+    for action in [
+        HeroSelectAction::Preview(hero),
+        HeroSelectAction::SetClass(0),
+        HeroSelectAction::SetCombatStyle(0),
+        HeroSelectAction::SetSecondary(0),
+    ] {
+        app.world_mut()
+            .resource_mut::<AppFlow>()
+            .submit(Action::HeroSelect(action));
+    }
     app.world_mut()
         .resource_mut::<AppFlow>()
         .submit(Action::HeroSelect(HeroSelectAction::Choose(hero)));

@@ -42,12 +42,12 @@ pub enum SettingsField {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HeroSelectAction {
     /// Highlight the offered hero `hero` on the screen (the detail panel
-    /// follows): [`AppState::hero_preview`] becomes `hero`. A hero outside
+    /// follows): [`crate::CharacterCreationDraft::hero`] becomes `hero`. A hero outside
     /// [`AppState::heroes`](crate::AppState::heroes) is a no-op, like every
     /// off-screen action. No effect: the session starts from
     /// [`Choose`](HeroSelectAction::Choose) only.
     Preview(u32),
-    /// Choose the occupation `index` — the row of [`crate::AppState::new_game`]'s
+    /// Choose the occupation `index` — the row of [`crate::AppState::new_game_draft`]'s
     /// occupation table the game layer resolves (`newgame_classes()`):
     /// 0 Воин, 1 Охотник, 2 Купец, 3 Вождь. Out of range — a no-op.
     SetClass(u8),

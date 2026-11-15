@@ -103,6 +103,12 @@ impl Plugin for PlayerFlowPlugin {
             .insert_resource(AppliedSettings(self.settings))
             .insert_resource(SettingsPath(self.settings_path.clone()))
             .init_resource::<LastScreen>()
+            .add_plugins(crate::widgets::character_sheet::CharacterSheetPlugin)
+            .add_observer(crate::screens::hero_select::adjust_attribute)
+            .configure_sets(
+                Update,
+                crate::widgets::character_sheet::SheetSync.after(crate::screens::hero_select::sync),
+            )
             .configure_sets(Update, FlowSet)
             .add_systems(
                 Update,
@@ -119,7 +125,6 @@ impl Plugin for PlayerFlowPlugin {
                     crate::screens::settings::sync.after(FlowSet),
                     crate::screens::hero_select::sync.after(FlowSet),
                     crate::screens::hero_select::keyboard.before(FlowSet),
-                    crate::screens::hero_select::hint_popup.after(FlowSet),
                 ),
             )
             .add_systems(
@@ -321,6 +326,14 @@ mod tests {
             Screen::Settings => flow.submit(Action::MainMenu(kn_app::MainMenuAction::OpenSettings)),
             Screen::Loading | Screen::Playing => {
                 flow.submit(Action::MainMenu(kn_app::MainMenuAction::NewGame));
+                for action in [
+                    kn_app::HeroSelectAction::Preview(0),
+                    kn_app::HeroSelectAction::SetClass(0),
+                    kn_app::HeroSelectAction::SetCombatStyle(0),
+                    kn_app::HeroSelectAction::SetSecondary(0),
+                ] {
+                    flow.submit(Action::HeroSelect(action));
+                }
                 flow.submit(Action::HeroSelect(kn_app::HeroSelectAction::Choose(0)));
                 if screen == Screen::Playing {
                     flow.submit(Action::Loading(LoadingAction::Succeeded));

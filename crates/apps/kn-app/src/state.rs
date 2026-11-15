@@ -95,6 +95,30 @@ pub struct NewGameDraft {
     pub attributes: Option<[i16; 4]>,
 }
 
+/// Incomplete interactive choices. No implicit selection is presented to the player.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CharacterCreationDraft {
+    pub hero: Option<u32>,
+    pub class: Option<usize>,
+    pub combat_style: Option<usize>,
+    pub secondary: Option<usize>,
+    pub attributes: Option<[i16; 4]>,
+}
+
+impl CharacterCreationDraft {
+    pub fn complete(self) -> Option<(u32, NewGameDraft)> {
+        Some((
+            self.hero?,
+            NewGameDraft {
+                class: self.class?,
+                combat_style: self.combat_style?,
+                secondary: self.secondary?,
+                attributes: self.attributes,
+            },
+        ))
+    }
+}
+
 /// The whole application state of the player, minus the running game.
 #[derive(Clone, PartialEq, Debug)]
 pub struct AppState {
@@ -105,20 +129,8 @@ pub struct AppState {
     /// legal state (nothing to offer); `HeroSelectAction::Choose` of a number
     /// outside it is a no-op.
     pub heroes: Vec<u32>,
-    /// The hero the hero-select screen shows the details of: the first
-    /// offered hero at startup, [`HeroSelectAction::Preview`] afterwards —
-    /// the offer persists across re-entries of the screen. `Some` exactly
-    /// while it is a hero of [`AppState::heroes`]; `None` — an empty offer.
-    /// The session still starts from `HeroSelectAction::Choose`, which
-    /// carries its own number.
-    pub hero_preview: Option<u32>,
-    /// The character-constructor draft of the hero-select screen: the
-    /// chosen occupation row and the two specializations, indexes into the
-    /// tables the game layer resolves (`newgame_classes()`, the combat
-    /// styles and the secondary sets — 0 is each table's default). The
-    /// defaults are the original's: Воин, fencing, the default set
-    /// (`game.cpp:2301-2327`).
-    pub new_game_draft: NewGameDraft,
+    /// Interactive choices reset on each entry. Only a complete draft can start a session.
+    pub new_game_draft: CharacterCreationDraft,
     /// The last applied-and-persisted settings; the main menu and the whole UI
     /// render in `applied.language`, the settings screen previews
     /// `draft.language`.

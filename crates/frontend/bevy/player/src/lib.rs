@@ -59,8 +59,8 @@ pub enum StartMode {
     /// The main menu; a session is built only through the AppFlow pipeline.
     Menu,
     /// Straight into the session: the frontend seeds the whole new-game flow
-    /// — `MainMenuAction::NewGame` plus `HeroSelectAction::Choose` of the
-    /// first hero — before the first frame, so one flush carries the seed to
+    /// with explicit original class and specialization choices for the first
+    /// hero before the first frame, so one flush carries the seed to
     /// `Loading` and no screen ever renders.
     NewGame,
 }
@@ -117,11 +117,16 @@ pub fn run_player(config: PlayerConfig) {
         && let Some(hero) = config.heroes.first().copied()
         && let Some(mut app_flow) = app.world_mut().get_resource_mut::<flow::AppFlow>()
     {
-        // The whole new-game flow queued before the first frame: one flush
-        // reduces both actions, exactly one `StartSession` effect comes out
-        // and the screen is already `Loading` — no root spawns, no second
-        // session can start.
+        // The command-line shortcut explicitly chooses the original preset.
         app_flow.submit(kn_app::Action::MainMenu(kn_app::MainMenuAction::NewGame));
+        for choice in [
+            kn_app::HeroSelectAction::Preview(hero),
+            kn_app::HeroSelectAction::SetClass(0),
+            kn_app::HeroSelectAction::SetCombatStyle(0),
+            kn_app::HeroSelectAction::SetSecondary(0),
+        ] {
+            app_flow.submit(kn_app::Action::HeroSelect(choice));
+        }
         app_flow.submit(kn_app::Action::HeroSelect(
             kn_app::HeroSelectAction::Choose(hero),
         ));

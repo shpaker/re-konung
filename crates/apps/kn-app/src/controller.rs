@@ -10,7 +10,7 @@ use crate::action::{
     SettingsField,
 };
 use crate::effect::Effect;
-use crate::state::{AppState, NewGameDraft, SaveStatus, Screen, SettingsScreen};
+use crate::state::{AppState, CharacterCreationDraft, SaveStatus, Screen, SettingsScreen};
 
 /// The table sizes the game layer resolves for the character constructor
 /// (`newgame_classes()`, the combat styles, the secondary sets).
@@ -36,11 +36,8 @@ impl AppController {
         Self {
             state: AppState {
                 screen: Screen::MainMenu,
-                heroes: heroes.clone(),
-                // The screen opens on the first offered hero; an empty offer
-                // stays `None`.
-                hero_preview: heroes.first().copied(),
-                new_game_draft: NewGameDraft::default(),
+                heroes,
+                new_game_draft: CharacterCreationDraft::default(),
                 applied,
                 settings_screen: None,
                 saving: None,
@@ -81,34 +78,34 @@ impl AppController {
             (Screen::MainMenu, Action::MainMenu(MainMenuAction::NewGame)) => {
                 self.state.session_error = None;
                 self.state.screen = Screen::HeroSelect;
-                self.state.new_game_draft = NewGameDraft::default();
+                self.state.new_game_draft = CharacterCreationDraft::default();
             }
             (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::Preview(hero))) => {
                 if self.state.heroes.contains(&hero) {
-                    self.state.hero_preview = Some(hero);
+                    self.state.new_game_draft.hero = Some(hero);
                 }
             }
             (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::SetClass(index))) => {
                 if usize::from(index) < NEWGAME_CLASSES {
-                    self.state.new_game_draft.class = usize::from(index);
+                    self.state.new_game_draft.class = Some(usize::from(index));
                     self.state.new_game_draft.attributes = None;
                 }
             }
             (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::SetCombatStyle(index))) => {
                 if usize::from(index) < NEWGAME_COMBAT_STYLES {
-                    self.state.new_game_draft.combat_style = usize::from(index);
+                    self.state.new_game_draft.combat_style = Some(usize::from(index));
                 }
             }
             (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::SetSecondary(index))) => {
                 if usize::from(index) < NEWGAME_SECONDARY_SETS {
-                    self.state.new_game_draft.secondary = usize::from(index);
+                    self.state.new_game_draft.secondary = Some(usize::from(index));
                 }
             }
             (
                 Screen::HeroSelect,
                 Action::HeroSelect(HeroSelectAction::SetAttributes { class, values }),
             ) => {
-                if class == self.state.new_game_draft.class {
+                if Some(class) == self.state.new_game_draft.class {
                     self.state.new_game_draft.attributes = Some(values);
                 }
             }
@@ -116,13 +113,13 @@ impl AppController {
                 // The offered list is the only source of valid numbers: a
                 // stale view cannot start a session for a hero this game
                 // directory does not carry.
-                if self.state.heroes.contains(&hero) {
+                if self.state.heroes.contains(&hero)
+                    && let Some((selected, draft)) = self.state.new_game_draft.complete()
+                    && selected == hero
+                {
                     self.state.session_error = None;
                     self.state.screen = Screen::Loading;
-                    effects.push(Effect::StartSession {
-                        hero,
-                        draft: self.state.new_game_draft,
-                    });
+                    effects.push(Effect::StartSession { hero, draft });
                 }
             }
             (Screen::HeroSelect, Action::HeroSelect(HeroSelectAction::Cancel)) => {
@@ -252,6 +249,16 @@ mod tests {
         AppController::new(HEROES.into(), Settings::default())
     }
 
+    fn choices(hero: u32) -> [Action; 4] {
+        [
+            HeroSelectAction::Preview(hero),
+            HeroSelectAction::SetClass(0),
+            HeroSelectAction::SetCombatStyle(0),
+            HeroSelectAction::SetSecondary(0),
+        ]
+        .map(Action::HeroSelect)
+    }
+
     /// A controller driven to `screen` through legal transitions only.
     fn controller_at(screen: Screen) -> AppController {
         let mut controller = controller();
@@ -265,10 +272,16 @@ mod tests {
             }
             Screen::Loading => {
                 controller.submit(Action::MainMenu(MainMenuAction::NewGame));
+                for action in choices(HEROES[0]) {
+                    controller.submit(action);
+                }
                 controller.submit(Action::HeroSelect(HeroSelectAction::Choose(HEROES[0])));
             }
             Screen::Playing => {
                 controller.submit(Action::MainMenu(MainMenuAction::NewGame));
+                for action in choices(HEROES[0]) {
+                    controller.submit(action);
+                }
                 controller.submit(Action::HeroSelect(HeroSelectAction::Choose(HEROES[0])));
                 controller.submit(Action::Loading(LoadingAction::Succeeded));
             }
@@ -307,12 +320,109 @@ mod tests {
     }
 
     #[test]
+    fn all_sixteen_completeness_states_gate_start_and_reset_on_reentry() {
+        for mask in 0..16 {
+            for reverse in [false, true] {
+                let mut controller = controller_at(Screen::HeroSelect);
+                let mut actions = choices(HEROES[1])
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(index, _)| mask & (1 << index) != 0)
+                    .map(|(_, action)| action)
+                    .collect::<Vec<_>>();
+                if reverse {
+                    actions.reverse();
+                }
+                assert!(submit_all(&mut controller, actions).is_empty());
+                let effects = submit_all(
+                    &mut controller,
+                    [Action::HeroSelect(HeroSelectAction::Choose(HEROES[1]))],
+                );
+                assert_eq!(
+                    effects.len(),
+                    usize::from(mask == 15),
+                    "mask {mask}, reverse {reverse}"
+                );
+                if mask == 15 {
+                    assert_eq!(
+                        effects,
+                        vec![Effect::StartSession {
+                            hero: HEROES[1],
+                            draft: NewGameDraft::default()
+                        }]
+                    );
+                    submit_all(
+                        &mut controller,
+                        [Action::Loading(LoadingAction::Failed(SessionError::Map))],
+                    );
+                } else {
+                    assert_eq!(controller.state().screen, Screen::HeroSelect);
+                    submit_all(
+                        &mut controller,
+                        [Action::HeroSelect(HeroSelectAction::Cancel)],
+                    );
+                }
+                submit_all(&mut controller, [Action::MainMenu(MainMenuAction::NewGame)]);
+                assert_eq!(
+                    controller.state().new_game_draft,
+                    crate::CharacterCreationDraft::default()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn allocation_survives_identity_and_specializations_but_class_resets_it() {
+        let mut controller = controller_at(Screen::HeroSelect);
+        submit_all(
+            &mut controller,
+            [Action::HeroSelect(HeroSelectAction::SetAttributes {
+                class: 0,
+                values: [3, 3, 14, 10],
+            })],
+        );
+        assert!(controller.state().new_game_draft.attributes.is_none());
+        submit_all(&mut controller, choices(HEROES[0]));
+        submit_all(
+            &mut controller,
+            [
+                Action::HeroSelect(HeroSelectAction::SetAttributes {
+                    class: 0,
+                    values: [3, 3, 14, 10],
+                }),
+                Action::HeroSelect(HeroSelectAction::Preview(HEROES[2])),
+                Action::HeroSelect(HeroSelectAction::SetSecondary(2)),
+                Action::HeroSelect(HeroSelectAction::SetCombatStyle(1)),
+            ],
+        );
+        assert_eq!(
+            controller.state().new_game_draft.attributes,
+            Some([3, 3, 14, 10])
+        );
+        let complete = controller.state().new_game_draft.complete().unwrap();
+        assert_eq!(complete.0, HEROES[2]);
+        assert_eq!(complete.1.attributes, Some([3, 3, 14, 10]));
+        assert!(
+            submit_all(
+                &mut controller,
+                [Action::HeroSelect(HeroSelectAction::Choose(HEROES[0]))]
+            )
+            .is_empty()
+        );
+        submit_all(
+            &mut controller,
+            [Action::HeroSelect(HeroSelectAction::SetClass(0))],
+        );
+        assert!(controller.state().new_game_draft.attributes.is_none());
+    }
+
+    #[test]
     fn new_starts_at_main_menu_clean() {
         let applied = english_fullscreen();
         let controller = AppController::new(HEROES.into(), applied);
         assert_eq!(controller.state().screen, Screen::MainMenu);
         assert_eq!(controller.state().heroes, HEROES);
-        assert_eq!(controller.state().hero_preview, Some(HEROES[0]));
+        assert_eq!(controller.state().new_game_draft.hero, None);
         assert_eq!(controller.state().applied, applied);
         assert_eq!(controller.state().settings_screen, None);
         assert_eq!(controller.state().session_error, None);
@@ -338,6 +448,7 @@ mod tests {
     fn hero_select_choose_enters_loading_and_emits_the_chosen_hero() {
         for &hero in &HEROES {
             let mut controller = controller_at(Screen::HeroSelect);
+            submit_all(&mut controller, choices(hero));
             let effects = submit_all(
                 &mut controller,
                 [Action::HeroSelect(HeroSelectAction::Choose(hero))],
@@ -363,7 +474,7 @@ mod tests {
         );
         assert!(effects.is_empty());
         assert_eq!(controller.state().screen, Screen::HeroSelect);
-        assert_eq!(controller.state().hero_preview, Some(HEROES[2]));
+        assert_eq!(controller.state().new_game_draft.hero, Some(HEROES[2]));
     }
 
     #[test]
@@ -409,9 +520,13 @@ mod tests {
         let draft = &controller.state().new_game_draft;
         assert_eq!(
             (draft.class, draft.combat_style, draft.secondary),
-            (2, 1, 2)
+            (Some(2), Some(1), Some(2))
         );
-        // The choice rides into the session: Start carries the drafted row.
+        submit_all(
+            &mut controller,
+            [Action::HeroSelect(HeroSelectAction::Preview(HEROES[0]))],
+        );
+        // Start carries the completed draft.
         let effects = submit_all(
             &mut controller,
             [Action::HeroSelect(HeroSelectAction::Choose(HEROES[0]))],
@@ -465,6 +580,9 @@ mod tests {
         // root can never spawn.
         let mut controller = controller();
         controller.submit(Action::MainMenu(MainMenuAction::NewGame));
+        for action in choices(HEROES[1]) {
+            controller.submit(action);
+        }
         controller.submit(Action::HeroSelect(HeroSelectAction::Choose(HEROES[1])));
         let effects = controller.flush();
         assert_eq!(
@@ -485,6 +603,10 @@ mod tests {
             &mut controller,
             [
                 Action::MainMenu(MainMenuAction::NewGame),
+                Action::HeroSelect(HeroSelectAction::Preview(HEROES[0])),
+                Action::HeroSelect(HeroSelectAction::SetClass(0)),
+                Action::HeroSelect(HeroSelectAction::SetCombatStyle(0)),
+                Action::HeroSelect(HeroSelectAction::SetSecondary(0)),
                 Action::HeroSelect(HeroSelectAction::Choose(HEROES[0])),
                 Action::Loading(LoadingAction::Failed(SessionError::Map)),
             ],
@@ -764,7 +886,10 @@ mod tests {
                         (
                             Screen::HeroSelect,
                             Action::HeroSelect(HeroSelectAction::Choose(hero)),
-                        ) => controller.state().heroes.contains(&hero),
+                        ) => {
+                            controller.state().heroes.contains(&hero)
+                                && controller.state().new_game_draft.complete().is_some()
+                        }
                         (Screen::Settings, Action::Settings(SettingsAction::Save)) => draft_changed,
                         _ => false,
                     };
@@ -890,6 +1015,10 @@ mod tests {
             &mut controller,
             [
                 Action::MainMenu(MainMenuAction::NewGame),
+                Action::HeroSelect(HeroSelectAction::Preview(HEROES[0])),
+                Action::HeroSelect(HeroSelectAction::SetClass(0)),
+                Action::HeroSelect(HeroSelectAction::SetCombatStyle(0)),
+                Action::HeroSelect(HeroSelectAction::SetSecondary(0)),
                 Action::HeroSelect(HeroSelectAction::Choose(HEROES[0])),
             ],
         );
@@ -911,6 +1040,10 @@ mod tests {
             &mut controller,
             [
                 Action::MainMenu(MainMenuAction::NewGame),
+                Action::HeroSelect(HeroSelectAction::Preview(HEROES[2])),
+                Action::HeroSelect(HeroSelectAction::SetClass(0)),
+                Action::HeroSelect(HeroSelectAction::SetCombatStyle(0)),
+                Action::HeroSelect(HeroSelectAction::SetSecondary(0)),
                 Action::HeroSelect(HeroSelectAction::Choose(HEROES[2])),
             ],
         );

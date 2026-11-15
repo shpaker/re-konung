@@ -5,10 +5,7 @@
 
 pub(crate) mod hero_select;
 
-pub use hero_select::{
-    AttributeButton, ConstructorButton, ConstructorKind, HintPopup, HintSource, NewGameHints,
-    spawn_hint_popup,
-};
+pub use hero_select::{AttributeButton, ConstructorButton, ConstructorKind, NewGameHints};
 pub(crate) mod loading;
 pub(crate) mod main_menu;
 pub(crate) mod settings;
