@@ -62,14 +62,33 @@ Read the relevant document before working; follow the linked procedures.
 - Map and `Game.N` writing must round-trip every file of both editions byte for
   byte: Python tests `tests/k1/test_maps.py`, `tests/k1/test_game_state.py`; Rust
   uses the same contract; the extension is saved from Tiled and compared.
-- After edits run `just check`. Never bypass prek: no `--no-verify`, `SKIP=` or
-  `prek uninstall`. Fix rejected files or text instead of evading a hook.
+- Plan validation from the stages in `prek.toml`. Use focused tests during
+  development; do not manually repeat formatting, lint or full suites immediately
+  before Git hooks run the same checks on unchanged code.
+- When a push is next, let the pre-push hook perform full validation instead of
+  first running `just check` or an equivalent full suite. When no push is planned,
+  run `just check`. Pre-commit checks alone do not replace pre-push tests.
+- Repeat checks only after relevant changes, failures or new evidence invalidating
+  earlier results. Report checks that actually ran; a future hook is not a pass.
+- Never bypass prek: no `--no-verify`, `SKIP=` or `prek uninstall`. Fix rejected
+  files or text instead of evading a hook.
 - A visible format change requires Python rendering (`uv run konung k1 map …`)
   and comparison in Tiled. Agents use the tiled-mcp plugin to view and edit maps.
 - Report external tool/library bugs explicitly: what fails, reproduction, the
   repository link and code location if known. Do not offer a fix or work around
   them silently. For `shpaker/*`, a fix PR requires the user's agreement and a
   separate session; do not work around the bug in this one.
+
+## Finishing a task
+
+- Before finishing, remove build and debugging debris created for this task:
+  disposable build outputs, scratch scripts, temporary dumps and logs, and
+  temporary worktrees. Inspect ownership and active processes before removal.
+- Keep source changes, original game files, requested deliverables and useful
+  verification evidence. Preserve shared caches that still serve active work;
+  do not indiscriminately clean `out/`, build caches or other sessions' worktrees.
+- Stop only the temporary processes you started. Record retained artifacts and
+  their purpose when they are needed for review or unresolved diagnostics.
 
 ## Git
 
