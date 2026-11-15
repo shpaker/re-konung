@@ -205,8 +205,8 @@ pub fn piece_surface_lighting(piece: &Piece) -> SurfaceLighting {
 /// imports from `bevy_sprite_render` resolve: the import resolver sees only
 /// shader assets that are loaded. The material pool itself is built by the
 /// frontend once the map's masks are read — [`LightingMaterials::new`] — and
-/// every system here tolerates its absence: sprites simply keep no material,
-/// which is exactly the unlit look.
+/// the pool must precede creature spawning. Without it, headless consumers
+/// can still spawn ordinary unlit sprites, but cannot enable lighting later.
 pub struct KonungLightingPlugin;
 
 impl Plugin for KonungLightingPlugin {
@@ -228,14 +228,13 @@ impl Plugin for KonungLightingPlugin {
     }
 }
 
-/// Pool of light materials: one per mask for the terrain, plus the two plain
-/// ones — terrain/decorations (ambient with optional masks) and objects/characters
-/// (plain ambient). Handles are shared by every sprite of the same kind, so a
-/// map costs 21 materials however many sprites it draws.
+/// Shared terrain masks, two ambient variants and an immutable neutral variant.
+/// A full map costs 22 materials regardless of its sprite count.
 #[derive(Resource)]
 pub struct LightingMaterials {
     terrain_plain: Handle<KonungLightMaterial>,
     ambient_plain: Handle<KonungLightMaterial>,
+    neutral: Handle<KonungLightMaterial>,
     masks: Vec<Handle<KonungLightMaterial>>,
 }
 
@@ -244,7 +243,7 @@ impl LightingMaterials {
     /// indexed by `light_mask_index` (0-based). `width`/`height` are the tile
     /// mask dimensions the bytes are laid out for. The uniforms start at zero —
     /// [`update_lighting_uniforms`] writes the current [`LightingState`] into
-    /// every material.
+    /// the ambient and terrain materials; the neutral variant stays unchanged.
     pub fn new(
         images: &mut Assets<Image>,
         materials: &mut Assets<KonungLightMaterial>,
@@ -260,6 +259,7 @@ impl LightingMaterials {
         };
         let terrain_plain = material(images.add(zero_mask_image()));
         let ambient_plain = material(images.add(zero_mask_image()));
+        let neutral = material(images.add(zero_mask_image()));
         let masks = masks
             .iter()
             .map(|(mask, width, height)| {
@@ -269,6 +269,7 @@ impl LightingMaterials {
         Self {
             terrain_plain,
             ambient_plain,
+            neutral,
             masks,
         }
     }
@@ -288,9 +289,14 @@ impl LightingMaterials {
         self.ambient_plain.clone()
     }
 
-    /// How many materials the pool holds: the masks plus the two plain ones.
+    /// Keeps lit creatures on the same pipeline as dark creatures.
+    pub fn neutral(&self) -> Handle<KonungLightMaterial> {
+        self.neutral.clone()
+    }
+
+    /// How many materials the pool holds, including the neutral variant.
     pub fn len(&self) -> usize {
-        self.masks.len() + 2
+        self.masks.len() + 3
     }
 
     pub fn is_empty(&self) -> bool {
@@ -298,7 +304,7 @@ impl LightingMaterials {
     }
 }
 
-/// Writes the current [`LightingState`] into every material of the pool — the
+/// Writes [`LightingState`] into the ambient and terrain materials — the
 /// single place the render layer touches the uniforms, so both frontends get
 /// identical behaviour by inserting their state into one resource.
 ///
@@ -324,9 +330,7 @@ pub fn update_lighting_uniforms(
             material.light_gain = state.light_gain;
         }
     };
-    // Every material of the pool carries the window gate: the masked ones read
-    // it through their LIGHTS.RES sample, the plain ones are inert to it (a
-    // zero mask), and writing uniformly keeps the pool single-sourced.
+    // The neutral material is deliberately excluded: lit creatures never fade.
     for handle in pool
         .masks
         .iter()
@@ -342,10 +346,9 @@ pub fn update_lighting_uniforms(
 ///
 /// A creature in a dark cell (fine value 0 — the whole grid when the map has
 /// none) fades with the plain ambient like an object, in and out of the
-/// ground window alike; in a lit cell it is drawn without a material
-/// (game.cpp:1611-1626). Only the material component moves: the node, its
-/// transform, depth and animator are untouched, so a light change can never
-/// respawn or re-anchor a creature.
+/// ground window alike; a lit cell uses the neutral variant (no fade).
+/// Only the handle changes: removing the component can desynchronize Bevy
+/// 0.20.1's retained pipeline and bind group (#119).
 ///
 /// The cells come straight from [`CreatureSim`] — the same simulation the
 /// movement systems read — so there is no second source of creature positions
@@ -353,18 +356,13 @@ pub fn update_lighting_uniforms(
 /// `SetFade(false)` (game.cpp:1300, game.cpp:1348).
 #[allow(clippy::type_complexity)]
 pub fn update_creature_lighting(
-    mut commands: Commands,
     sim: Option<Res<CreatureSim>>,
     grid: Option<Res<FineLightGrid>>,
     pool: Option<Res<LightingMaterials>>,
     // Reused across frames: the map is cleared and rebuilt from the same
     // simulation every frame, so keeping the allocation beats paying it again.
     mut dark: Local<HashMap<usize, bool>>,
-    sprites: Query<(
-        Entity,
-        &CreatureSprite,
-        Has<SpriteMaterial<KonungLightMaterial>>,
-    )>,
+    mut sprites: Query<(&CreatureSprite, &mut SpriteMaterial<KonungLightMaterial>)>,
 ) {
     let (Some(sim), Some(grid), Some(pool)) = (sim, grid, pool) else {
         return;
@@ -380,25 +378,20 @@ pub fn update_creature_lighting(
             .iter()
             .map(|state| (state.id, grid.value(state.cell) == 0)),
     );
-    for (entity, tag, has_material) in &sprites {
+    for (tag, mut material) in &mut sprites {
         if tag.is_shadow {
             continue;
         }
         let Some(&is_dark) = dark.get(&tag.creature_id) else {
             continue;
         };
-        match (is_dark, has_material) {
-            (true, false) => {
-                commands
-                    .entity(entity)
-                    .insert(SpriteMaterial(pool.ambient()));
-            }
-            (false, true) => {
-                commands
-                    .entity(entity)
-                    .remove::<SpriteMaterial<KonungLightMaterial>>();
-            }
-            _ => {}
+        let handle = if is_dark {
+            &pool.ambient_plain
+        } else {
+            &pool.neutral
+        };
+        if material.0 != *handle {
+            material.0 = handle.clone();
         }
     }
 }
@@ -505,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn pool_serves_two_plain_materials_and_one_per_mask() {
+    fn pool_serves_ambient_neutral_and_masked_materials() {
         let mut images = Assets::<Image>::default();
         let mut materials = Assets::<KonungLightMaterial>::default();
         let pool = LightingMaterials::new(
@@ -513,7 +506,9 @@ mod tests {
             &mut materials,
             &[(vec![1u8; 4], 2, 2), (vec![2u8; 4], 2, 2)],
         );
-        assert_eq!(pool.len(), 4, "two masks plus the two plain materials");
+        assert_eq!(pool.len(), 5, "two masks, two ambient variants and neutral");
+        assert_ne!(pool.neutral(), pool.ambient());
+        assert_ne!(pool.neutral(), pool.terrain(None));
         assert_ne!(pool.terrain(Some(0)), pool.terrain(Some(1)));
         assert_ne!(pool.terrain(None), pool.terrain(Some(0)));
         assert_ne!(pool.ambient(), pool.terrain(None));
@@ -523,14 +518,14 @@ mod tests {
     }
 
     #[test]
-    fn the_full_pool_is_nineteen_masks_plus_two_plains() {
+    fn the_full_pool_is_nineteen_masks_plus_three_plain_variants() {
         let mut images = Assets::<Image>::default();
         let mut materials = Assets::<KonungLightMaterial>::default();
         // LIGHTS.RES ships exactly 19 tile masks; the pool is that plus the
-        // two plain materials.
+        // two ambient materials and the neutral variant.
         let masks: Vec<(Vec<u8>, u32, u32)> = (0..19).map(|_| (vec![0u8], 1, 1)).collect();
         let pool = LightingMaterials::new(&mut images, &mut materials, &masks);
-        assert_eq!(pool.len(), 21, "19 LIGHTS.RES masks + terrain + ambient");
+        assert_eq!(pool.len(), 22, "19 masks + terrain + ambient + neutral");
     }
 
     #[test]
@@ -725,6 +720,42 @@ mod tests {
             };
             assert_eq!(material.blend, want, "material #{index} after the change");
             assert_eq!(material.light_gain, 0.0, "the gate closes for #{index}");
+        }
+    }
+
+    #[test]
+    fn the_neutral_material_stays_unchanged_through_day_and_night() {
+        let mut images = Assets::<Image>::default();
+        let mut materials = Assets::<KonungLightMaterial>::default();
+        let pool = LightingMaterials::new(&mut images, &mut materials, &[]);
+        let neutral = pool.neutral();
+        let mut app = App::new();
+        app.insert_resource(images)
+            .insert_resource(materials)
+            .insert_resource(pool)
+            .add_systems(Update, update_lighting_uniforms);
+        for blend in [Vec3::splat(-0.7), Vec3::splat(0.2), Vec3::ZERO] {
+            app.insert_resource(LightingState {
+                terrain_blend: blend,
+                ambient_blend: blend,
+                light_color: Vec3::splat(0.1),
+                light_gain: 1.0,
+            });
+            app.update();
+            let material = app
+                .world()
+                .resource::<Assets<KonungLightMaterial>>()
+                .get(&neutral)
+                .unwrap();
+            assert_eq!(material.blend, Vec3::ZERO);
+            assert_eq!(material.light_color, Vec3::ZERO);
+            assert_eq!(material.light_gain, 0.0);
+            let mask = app
+                .world()
+                .resource::<Assets<Image>>()
+                .get(&material.mask)
+                .unwrap();
+            assert_eq!(mask.data.as_deref(), Some([0].as_slice()));
         }
     }
 

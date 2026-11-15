@@ -27,3 +27,11 @@ for index, wanted in enumerate(expected):
     )
     assert actual[3] == 255
     print(f"case {index}: {actual[:3]} (expected {wanted}, tolerance 1/255)")
+
+# The left patch crossed light boundaries 240 times before settling on neutral.
+# It must match the standard sprite on the right, including tint and alpha.
+neutral = image.getpixel((128, 208))
+standard = image.getpixel((256, 208))
+assert neutral == standard, (neutral, standard)
+assert neutral[:3] != image.getpixel((0, 208))[:3], "probe patches must be visible"
+print(f"neutral after 240 switches: {neutral}, standard sprite: {standard}")

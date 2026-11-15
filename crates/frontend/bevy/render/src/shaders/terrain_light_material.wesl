@@ -21,6 +21,10 @@ struct TerrainLight {
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let sprite_color = sprite_functions::sample_sprite_texture(input.uv, input.instance_index);
+    // Preserve the standard sprite result exactly for the neutral material.
+    if (all(terrain_light.blend == vec3<f32>(0.0)) && terrain_light.light_gain == 0.0) {
+        return sprite_functions::get_final_color(sprite_color, input.instance_index);
+    }
     // Palette arithmetic operates on display-encoded components. Bevy samples
     // sRGB textures into linear RGB; return to linear before tint and blending.
     var rgb = linear_rgb_to_srgb(sprite_color.rgb);

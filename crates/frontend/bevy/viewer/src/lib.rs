@@ -14,6 +14,7 @@ use bevy::feathers::controls::FeathersSlider;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
 use std::time::Duration;
 use std::time::Instant;
@@ -671,9 +672,20 @@ fn capture(
 /// bound is reached and print the `BENCH …` line. A benchmark run never
 /// captures — the CLI rejects the benchmark flags together with
 /// `--screenshot` up front.
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 struct BenchmarkRequest {
     bound: BenchmarkBound,
+    // App::run moves the world into its runner; completion must survive it.
+    completed: Arc<AtomicBool>,
+}
+
+impl BenchmarkRequest {
+    fn new(bound: BenchmarkBound) -> Self {
+        Self {
+            bound,
+            completed: Arc::new(AtomicBool::new(false)),
+        }
+    }
 }
 
 /// What closes the measured window. `Frames` is the old count bound;
@@ -918,6 +930,7 @@ fn benchmark(
                     measured.average,
                     measured.p95,
                 );
+                request.completed.store(true, Ordering::Release);
                 commands.write_message(gate_exit(&measured));
                 *phase = BenchmarkPhase::Done;
             }
@@ -1011,13 +1024,11 @@ pub fn run_viewer(config: ViewerConfig) -> AppExit {
         .unwrap_or_default();
     let benchmark_request = config
         .benchmark_secs
-        .map(|secs| BenchmarkRequest {
-            bound: BenchmarkBound::Seconds(secs),
-        })
+        .map(|secs| BenchmarkRequest::new(BenchmarkBound::Seconds(secs)))
         .or_else(|| {
-            config.benchmark.map(|frames| BenchmarkRequest {
-                bound: BenchmarkBound::Frames(frames),
-            })
+            config
+                .benchmark
+                .map(|frames| BenchmarkRequest::new(BenchmarkBound::Frames(frames)))
         });
     // A benchmark run only: the measurement must not be quantized to the
     // monitor's refresh quantum — with the default Fifo a frame sits on the
@@ -1151,10 +1162,21 @@ pub fn run_viewer(config: ViewerConfig) -> AppExit {
     if capture_request.path.is_some() {
         app.insert_resource(capture_request);
     }
-    if let Some(request) = benchmark_request {
-        app.insert_resource(request);
+    run_viewer_app(app, benchmark_request)
+}
+
+fn run_viewer_app(mut app: App, benchmark_request: Option<BenchmarkRequest>) -> AppExit {
+    if let Some(request) = &benchmark_request {
+        app.insert_resource(request.clone());
     }
-    app.run()
+    let exit = app.run();
+    if benchmark_request.is_some_and(|request| !request.completed.load(Ordering::Acquire)) {
+        eprintln!("benchmark: interrupted before BENCH/GATE results were produced");
+        if exit == AppExit::Success {
+            return AppExit::error();
+        }
+    }
+    exit
 }
 
 /// Whether playback is running; UI controls and read projections share this test.
@@ -2234,6 +2256,101 @@ mod tests {
             ..fits
         };
         assert_eq!(gate_exit(&fails), AppExit::Error(NonZero::new(1).unwrap()));
+    }
+
+    fn benchmark_app(updates: u32, sample: Option<f64>) -> App {
+        use bevy::diagnostic::{Diagnostic, DiagnosticMeasurement};
+
+        let mut diagnostics = DiagnosticsStore::default();
+        if let Some(value) = sample {
+            let mut diagnostic = Diagnostic::new(FrameTimeDiagnosticsPlugin::FRAME_TIME);
+            diagnostic.add_measurement(DiagnosticMeasurement {
+                time: bevy::platform::time::Instant::now(),
+                value,
+            });
+            diagnostics.add(diagnostic);
+        }
+        let mut app = App::new();
+        app.add_message::<AppExit>()
+            .init_resource::<Stats>()
+            .init_resource::<CreatureSim>()
+            .insert_resource(viewer([false; 4]))
+            .insert_resource(diagnostics)
+            .add_systems(Update, benchmark)
+            .set_runner(move |mut app| {
+                for _ in 0..updates {
+                    app.update();
+                    if let Some(exit) = app.should_exit() {
+                        return exit;
+                    }
+                }
+                AppExit::Success
+            });
+        app
+    }
+
+    #[test]
+    fn an_interrupted_benchmark_cannot_succeed_without_results() {
+        for bound in [BenchmarkBound::Frames(100), BenchmarkBound::Seconds(60)] {
+            for updates in [0, SETTLE_FRAMES + 3] {
+                let request = BenchmarkRequest::new(bound);
+                assert_eq!(
+                    run_viewer_app(benchmark_app(updates, Some(10.0)), Some(request.clone())),
+                    AppExit::error(),
+                    "{bound:?}, {updates} updates: no completed measured window"
+                );
+                assert!(!request.completed.load(Ordering::Acquire));
+            }
+        }
+        assert_eq!(
+            run_viewer_app(
+                benchmark_app(SETTLE_FRAMES + 100, None),
+                Some(BenchmarkRequest::new(BenchmarkBound::Frames(1))),
+            ),
+            AppExit::error(),
+            "no diagnostic samples means no results"
+        );
+    }
+
+    #[test]
+    fn completed_benchmarks_return_the_gate_verdict_for_both_bounds() {
+        for bound in [BenchmarkBound::Frames(1), BenchmarkBound::Seconds(1)] {
+            for sample in [10.0, 40.0] {
+                let request = BenchmarkRequest::new(bound);
+                let exit = run_viewer_app(
+                    benchmark_app(SETTLE_FRAMES + 102, Some(sample)),
+                    Some(request.clone()),
+                );
+                assert!(request.completed.load(Ordering::Acquire));
+                assert_eq!(
+                    exit,
+                    if sample < FRAME_GATE_LIMIT_MS {
+                        AppExit::Success
+                    } else {
+                        AppExit::error()
+                    },
+                    "{bound:?}: the measured gate controls the exit"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn benchmark_completion_checks_preserve_errors_and_interactive_exits() {
+        let failure = AppExit::Error(NonZero::new(7).unwrap());
+        let mut app = App::new();
+        let runner_failure = failure.clone();
+        app.set_runner(move |_| runner_failure);
+        assert_eq!(
+            run_viewer_app(app, Some(BenchmarkRequest::new(BenchmarkBound::Frames(1)))),
+            failure,
+        );
+        for exit in [AppExit::Success, failure] {
+            let mut app = App::new();
+            let runner_exit = exit.clone();
+            app.set_runner(move |_| runner_exit);
+            assert_eq!(run_viewer_app(app, None), exit);
+        }
     }
 
     #[test]
@@ -4667,16 +4784,15 @@ mod tests {
     }
 
     /// The moving-creature lighting regression: a creature in a dark cell
-    /// carries the ambient material, stepping into a lit cell drops it —
-    /// the same entity, animator untouched, nothing respawned — and stepping
-    /// back out restores it.
+    /// switches between ambient and neutral handles while keeping one material
+    /// type, the same entity and its animator throughout the route.
     ///
     /// The lit patch is placed on a cell the creature provably walks through:
     /// a dry run of the deterministic simulation (same seed) records its
     /// cells, the grid lights exactly one of them, and the replayed app walks
     /// the same route cell for cell.
     #[test]
-    fn a_moving_creature_gains_and_loses_its_lighting_material_with_its_cell() {
+    fn a_moving_creature_switches_material_handles_with_its_cell() {
         use bevy::sprite_render::SpriteMaterial;
         use kn_game::movement::grid::{FINE_HEIGHT, FINE_WIDTH};
         use kn_render::KonungLightMaterial;
@@ -4721,9 +4837,9 @@ mod tests {
         let depth = build_depth_map(&scene, &cache);
 
         let mut materials = Assets::<KonungLightMaterial>::default();
-        // No tile masks needed: only the plain ambient material is asserted.
         let pool = LightingMaterials::new(&mut images, &mut materials, &[]);
         let ambient = pool.ambient();
+        let neutral = pool.neutral();
 
         let mut app = App::new();
         app.add_plugins((
@@ -4802,7 +4918,7 @@ mod tests {
         app.insert_resource(FineLightGrid(Some(fine)));
 
         let body = bodies[&id];
-        let mut samples: Vec<(bool, bool)> = Vec::new();
+        let mut samples = Vec::new();
         for tick in 0..per_tick.len() as u64 {
             app.world_mut().resource_mut::<Clock>().ticks = tick;
             app.update();
@@ -4830,45 +4946,31 @@ mod tests {
             samples.push((
                 world
                     .get::<SpriteMaterial<KonungLightMaterial>>(body)
-                    .is_some(),
+                    .expect("the material type is stable in every cell")
+                    .0
+                    .clone(),
                 world.get::<Animator>(body).is_some(),
             ));
         }
-        let world = app.world();
-
-        // Dark at home: the ambient material from the very first frame.
-        assert!(
-            samples[0].0,
-            "a creature in a dark cell must carry the ambient material"
-        );
-        assert_eq!(
-            world
-                .get::<SpriteMaterial<KonungLightMaterial>>(body)
-                .map(|material| &material.0),
-            Some(&ambient),
-            "the material is the pool's plain ambient one"
-        );
-        // On the lit cell: the material is gone — without a respawn.
-        assert!(
-            !samples[lit_tick].0,
-            "a creature on a lit cell must drop the material"
-        );
-        // Back on a dark cell: the material returns.
-        assert!(
-            samples[lit_leave].0,
-            "back in the dark the material is restored"
-        );
-        for (tick, (has_material, has_animator)) in samples.iter().enumerate() {
+        assert_eq!(samples[0].0, ambient, "dark at home uses ambient");
+        assert_eq!(samples[lit_tick].0, neutral, "the lit cell uses neutral");
+        assert_eq!(samples[lit_leave].0, ambient, "dark again uses ambient");
+        for (tick, (material, has_animator)) in samples.iter().enumerate() {
             assert!(
                 *has_animator,
                 "tick {tick}: the animator must stay on the sprite"
             );
-            let want_material = !(lit_tick..lit_leave).contains(&tick);
-            assert_eq!(
-                *has_material, want_material,
-                "tick {tick}: the material follows the stay on the cell"
-            );
+            let expected = if (lit_tick..lit_leave).contains(&tick) {
+                &neutral
+            } else {
+                &ambient
+            };
+            assert_eq!(material, expected, "tick {tick}: material follows the cell");
         }
+        let mut shadows = app
+            .world_mut()
+            .query_filtered::<Option<&SpriteMaterial<KonungLightMaterial>>, With<CreatureShadow>>();
+        assert!(shadows.iter(app.world()).all(|material| material.is_none()));
         // Nothing respawned: node and sprite counts are what spawn built.
         let mut node_query = app.world_mut().query::<&CreatureNode>();
         assert_eq!(
