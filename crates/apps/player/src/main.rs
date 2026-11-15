@@ -1,7 +1,7 @@
 //! `re-konung` — the «Князь» player.
 //!
 //! Bootstrap order: settings first (they shape the window before it exists),
-//! then the game and the hero, then the Bevy frontend (`kn-fe-player`). A
+//! then the game and its heroes, then the Bevy frontend (`kn-fe-player`). A
 //! session is never built here — only the frontend's AppFlow pipeline builds
 //! one.
 
@@ -16,14 +16,14 @@ use kn_settings::{LoadError, Settings, default_path, defaults};
 #[derive(Parser, Debug)]
 #[command(name = "re-konung", version, about)]
 struct Cli {
-    /// Каталог установленной игры — содержимое inst/setup.dat
-    #[arg(long)]
+    /// Installed game directory, containing the unpacked inst/setup.dat files
+    #[arg(long, env = "RE_KONUNG_GAME_DIR")]
     game_dir: PathBuf,
     /// Start straight into a new game, skipping the main menu
     #[arg(long)]
     new_game: bool,
     /// Settings file path; defaults to config_dir()/re-konung/settings.json
-    #[arg(long)]
+    #[arg(long, env = "RE_KONUNG_SETTINGS")]
     settings: Option<PathBuf>,
 }
 
@@ -80,19 +80,22 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let Some(hero) = game
-        .heroes(MapSource::Game)
-        .ok()
-        .and_then(|h| h.first().copied())
-    else {
-        eprintln!("{}: нет Game.N — не с чего начать", cli.game_dir.display());
-        return ExitCode::FAILURE;
+    let heroes = match game.heroes(MapSource::Game) {
+        Ok(heroes) if !heroes.is_empty() => heroes,
+        Ok(_) => {
+            eprintln!("{}: нет Game.N — не с чего начать", cli.game_dir.display());
+            return ExitCode::FAILURE;
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
     };
 
     run_player(PlayerConfig {
         game,
         game_dir: cli.game_dir,
-        hero,
+        heroes,
         settings,
         settings_path,
         start: if cli.new_game {

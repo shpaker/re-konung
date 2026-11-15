@@ -8,7 +8,7 @@ use bevy::asset::Assets;
 use bevy::prelude::*;
 use bevy::scene::ScenePlugin;
 use bevy::ui::widget::Text;
-use kn_app::{Action, MainMenuAction, SettingsAction, SettingsField};
+use kn_app::{Action, HeroSelectAction, MainMenuAction, SettingsAction, SettingsField};
 use kn_fe_player::flow::{AppFlow, AppliedSettings};
 use kn_fe_player::session::SessionInit;
 use kn_render::{CreatureMotion, CreatureSim, KonungLightMaterial};
@@ -31,6 +31,8 @@ fn headless_app() -> App {
     .init_resource::<CreatureSim>()
     .init_resource::<CreatureMotion>()
     .add_plugins(kn_fe_player::flow::PlayerFlowPlugin {
+        // The offer is reducer state; no game data is needed to reduce it.
+        heroes: vec![0, 1, 2],
         settings: kn_settings::defaults(),
         settings_path: None,
     });
@@ -56,10 +58,20 @@ fn the_watcher_reports_a_dead_build_and_the_menu_shows_the_reason() {
     let mut app = headless_app();
     app.update();
 
-    // To Loading through the reducer; the StartSession effect is dropped on
-    // the floor — this test owns the build's aftermath, not the build.
-    let mut loading = kn_app::AppController::new(kn_settings::defaults());
+    // To Loading through the reducer's whole new-game flow; the StartSession
+    // effect is dropped on the floor — this test owns the build's aftermath,
+    // not the build.
+    let mut loading = kn_app::AppController::new(vec![0, 1, 2], kn_settings::defaults());
     loading.submit(Action::MainMenu(MainMenuAction::NewGame));
+    for action in [
+        kn_app::HeroSelectAction::Preview(0),
+        kn_app::HeroSelectAction::SetClass(0),
+        kn_app::HeroSelectAction::SetCombatStyle(0),
+        kn_app::HeroSelectAction::SetSecondary(0),
+    ] {
+        loading.submit(Action::HeroSelect(action));
+    }
+    loading.submit(Action::HeroSelect(HeroSelectAction::Choose(0)));
     let _effects = loading.flush();
     app.world_mut().resource_mut::<AppFlow>().0 = loading;
     // One honest Loading frame first — the menu root leaves, exactly like
@@ -97,11 +109,20 @@ fn the_menu_hides_when_the_screen_moves_to_loading() {
     app.update();
     assert!(strings(&mut app).iter().any(|s| s.contains("Новая игра")));
 
-    // The controller is driven through the legal transition alone; the
+    // The controller is driven through the legal transitions alone; the
     // StartSession effect is dropped on the floor here — this test is about
     // the view swap, not the session build.
-    let mut loading = kn_app::AppController::new(kn_settings::defaults());
+    let mut loading = kn_app::AppController::new(vec![0, 1, 2], kn_settings::defaults());
     loading.submit(Action::MainMenu(MainMenuAction::NewGame));
+    for action in [
+        kn_app::HeroSelectAction::Preview(0),
+        kn_app::HeroSelectAction::SetClass(0),
+        kn_app::HeroSelectAction::SetCombatStyle(0),
+        kn_app::HeroSelectAction::SetSecondary(0),
+    ] {
+        loading.submit(Action::HeroSelect(action));
+    }
+    loading.submit(Action::HeroSelect(HeroSelectAction::Choose(0)));
     let _effects = loading.flush();
     app.world_mut().resource_mut::<AppFlow>().0 = loading;
 
@@ -162,4 +183,128 @@ fn the_save_lifecycle_runs_without_game_data() {
         strings(&mut app).iter().any(|s| s.contains("Новая игра")),
         "back at the menu in the applied language"
     );
+}
+
+#[test]
+fn all_partial_selections_block_mouse_keyboard_and_direct_activation() {
+    use bevy::input::keyboard::{Key, KeyboardInput};
+    use bevy::input_focus::FocusedInput;
+    use bevy::picking::{
+        backend::HitData,
+        events::{Pointer, PointerClick},
+        pointer::{Location, PointerButton, PointerId},
+    };
+    for mask in 0..16 {
+        for method in 0..3 {
+            let mut app = headless_app();
+            app.add_plugins(bevy::ui_widgets::ButtonPlugin);
+            app.init_resource::<bevy::input_focus::InputFocus>();
+            let window = app.world_mut().spawn(Window::default()).id();
+            app.world_mut()
+                .resource_mut::<AppFlow>()
+                .submit(Action::MainMenu(MainMenuAction::NewGame));
+            for (index, choice) in [
+                HeroSelectAction::Preview(1),
+                HeroSelectAction::SetClass(0),
+                HeroSelectAction::SetCombatStyle(1),
+                HeroSelectAction::SetSecondary(2),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if mask & (1 << index) != 0 {
+                    app.world_mut()
+                        .resource_mut::<AppFlow>()
+                        .submit(Action::HeroSelect(choice));
+                }
+            }
+            app.update();
+            let mut begin = app
+                .world_mut()
+                .query::<(Entity, &Text)>()
+                .iter(app.world())
+                .find(|(_, text)| text.0 == "Начать")
+                .unwrap()
+                .0;
+            while app.world().get::<bevy::ui_widgets::Button>(begin).is_none() {
+                begin = app.world().get::<ChildOf>(begin).unwrap().parent();
+            }
+            assert_eq!(
+                app.world()
+                    .get::<bevy::ui::InteractionDisabled>(begin)
+                    .is_none(),
+                mask == 15
+            );
+            assert_eq!(
+                app.world()
+                    .get::<bevy::feathers::controls::ButtonVariant>(begin)
+                    == Some(&bevy::feathers::controls::ButtonVariant::Primary),
+                mask == 15
+            );
+            match method {
+                0 => {
+                    app.world_mut().entity_mut(begin).insert(bevy::ui::Pressed);
+                    app.world_mut().trigger(PointerClick {
+                        entity: begin,
+                        pointer: Pointer::new(
+                            PointerId::Mouse,
+                            Location {
+                                target: bevy::camera::NormalizedRenderTarget::Window(
+                                    bevy::window::WindowRef::Entity(window)
+                                        .normalize(Some(window))
+                                        .unwrap(),
+                                ),
+                                position: Vec2::ZERO,
+                            },
+                        ),
+                        button: PointerButton::Primary,
+                        hit: HitData::new(window, 0.0, None, None),
+                        duration: std::time::Duration::ZERO,
+                        count: 1,
+                    });
+                }
+                1 => app.world_mut().trigger(FocusedInput::new(
+                    begin,
+                    KeyboardInput {
+                        key_code: KeyCode::Enter,
+                        logical_key: Key::Enter,
+                        state: bevy::input::ButtonState::Pressed,
+                        text: None,
+                        repeat: false,
+                        window,
+                    },
+                    window,
+                )),
+                _ => app
+                    .world_mut()
+                    .trigger(bevy::ui_widgets::Activate { entity: begin }),
+            }
+            app.world_mut().flush();
+            let effects = app.world_mut().resource_mut::<AppFlow>().0.flush();
+            assert_eq!(effects.len(), usize::from(mask == 15));
+            if mask == 15 {
+                assert_eq!(
+                    effects,
+                    vec![kn_app::Effect::StartSession {
+                        hero: 1,
+                        draft: kn_app::NewGameDraft {
+                            class: 0,
+                            combat_style: 1,
+                            secondary: 2,
+                            attributes: None
+                        }
+                    }]
+                );
+            }
+            assert_eq!(
+                app.world().resource::<AppFlow>().state().screen,
+                if mask == 15 {
+                    kn_app::Screen::Loading
+                } else {
+                    kn_app::Screen::HeroSelect
+                },
+                "mask {mask}, method {method}"
+            );
+        }
+    }
 }

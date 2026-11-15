@@ -1,7 +1,5 @@
-//! LIGHTS.RES — маски света (docs/k1/formats/lights-res.md, эталон — `konung/k1/lights_res.py`).
-//!
-//! Заголовка нет: маска 64 × 64, маска 64 × 43 и 19 масок тайлов 114 × 64, байт на
-//! пиксель — яркость. Номер маски тайла хранит первый блок LIGHTS.N ([crate::map::Lights]).
+//! LIGHTS.RES brightness masks; LIGHTS.N selects the tile masks.
+//! Reference: `konung/k1/lights_res.py`; docs/research/k1/formats/lights-res.md.
 
 use thiserror::Error;
 

@@ -13,4 +13,4 @@ path = "src/main.rs"
 kn-fe-player = { path = "../../frontend/bevy/player" }
 kn-game = { path = "../../game/kn-game" }
 kn-settings = { path = "../kn-settings" }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }

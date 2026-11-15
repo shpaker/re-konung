@@ -1,369 +1,189 @@
-# Architecture
+<a id="architecture"></a>
 
-This document is the single source of truth for the overall architecture of re-konung: what
-components exist, what each one owns, how they are allowed to depend on each other, and what the
-target shape looks like. Other documents link here instead of repeating the picture —
-[docs/rust.md](docs/rust.md) keeps the Rust-side technical detail (crate-by-crate status, format
-layers, decisions and their measurements), [docs/games.md](docs/games.md) keeps the series and
-edition comparison, [docs/README.md](docs/README.md) indexes the format documentation. What the
-player-facing experience should feel like, and what each design reference is authoritative for, is
-[docs/design.md](docs/design.md), which this document does not restate.
+# Архитектура
 
-## Overview
+Здесь описаны общая архитектура re-konung, компоненты, их обязанности, допустимые зависимости и целевое устройство. Остальные документы ссылаются сюда: [Rust](docs/development/rust/README.md) хранит технические подробности и замеры, [обзор серии](docs/research/series.md) — части и издания, [оглавление](docs/README.md) — навигацию по форматам. Ожидаемый опыт игрока и назначение ориентиров описаны в [принципах продукта](docs/development/design.md).
 
-re-konung studies and recreates the engine behind the «Князь» series (1C/Snowball). Three
-implementations live side by side and each has its own role:
+<a id="overview"></a>
 
-- **Rust (`crates/`)** — the engine itself: a Bevy-based remaster. It is the only part intended to
-  become a game.
-- **Python (`konung/`)** and the **Tiled extension (`tiled/konung/`)** — independent reference
-  tooling: they parse and render the original formats and let a person edit maps in Tiled. The Rust
-  side links nothing from them and calls nothing in them; there is no runtime dependency in either
-  direction. Python is the reference implementation of the formats: where the two disagree, Python
-  is right, because it has the tests.
-- **`original/`** — the owner's own game files. Never committed, never distributed; everything the
-  loaders read comes from a licensed copy.
+## Обзор
 
-Two properties hold across the whole Rust stack:
+re-konung исследует и воссоздаёт движок серии «Князь» (1С/Snowball). Независимые реализации имеют разные роли:
 
-- **Written formats are byte-exact.** Read → write reproduces the original file byte for byte for
-  every file of every edition, and the round-trip is what the tests assert — today for the two
-  formats that are written at all: K1 maps (`Konung.N`) and starting states (`Game.N`). Formats
-  that are only read (`GRAPH.RES`, `Objects.res`, lights, flames, the EXE tables) carry no such
-  guarantee yet: byte-exact writing is the goal for them, not the current state.
-- **Data and game logic are Bevy-free.** `k1-data`, `k1-game` and `kn-game` compile and are tested
-  headless, without a window or a GPU. Bevy appears only from layer 03 upward.
+- **Rust, crates/** — сам движок, ремастер на Bevy. Только эта часть предназначена стать игрой.
+- **Python, konung/** и **расширение Tiled, tiled/konung/** — эталонные инструменты: разбирают и отображают форматы, позволяют редактировать карты в Tiled. Rust не связывается с ними и не вызывает их; зависимостей времени исполнения нет в обе стороны. Python — эталон форматов и арбитр расхождений, закреплённый тестами.
+- **original/** — собственные файлы владельца лицензионной копии. Не коммитятся и не распространяются.
 
-Statuses in the diagram are honest about what exists today:
+Свойства стека Rust:
 
-| Marker | Meaning |
-|---|---|
-| `[X]` | Implemented in the repository. |
-| `[~]` | Partial: a first slice exists, the rest is missing. |
-| `[ ]` | Planned, not started. |
-| `[?]` | Potential candidate only: not in the workspace, not scheduled, no dependency implied. |
+- **Записываемые форматы сохраняются побайтно.** Чтение → запись воспроизводит каждый файл каждого издания. Тесты проверяют карты Konung.N, размещение света LIGHTS.N и начальные состояния Game.N, включая обучающие аналоги. Для форматов только чтения (GRAPH.RES, Objects.res, LIGHTS.RES, огни, таблицы EXE) побайтная запись — цель, не текущая гарантия.
+- **Данные и игровая логика не зависят от Bevy.** k1-data, k1-game и kn-game собираются и проверяются без окна/GPU. Bevy появляется в слое 03 и выше.
 
-## Architecture Diagram
+<a id="layer-diagram"></a>
 
-The diagram exists only in this file.
+## Схема слоёв
 
-```text
-[X] Implemented   [~] Partial   [ ] Planned   [?] Potential
-Double box = component/crate; single box = subsystem
-Arrows indicate logical layers, not exact Cargo dependencies.
+Стрелки обозначают текущий логический поток данных и управления; точные зависимости Cargo перечислены отдельно. Python и Tiled независимы от движка Rust.
 
-┌──────────────────────────────────────────────────────────────────────────────────────────────┐
-│   01  APPLICATIONS                                       CLI / BINARIES + APP CORE (PURE RUST)  │
-├──────────────────────────────────────────────────────────────────────────────────────────────┤
-│  ╔══════════════════════════════════════════╗  ╔══════════════════════════════════════════╗  │
-│  ║              [X] kn-player               ║  ║              [X] kn-viewer               ║  │
-│  ╠══════════════════════════════════════════╣  ╠══════════════════════════════════════════╣  │
-│  ║ Binary: re-konung                        ║  ║ Binary: re-konung-viewer                 ║  │
-│  ║ [X] CLI / game directory / hero          ║  ║ [X] Map / scene inspection               ║  │
-│  ║ [X] Settings bootstrap (--new-game)      ║  ║ [X] Headless checks / diagnostics        ║  │
-│  ║ [ ] Full playable loop                   ║  ║ Read-only: no editing                    ║  │
-│  ╚══════════════════════════════════════════╝  ╚══════════════════════════════════════════╝  │
-│                                                                                              │
-│  ╔══════════════════════════════════════════╗  ╔══════════════════════════════════════════╗  │
-│  ║               [X] kn-app                 ║  ║             [X] kn-settings              ║  │
-│  ╠══════════════════════════════════════════╣  ╠══════════════════════════════════════════╣  │
-│  ║ Player application core, no Bevy         ║  ║ Player settings, no Bevy                  ║  │
-│  ║ [X] Screens / actions / pure reducer     ║  ║ [X] Model / defaults / validation         ║  │
-│  ║ [X] Session lifecycle / typed effects    ║  ║ [X] Versioned JSON, loss-proof save       ║  │
-│  ║ [ ] Pause menu / save-load / launcher    ║  ║ Language of the interface (ru/en)        ║  │
-│  ╚══════════════════════════════════════════╝  ╚══════════════════════════════════════════╝  │
-└──────────────────────────────────────────────────────────────────────────────────────────────┘
-                                                │
-                                                ▼
-┌──────────────────────────────────────────────────────────────────────────────────────────────┐
-│   02  FRONTENDS                                                           BEVY APP ASSEMBLY  │
-├──────────────────────────────────────────────────────────────────────────────────────────────┤
-│  ╔══════════════════════════════════════════╗  ╔══════════════════════════════════════════╗  │
-│  ║             [X] kn-fe-player             ║  ║             [X] kn-fe-viewer             ║  │
-│  ╠══════════════════════════════════════════╣  ╠══════════════════════════════════════════╣  ║
-│  ║ [X] Window / camera / start map          ║  ║ [X] Feathers panel / map selector        ║  │
-│  ║ [~] Menu / settings screens (AppFlow)    ║  ║ [X] Overlays / animation / camera        ║  │
-│  ║ [ ] Dialogue / inventory UI              ║  ║ [X] Inspection / diagnostics             ║  │
-│  ╚══════════════════════════════════════════╝  ║ Read-only: no editing                    ║  │
-│                                                ╚══════════════════════════════════════════╝  │
-└──────────────────────────────────────────────────────────────────────────────────────────────┘
-                                                │
-                                                ▼
-┌──────────────────────────────────────────────────────────────────────────────────────────────┐
-│   03  PRESENTATION                                                              SHARED BEVY  │
-├──────────────────────────────────────────────────────────────────────────────────────────────┤
-│   ╔══════════════════════════╗  ╔══════════════════════════╗  ╔══════════════════════════╗   │
-│   ║      [X] kn-render       ║  ║       [X] kn-input       ║  ║        [X] kn-ui         ║   │
-│   ╠══════════════════════════╣  ╠══════════════════════════╣  ╠══════════════════════════╣   │
-│   ║ [X] Scene / sprites      ║  ║ [X] Keyboard / mouse     ║  ║ [X] Feathers theme       ║   │
-│   ║ [X] Animation / creatures║  ║ [X] Drag / wheel zoom    ║  ║ [X] Checkbox sync        ║   │
-│   ║ [X] Camera / cache       ║  ║ [ ] Gamepad / touch      ║  ║ [X] Pointer capture      ║   │
-│   ║ [X] Light overlays       ║  ║ Bevy-specific input      ║  ║ [ ] Gameplay widgets     ║   │
-│   ╚══════════════════════════╝  ╚══════════════════════════╝  ╚══════════════════════════╝   │
-└──────────────────────────────────────────────────────────────────────────────────────────────┘
-                                                │
-                                                ▼
-┌──────────────────────────────────────────────────────────────────────────────────────────────┐
-│   04  GAME ENGINE                                                       PURE RUST / NO BEVY  │
-├──────────────────────────────────────────────────────────────────────────────────────────────┤
-│  ╔══════════════════════════════════════════════════════════════════════════════════════════╗│
-│  ║                                       [X] kn-game                                        ║│
-│  ╠══════════════════════════════════════════════════════════════════════════════════════════╣│
-│  ║┌──────────────────────────────────────────┐  ┌──────────────────────────────────────────┐║│
-│  ║│          GAME API / WORLD MODEL          │  │          MOVEMENT / SIMULATION           │║│
-│  ║├──────────────────────────────────────────┤  ├──────────────────────────────────────────┤║│
-│  ║│ [X] Game facade / maps / check           │  │ [X] Isometric grid / walkability         │║│
-│  ║│ [X] Scene / Piece / TextureId            │  │ [X] A* / repathing / occupancy           │║│
-│  ║│ [X] Animation / groups / frames          │  │ [X] Walker / ticks / events              │║│
-│  ║│ [ ] Multi-game dispatch / save-load      │  │ [X] Deterministic RNG                    │║│
-│  ║└──────────────────────────────────────────┘  └──────────────────────────────────────────┘║│
-│  ║                                                                                          ║│
-│  ║┌──────────────────────────────────────────┐  ┌──────────────────────────────────────────┐║│
-│  ║│                RULES / AI                │  │             FUTURE GAMEPLAY              │║│
-│  ║├──────────────────────────────────────────┤  ├──────────────────────────────────────────┤║│
-│  ║│ [X] Decision evaluation / apply          │  │ [ ] Combat / damage / death              │║│
-│  ║│ [X] Failed-order cooldown                │  │ [ ] Inventory / equipment                │║│
-│  ║│ [~] NPC / monster behavior               │  │ [ ] Dialogues / quests                   │║│
-│  ║│ [ ] Full runtime integration             │  │ [ ] Transitions / persistence            │║│
-│  ║└──────────────────────────────────────────┘  └──────────────────────────────────────────┘║│
-│  ║                                                                                          ║│
-│  ║┌──────────────────────────────────────────┐  ┌──────────────────────────────────────────┐║│
-│  ║│               WORLD TIME                 │  │              GAME STATE                  │║│
-│  ║├──────────────────────────────────────────┤  ├──────────────────────────────────────────┤║│
-│  ║│ [ ] Game clock / day-night cycle         │  │ [ ] Persistent world state               │║│
-│  ║│ [ ] Time-dependent events                │  │ [ ] Save / load                          │║│
-│  ║│ [ ] NPC schedules / availability         │  │ [ ] World / location transitions         │║│
-│  ║│ [ ] Quest / production timers            │  │ [ ] Edition-specific state               │║│
-│  ║└──────────────────────────────────────────┘  └──────────────────────────────────────────┘║│
-│  ║                                                                                          ║│
-│  ║                      Pure Rust / no Bevy / shared game mechanics                         ║│
-│  ╚══════════════════════════════════════════════════════════════════════════════════════════╝│
-└──────────────────────────────────────────────────────────────────────────────────────────────┘
-                                                │
-                                                ▼
-┌──────────────────────────────────────────────────────────────────────────────────────────────┐
-│   05  GAME IMPLEMENTATIONS                                              GAME-SPECIFIC LOGIC  │
-├──────────────────────────────────────────────────────────────────────────────────────────────┤
-│  ╔══════════════════════════════════════════╗  ╔══════════════════════════════════════════╗  │
-│  ║               [X] k1-game                ║  ║               [ ] k2-game                ║  │
-│  ╠══════════════════════════════════════════╣  ╠══════════════════════════════════════════╣  │
-│  ║ Konung 1                                 ║  ║ Konung 2 + 2.5 (one family)              ║  │
-│  ║ [X] Resources / textures                 ║  ║ [ ] Shared resources / scene assembly    ║  │
-│  ║ [X] Scene assembly / frames              ║  ║ [ ] Shared rules / edition profiles      ║  │
-│  ║ [~] Creature-specific rules              ║  ║ [ ] K2.5 differences if required         ║  │
-│  ║ [ ] Complete gameplay                    ║  ║ No separate k25 crate assumed            ║  │
-│  ╚══════════════════════════════════════════╝  ╚══════════════════════════════════════════╝  │
-└──────────────────────────────────────────────────────────────────────────────────────────────┘
-                                                │
-                                                ▼
-┌──────────────────────────────────────────────────────────────────────────────────────────────┐
-│   06  FORMAT ADAPTERS                                                      PURE RUST CODECS  │
-├──────────────────────────────────────────────────────────────────────────────────────────────┤
-│  ╔══════════════════════════════════════════╗  ╔══════════════════════════════════════════╗  │
-│  ║               [X] k1-data                ║  ║               [ ] k2-data                ║  │
-│  ╠══════════════════════════════════════════╣  ╠══════════════════════════════════════════╣  │
-│  ║ Konung 1 formats                         ║  ║ Konung 2 + 2.5 formats                   ║  │
-│  ║ [X] Maps / game state                    ║  ║ [ ] Maps / state codecs                  ║  │
-│  ║ [X] Graphics / objects / lights          ║  ║ [ ] Graphics / animation formats         ║  │
-│  ║ [X] EXE tables / character frames        ║  ║ [ ] Edition-specific differences         ║  │
-│  ║ [~] State mutations                      ║  ║ [ ] Roundtrip validation                 ║  │
-│  ╚══════════════════════════════════════════╝  ╚══════════════════════════════════════════╝  │
-└──────────────────────────────────────────────────────────────────────────────────────────────┘
-                                                │
-                                                ▼
-┌──────────────────────────────────────────────────────────────────────────────────────────────┐
-│   07  ORIGINAL ASSETS                                                       NOT DISTRIBUTED  │
-├──────────────────────────────────────────────────────────────────────────────────────────────┤
-│  ╔══════════════════════════════════════════╗  ╔══════════════════════════════════════════╗  │
-│  ║              KONUNG 1 FILES              ║  ║           KONUNG 2 / 2.5 FILES           ║  │
-│  ╠══════════════════════════════════════════╣  ╠══════════════════════════════════════════╣  │
-│  ║ original/k1/<edition>/game               ║  ║ User-owned original files                ║  │
-│  ║ [X] K1 loader integration                ║  ║ [ ] Loader integration                   ║  │
-│  ║ User-owned original files                ║  ║ [ ] Edition / format detection           ║  │
-│  ╚══════════════════════════════════════════╝  ╚══════════════════════════════════════════╝  │
-└──────────────────────────────────────────────────────────────────────────────────────────────┘
-
-                   INDEPENDENT REFERENCE TOOLING (no runtime dependency)
-
-┌──────────────────────────────────────────────────────────────────────────────────────────────┐
-│   08  TOOLING                                                        PYTHON / TILED / TESTS  │
-├──────────────────────────────────────────────────────────────────────────────────────────────┤
-│   ╔══════════════════════════╗  ╔══════════════════════════╗  ╔══════════════════════════╗   │
-│   ║    [X] Python / konung   ║  ║   [X] Tiled extension    ║  ║     [X] Tests / docs     ║   │
-│   ╠══════════════════════════╣  ╠══════════════════════════╣  ╠══════════════════════════╣   │
-│   ║ [X] K1 format reference  ║  ║ [X] K1 map editing       ║  ║ [X] Format roundtrips    ║   │
-│   ║ [X] Reference renderer   ║  ║ [X] Import / export      ║  ║ [X] Headless checks      ║   │
-│   ║ [ ] K2 / K2.5            ║  ║ [ ] K2 / K2.5            ║  ║ [ ] Gameplay E2E         ║   │
-│   ╚══════════════════════════╝  ╚══════════════════════════╝  ╚══════════════════════════╝   │
-└──────────────────────────────────────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────────────────────────────────┐
-│   09  POTENTIAL COMPONENTS                                               NOT YET COMMITTED   │
-├──────────────────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                              │
-│                  ╔══════════════════════════════════════════════════╗                        │
-│                  ║                   [?] kn-data                    ║                        │
-│                  ╠══════════════════════════════════════════════════╣                        │
-│                  ║ Shared engine data models                        ║                        │
-│                  ║ World / Map / Entity / Scene / GameState         ║                        │
-│                  ║ Common IDs / value types                         ║                        │
-│                  ║ Pure Rust / no gameplay / no Bevy                ║                        │
-│                  ║                                                  ║                        │
-│                  ║ Extract only when independently reusable         ║                        │
-│                  ╚══════════════════════════════════════════════════╝                        │
-│                                                                                              │
-│   [?] Candidate only. Not in workspace, not scheduled, no dependency implied.                │
-└──────────────────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Applications[Приложения]
+        player[kn-player]
+        viewer[kn-viewer]
+        core[kn-app / kn-settings]
+    end
+    subgraph Bevy
+        fp[kn-fe-player]
+        fv[kn-fe-viewer]
+        render[kn-render]
+        mechanisms[kn-input / kn-ui]
+    end
+    game[kn-game: фасад, движение, симуляция]
+    k1[k1-game: правила и сцены K1]
+    data[k1-data: кодеки и доступ к файлам]
+    files[Свои файлы игры / редактируемые копии]
+    reference[Эталонные инструменты Python / Tiled]
+    player --> fp
+    viewer --> fv
+    fp --> core
+    fp --> render
+    fv --> render
+    fp --> mechanisms
+    fv --> mechanisms
+    render --> game
+    game --> k1
+    game --> data
+    k1 --> data
+    data --> files
+    reference --> files
 ```
 
-## Component Responsibilities
+<a id="capability-status"></a>
 
-| Layer | Component | Path | Owns | Must not know |
+## Готовность возможностей
+
+Статус означает покрытие реализацией, не доказанность исходного правила. Уверенность хранится в исследованиях. Будущие строки обозначают пробелы, не расписание.
+
+| Возможность | Сейчас |
+|---|---|
+| Форматы K1, эталонный рендерер, карты/состояние в Tiled | Реализованы для описанных форматов; графика только читается, карты/состояние записываются побайтно |
+| Сцены Rust, графика, анимация, камера, просмотрщик | Реализованы: просмотр, проверки без окна, диагностические слои и показатели |
+| Общий движок движения и восстановленные решения существ | Реализованы; оба фронтенда Bevy запускают симуляцию, неизвестное поведение остаётся нереализованным |
+| Время, фоновое/тайловое освещение, управление просмотрщика | Реализованы; исходные настройки по умолчанию и активация постоянного света карт ещё исследуются |
+| Меню игры, настройки, конструктор новой игры | Реализованы: сохранение настроек и настроенный стартовый сеанс; полного игрового цикла нет |
+| Бой, взаимодействие с инвентарём, диалоги, задания | Неполные либо отсутствуют; данные и отображение экипировки не означают готовность этих систем |
+| Сохранение/загрузка сеансов, переходы мира, производство/дань, расписания NPC | Не реализованы |
+| K2/K2.5 и выбор игрового бэкенда | Условная цель; общность форматов и движка не проверена |
+| Общий крейт kn-data | Только кандидат, в рабочем пространстве и плане отсутствует |
+
+<a id="component-responsibilities"></a>
+
+## Обязанности компонентов
+
+| Слой | Компонент | Путь | Отвечает за | Не должен знать |
 |---|---|---|---|---|
-| 01 | `kn-player` | `crates/apps/player` | Binary `re-konung`: CLI (`--game-dir`, `--new-game`, `--settings`), settings bootstrap (typed load errors, defaults on a bad file, the file never touched), opening the game directory, resolving the hero, handing a `PlayerConfig` to the frontend | Bevy, K1 formats |
-| 01 | `kn-app` | `crates/apps/kn-app` | The player's application core in pure Rust: screens, typed actions, the pure `AppController` reducer and its transition table, typed effects and session/persist errors. Tested headless, no Bevy | Bevy, `kn-game`, formats, any frontend |
-| 01 | `kn-settings` | `crates/apps/kn-settings` | The player's settings model in pure Rust: defaults, validation, the interface `Language`, and versioned JSON persistence — a load that never writes and a save that never loses the previous file (`tmp`+rename, `.bak` for corrupt or newer files) | Bevy, the game, the window |
-| 01 | `kn-viewer` | `crates/apps/viewer` | Binary `re-konung-viewer` plus a library: CLI, startup resolution, headless `check` (JSON report, nonzero exit on failure) — no window, no GPU context | Bevy app construction (linked only transitively) |
-| 02 | `kn-fe-player` | `crates/frontend/bevy/player` | Bevy `App` assembly of the player: window, camera binding, the AppFlow pipeline over `kn-app` (flush → effects → results → screens, one `session_watch` that reports readiness only when observed), session build/teardown of the start map, the menu/settings/loading screens, and the two-language interface text | CLI, game rules, formats |
-| 02 | `kn-fe-viewer` | `crates/frontend/bevy/viewer` | Bevy `App` assembly of the viewer: viewer state, Feathers panel, map selector, overlay toggles, playback, creature id labels, frame diagnostics, scene rebuild policy | CLI, formats, game rules |
-| 03 | `kn-render` | `crates/frontend/bevy/render` | Scene pieces → sprites in z-order, texture cache keyed by `TextureId`, per-frame animation, camera state. The creature animation subsystem too — one plugin both frontends add, owning the simulation catch-up, the composite clips, the depth slot and the composite nodes; it draws frames, it never decides a creature's state. An overlay is the `Visibility` of a piece-group node, never a map rebuild | K1, formats, game rules, input bindings |
-| 03 | `kn-input` | `crates/frontend/bevy/input` | Input mechanisms only: keyboard pan direction, mouse drag delta, wheel accumulation into zoom steps | Camera types, UI, game rules |
-| 03 | `kn-ui` | `crates/frontend/bevy/ui` | Shared UI mechanics: the Feathers dark theme, mirroring a checkbox state back onto the widget, the pointer-over-UI test | Panels, widget state, rendering, input bindings, game rules |
-| 04 | `kn-game` | `crates/game/kn-game` | The series facade and the shared engine: `Game` (open a directory, list maps, build a `Scene`, decode textures, `check`), the Bevy-free model `Scene`/`Piece`/`TextureId`/`Animation`/`PieceGroup`; the shared movement engine (isometric fine grid, walkability, occupancy, A\* routes, repathing, per-tick walking, events, deterministic RNG); applying creature decisions with a failed-order cooldown | Bevy, window, GPU |
-| 05 | `k1-game` | `crates/game/k1/k1-game` | Knowledge of «Князь 1»: resources, texture keys and RGBA decode, the map draw list with piece groups, animation frame assembly, creature-specific rules | Bevy, the other parts of the series |
-| 06 | `k1-data` | `crates/game/k1/k1-data` | K1 binary formats as pure `parse(data: bytes)` functions plus a separate filesystem layer: repository (`repo`), `map`, `game_state`, `game_edit`, `graph_res`, `objects_res`, `lights_res`, `flames_res`, `executable`, `characters`, `rle`, `palette` | Game rules, Bevy, the filesystem inside a parser |
-| 08 | `konung/` (Python) | `konung/` | Reference parser and reference renderer for K1 formats; CLI `konung`. The arbiter when Rust and Python disagree | — (independent of the Rust stack) |
-| 08 | Tiled extension | `tiled/konung/` | Opens original `Konung.N` with `Game.N` objects inside Tiled and saves them back byte-exactly; this is where map editing happens | — (independent of the Rust stack) |
+| 01 | kn-player | crates/apps/player | Бинарный re-konung: CLI --game-dir/--new-game/--settings, загрузка настроек с типизированными ошибками и безопасными значениями без изменения плохого файла, открытие каталога, разрешение героев, PlayerConfig для фронтенда | Bevy, форматы K1 |
+| 01 | kn-app | crates/apps/kn-app | Чистое ядро приложения: экраны, типизированные действия, reducer AppController и таблица переходов, эффекты и ошибки сеанса/сохранения; тесты без окна | Bevy, kn-game, форматы, фронтенды |
+| 01 | kn-settings | crates/apps/kn-settings | Значения по умолчанию, проверка, Language, версионированный JSON. Загрузка не пишет; сохранение не теряет прежний файл: tmp + rename, .bak для повреждённого/более нового формата | Bevy, игра, окно |
+| 01 | kn-viewer | crates/apps/viewer | Бинарный re-konung-viewer и библиотека: CLI, начальная конфигурация, check без окна/GPU с JSON и ненулевым кодом ошибки | Сборка приложения Bevy, связанного лишь транзитивно |
+| 02 | kn-fe-player | crates/frontend/bevy/player | Сборка Bevy App, окно, привязка камеры, AppFlow над kn-app: flush → effects → results → screens; один session_watch сообщает готовность только по наблюдению. Создание/удаление стартового сеанса, меню/настройки/загрузка, двухъязычный интерфейс | CLI; не реализует правила/кодеки, текущие адаптеры K1 описаны ниже |
+| 02 | kn-fe-viewer | crates/frontend/bevy/viewer | Сборка Bevy App, состояние Viewer, панель Feathers, карты, слои, воспроизведение, метки id, диагностика кадров, политика пересборки | CLI; не реализует правила/кодеки, текущие адаптеры K1 описаны ниже |
+| 03 | kn-render | crates/frontend/bevy/render | Элементы сцены → спрайты по z; кеш TextureId, кадры анимации, камера. Общий плагин существ: догоняющая симуляция, составные клипы/узлы и глубина. Рисует состояние, не выбирает его. Диагностический слой — Visibility группы, не пересборка карты | K1, форматы, правила, привязки ввода |
+| 03 | kn-input | crates/frontend/bevy/input | Механизмы ввода: направление клавиатуры, смещение мыши, накопление колеса в ступени масштаба | Типы камеры, интерфейс, правила |
+| 03 | kn-ui | crates/frontend/bevy/ui | Общие параметры дизайна, PT Sans, тема Feathers, отражение флажков, захват указателя | Панели, состояние виджетов, рендеринг, привязки ввода, правила |
+| 04 | kn-game | crates/game/kn-game | Фасад серии Game: каталог, карты, Scene, текстуры, check; модель Scene/Piece/TextureId/Animation/PieceGroup без Bevy. Общий движок: изометрическая мелкая сетка, проходимость/занятость, A*, перепрокладка, шаги/события, детерминированный RNG; применение решений и задержка повторов отказавших приказов | Bevy, окно, GPU |
+| 05 | k1-game | crates/game/k1/k1-game | Специфика K1: ресурсы, ключи текстур, декодирование RGBA, список отрисовки с группами, сборка кадров, правила существ | Bevy, другие части |
+| 06 | k1-data | crates/game/k1/k1-data | Чистые parse(data: bytes) и отдельная файловая обвязка: repo, map, game_state, game_edit, graph_res, objects_res, lights_res, flames_res, executable, characters, newh_res, rle, palette | Правила, Bevy, файловая система внутри парсера |
+| 08 | Python | konung/ | Эталонные парсер, рендерер и CLI konung; арбитр расхождений с Rust | —, независим от Rust |
+| 08 | Расширение Tiled | tiled/konung/ | Открытие Konung.N с объектами Game.N и побайтная запись; место редактирования карт | —, независимо от Rust |
 
-### Boundary rules
+<a id="boundary-rules"></a>
 
-- **`kn-game` is the world model, in pure Rust.** Everything the display needs comes through it,
-  and it contains no Bevy type. The movement engine reads no game file: the part's knowledge
-  arrives through the `Passage` (cell walkability) and `Pace` (step duration in ticks) traits, so
-  the same engine serves any part of the series. It keeps no clock of its own — it counts ticks,
-  and how long a tick is belongs to the outer world.
-- **`k1-game` / `k2-game` hold one part's specifics** — resources, textures, draw order, creature
-  rules, and (for K2/K2.5, once their data is studied) the shared family logic. Game rules come
-  from the original, never from our heads: an unconfirmed rule is written up as unknown in `docs/`
-  and left unimplemented.
-- **`k1-data` / `k2-data` hold binary formats and serialization** — reading and byte-exact writing
-  of the original files, with unknown bytes preserved rather than dropped.
-- **`kn-render`, `kn-input`, `kn-ui` are the Bevy-specific mechanisms**, reusable by any frontend;
-  `kn-input` and `kn-ui` depend on nothing but `bevy`.
-- **A creature is animated by one mechanism, in `kn-render`.** A frontend gets the whole pipeline
-  by adding `CreatureAnimationPlugin` and asking for a map with `CreatureMotion::request`; the
-  plugin also declares the ordering between its systems and the scene clock, so a frontend cannot
-  mis-order it. What the frontend keeps is its own additions only — the viewer's `#id` labels and
-  diagnostics panel hang after the last system set of the subsystem. What a creature *is doing*
-  (its animation state, the state-4 special and its one-shot run into idle) is decided in the
-  Bevy-free game layer (`k1-game::creature_anim` behind `kn_game::Simulation`): the render layer
-  reads the stage and swaps frames, it never decides a state, and it owns no clock of its own —
-  ticks arrive on the frontend's scene `Clock`.
-- **`kn-fe-*` assemble the Bevy apps** and hold the frontend logic (what a click does, when a
-  scene is rebuilt); they own no game rule and no format.
-- **`kn-player` / `kn-viewer` are executables**: CLI parsing and process exit codes only.
-- **The viewer is read-only.** It inspects maps and reports diagnostics; it never writes a game
-  file. Editing is a Tiled job through the extension, not a viewer feature.
-- **Python and Tiled are reference tooling with no runtime dependency** on the Rust side or
-  vice versa; they stay as they are while Rust replaces nothing yet.
+### Правила границ
 
-## Dependency Boundaries
+- **kn-game — чистая модель мира Rust.** Даёт сцены и симуляцию без типов Bevy; исключения адаптеров K1 перечислены ниже. Движение не читает файлы: Passage передаёт проходимость, Pace — длительность шага в тиках. Движок считает тики, но не имеет собственных часов; длительность тика задаётся снаружи.
+- **k1-game и условный k2-game — знания части:** ресурсы, текстуры, порядок рисования, поведение; для K2/K2.5 общность семейства должна быть исследована. Правила берутся из оригинала; неподтверждённые записываются как неизвестные и не реализуются.
+- **k1-data и условный k2-data — форматы и сериализация.** Чтение и побайтная запись с сохранением неизвестных байтов.
+- **kn-render, kn-input, kn-ui — общие механизмы Bevy.** kn-input и kn-ui зависят только от bevy.
+- **Анимация существ имеет один механизм в kn-render.** CreatureAnimationPlugin и CreatureMotion::request подключают весь конвейер с порядком систем относительно Clock. Фронтенд добавляет только своё: метки и диагностика просмотрщика выполняются после последнего набора систем. Состояние существа, особая анимация 4 и однократный переход в покой выбираются в k1-game::creature_anim за kn_game::Simulation; рендеринг читает стадию и меняет кадры, не принимает игровых решений. Тики приходят из Clock сцены.
+- **kn-fe-* собирают приложения Bevy** и определяют реакцию на действия/пересборку. Не реализуют кодеки или правила, но сейчас напрямую вызывают парсеры света и модели времени/освещения K1; игра также декодирует портреты NEWH.
+- **kn-player/kn-viewer — исполняемые оболочки:** CLI и завершение процесса, начальная передача конфигурации.
+- **Просмотрщик только читает.** Редактирование игровых файлов принадлежит расширению Tiled.
+- **Python и Tiled независимы от Rust при исполнении.** Они остаются эталонами; Rust пока их не заменяет.
 
-The arrows in the diagram are logical layers (who is allowed to know about whom), not Cargo edges.
-The edges below are what the `Cargo.toml` files actually declare today (workspace
-`crates/Cargo.toml`, resolver 3, edition 2024, Bevy 0.20).
+<a id="dependency-boundaries"></a>
 
-| Crate | Declared path dependencies | External |
+## Границы зависимостей
+
+Схема показывает логические слои, не рёбра Cargo. Таблица отражает объявленные Cargo.toml зависимости: рабочее пространство crates/Cargo.toml, resolver 3, edition 2024, Bevy 0.20.
+
+| Крейт | Локальные зависимости | Внешние |
 |---|---|---|
-| `kn-player` | `kn-fe-player`, `kn-game`, `kn-settings` | `clap` |
-| `kn-viewer` | `kn-fe-viewer`, `kn-game` | `clap`, `serde_json`, `thiserror` |
-| `kn-app` | `kn-settings` | — |
-| `kn-settings` | — | `dirs`, `serde`, `serde_json` |
-| `kn-fe-player` | `kn-app`, `kn-settings`, `kn-game`, `kn-render`, `kn-input`, `kn-ui`, `k1-data`, `k1-game` | `bevy` (`bevy_feathers`) |
-| `kn-fe-viewer` | `kn-game`, `kn-render`, `kn-input`, `kn-ui`, `k1-data`, `k1-game` | `bevy` (`bevy_feathers`) |
-| `kn-render` | `kn-game` | `bevy`, `thiserror` |
-| `kn-input` | — | `bevy` |
-| `kn-ui` | — | `bevy` (`bevy_feathers`) |
-| `kn-game` | `k1-data`, `k1-game` | `pathfinding`, `serde`, `thiserror` |
-| `k1-game` | `k1-data` | `thiserror` |
-| `k1-data` | — | `thiserror` |
+| kn-player | kn-fe-player, kn-game, kn-settings | clap |
+| kn-viewer | kn-fe-viewer, kn-game | clap, serde_json, thiserror |
+| kn-app | kn-settings | — |
+| kn-settings | — | dirs, serde, serde_json |
+| kn-fe-player | kn-app, kn-settings, kn-game, kn-render, kn-input, kn-ui, k1-data, k1-game | bevy (bevy_feathers) |
+| kn-fe-viewer | kn-game, kn-render, kn-input, kn-ui, k1-data, k1-game | bevy (bevy_feathers) |
+| kn-render | kn-game | bevy, thiserror |
+| kn-input | — | bevy |
+| kn-ui | — | bevy (bevy_feathers) |
+| kn-game | k1-data, k1-game | pathfinding, serde, thiserror |
+| k1-game | k1-data | thiserror |
+| k1-data | — | thiserror |
 
-Dev-dependencies are left out of the table: `tempfile` in `k1-data`, `k1-game`, `kn-game` and
-`kn-viewer` for tests on synthetic files; it adds no edge to the graph.
+Тестовые зависимости не перечислены: tempfile в k1-data, k1-game, kn-game и kn-viewer нужен для синтетических файлов и не добавляет ребра между крейтами.
 
-Rules that hold today:
+Текущие инварианты:
 
-- Dependencies point down the stack; nothing in layers 03–06 names a K1 type except inside the K1
-  crates and `kn-game`'s facade.
-- `kn-input` and `kn-ui` are leaves: `bevy` and nothing else.
-- No Bevy dependency in `k1-data`, `k1-game`, `kn-game`, `kn-app`, `kn-settings`; their tests run
-  headless, and `kn-viewer check` creates no window or GPU context.
-- The workspace has twelve members and no `k2-*` or `kn-data` crate.
-- `kn-app` talks to the game only through typed effects executed by `kn-fe-player`; the game
-  domain (`kn-game` and below) knows nothing of the application core above it.
+- Зависимости направлены вниз; в слоях 03–06 типы K1 именуют только крейты K1 и фасад kn-game.
+- kn-input и kn-ui — листья, только bevy.
+- k1-data, k1-game, kn-game, kn-app, kn-settings не зависят от Bevy, тестируются без окна; kn-viewer check не создаёт окно/GPU.
+- В рабочем пространстве 12 участников, нет k2-* и kn-data.
+- kn-app обращается к игре через типизированные эффекты, исполняемые kn-fe-player; игровой домен kn-game и ниже не знает ядра приложения.
 
-## Multi-game Support
+<a id="multi-game-support"></a>
 
-The series has four games; this project targets the first three («Князь 3» is 3D and out of scope,
-see [docs/games.md](docs/games.md)) — parts two and 2.5 only if the shared engine is confirmed —
-and only the first is implemented today:
+## Поддержка нескольких игр
 
-- **«Князь: Легенды Лесной страны» (1999)** — studied and implemented: `k1-data` + `k1-game`,
-  Python reference, Tiled extension.
-- **«Князь 2» (2003) and «Князь 2.5» (2004–2005, a continuation built on top of part two)** — one
-  target branch: `k2-data` and `k2-game` for the pair, not a separate crate per part. Their formats
-  are not studied yet (no data has been examined), so no field of theirs is claimed anywhere in the
-  diagram. Years, teams and publishers — [docs/games.md](docs/games.md).
+В серии четыре игры; проект рассматривает первые три, причём K2/K2.5 только после подтверждения общего движка. Трёхмерная K3 вне рамок; см. [серию](docs/research/series.md). Сейчас реализована только первая:
 
-Hypotheses are kept apart from decisions:
+- **«Князь: Легенды Лесной страны», 1999:** k1-data/k1-game, Python, Tiled.
+- **«Князь 2», 2003, и «Князь 2.5», 2004–2005:** условная общая пара k2-data/k2-game, не по паре на часть. Файлы ещё не исследованы; возможностей K2 пока нет. Годы, команды и издатели — в [обзоре](docs/research/series.md).
 
-- **Confirmed decision.** Shared code is extracted when the commonality has been demonstrated, not
-  in advance. The one exception is movement: the shared engine is built in `kn-game` now, on the
-  assessment that K1 and K2 movement is nearly identical with running as the visible difference,
-  which fits the same model; a part's specifics stay in `k1-game`.
-- **Hypothesis.** «Князь 2» and «Князь 2.5» run on one engine, and their formats and rules are
-  close enough to share a crate pair. Not yet checked against the files — see
-  [docs/games.md](docs/games.md). Until it is checked, `k2-game`/`k2-data` stay `[ ]`.
-- **Hypothesis.** K2's noticeable difference from K1 is running; anything else is unverified.
-- **Not a plan.** Nothing about K2/K2.5 formats is implemented, and nothing here should be read as
-  a schedule.
+Решения отделены от гипотез:
 
-Adding a part is meant to be additive: `kn-game` keeps one API and a second backend (`k2-game` +
-`k2-data`) appears beside the K1 one, with the game selected at the application edge. Today the
-facade hardwires K1 (see the next section) — that is the known gap, not an oversight of the model.
+- **Принятое решение:** общий код выделяется после доказательства общности. Исключение — движение уже в kn-game: рабочее предположение о близости K1/K2 и беге как видимом отличии помещается в одну модель; специфика остаётся в k1-game.
+- **Гипотеза:** K2/K2.5 достаточно близки по движку, форматам и правилам для общей пары крейтов. Файлами не проверено, см. [обзор серии](docs/research/series.md); k2-game/k2-data условны.
+- **Гипотеза о движении:** бег — заметное отличие K2 от K1; прочие различия ещё не проверены.
+- **Не расписание:** форматы K2/K2.5 не реализованы, сроков здесь нет.
 
-The application edge now physically exists: `kn-app` is the player's application core, and a game
-session starts only through its `StartSession` effect — the slot a second game will be selected
-into. The core itself knows no part: everything game-specific stays below `kn-game`, executed by
-the frontend. A launcher that picks a game directory from the UI (no `--game-dir` at launch) is a
-separate future task; the current CLI opens exactly one game at bootstrap.
+Добавление части должно сохранять API kn-game и добавлять бэкенд k2-game/k2-data рядом с K1, с выбором на границе приложения. Сейчас фасад явно привязан к K1; отсутствие выбора — известный пробел.
 
-## Current vs Target Architecture
+Граница приложения уже существует: kn-app запускает сеанс только эффектом StartSession; это место для будущего выбора игры. Ядро не знает конкретную часть; игровое исполнение проходит через фронтенд и kn-game, с текущими адаптерами ниже. Выбор каталога игры из интерфейса без --game-dir — отдельная будущая задача; сейчас CLI открывает одну игру при запуске.
 
-The diagram draws the intended layering; the `[X]` and `[~]` markers say what exists today. Three
-boundaries differ between the two, and each difference is deliberate rather than accidental:
+<a id="current-vs-target-architecture"></a>
 
-| Boundary | Target | Today |
+## Текущее и целевое устройство
+
+Схема отражает существующие слои; таблица возможностей отделяет реализацию от пробелов и условных целей.
+
+| Граница | Цель | Сейчас |
 |---|---|---|
-| Game dispatch | `kn-game` is backend-agnostic and selects a part's implementation behind one API | `kn-game` depends directly on `k1-data` and `k1-game` and calls them by name; there is one backend, so no dispatch exists (`[ ] Multi-game dispatch`) |
-| Executables | `kn-player` and `kn-viewer` are thin CLI shells over their frontends | Holds for both, with one extra edge: each app also names `kn-game` directly (it opens the game and builds the config passed to the frontend) |
-| Presentation | Layer 03 crates are shared mechanisms | `kn-render` depends on `kn-game` (it consumes the shared scene model); `kn-input` and `kn-ui` depend on nothing but `bevy` |
+| Выбор игры | Независимый от бэкенда kn-game выбирает реализацию за единым API | Прямо зависит от k1-data/k1-game и вызывает их; бэкенд один, выбора нет |
+| Исполняемые файлы | Тонкие CLI над фронтендами | Выполнено, но оба также именуют kn-game: открывают игру и строят конфигурацию |
+| Отображение | Общие механизмы слоя 03 | kn-render получает модель сцены из kn-game; kn-input/kn-ui зависят только от bevy |
+| Адаптеры фронтендов | Данные конкретной игры приходят через фасад | Оба напрямую читают LIGHTS.RES/LIGHTS.N и вызывают модели времени/света k1-game; игра также вызывает k1-data::newh_res для портретов. Это текущие исключения, не зависимости общего рендерера |
 
-Working notes, not architecture:
+Рабочие уточнения:
 
-- `kn-viewer` is a library plus a binary (`check` is exercised by tests through the library);
-  `kn-player` is a binary only.
-- Rules are evaluated in `k1-game` and applied in `kn-game` (`rules`), with the failed-order
-  cooldown on the engine side. No Bevy app drives them yet — `Full runtime integration` is `[ ]`.
-- Save/load, the game clock, day-night, production and tribute timers, inventory, dialogues and
-  transitions exist nowhere in Rust; they are `[ ]` in the diagram and their original behaviour is
-  recovered only through the reverse-engineering loop documented in `docs/`.
-- The Python package and the Tiled extension remain the reference; Rust replaces nothing yet.
+- kn-viewer содержит библиотеку и бинарный файл, check тестируется через библиотеку; kn-player — только бинарный файл.
+- Решения вычисляет k1-game, применяет kn-game::rules с задержкой повторов отказавших приказов. Оба фронтенда используют общий плагин существ; реализовано только восстановленное поведение.
+- Сохранение/загрузка сеансов, производство/дань, инвентарь, диалоги, переходы отсутствуют. Время и смена освещения уже работают от тика симуляции; уверенность источников указана в исследованиях.
+- Python и Tiled остаются эталонами, Rust пока их не заменяет.
 
-## Potential Components
+<a id="potential-components"></a>
 
-`[?] kn-data` — a possible crate for shared engine data models (world, map, entity, scene, game
-state, common identifiers and value types) with no gameplay and no Bevy. It is **a candidate only**:
-not in the workspace, not scheduled, no crate is created for it and no dependency on it exists or is
-implied. It becomes real only when a second consumer makes the models independently reusable — the
-same rule as everywhere else: shared code follows demonstrated commonality.
+## Возможные компоненты
+
+kn-data — возможный крейт общих моделей: мир, карта, сущность, сцена, состояние, идентификаторы и типы значений, без правил и Bevy. Это **только кандидат**: не участник рабочего пространства, не запланирован, зависимостей нет. Он появится лишь при втором потребителе, подтверждающем независимую переиспользуемость моделей; общий код следует доказанной общности.

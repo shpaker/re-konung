@@ -102,13 +102,18 @@ pub fn konung_theme() -> UiTheme {
     recolor(
         &mut props,
         &tokens::semantic::TEXT_DISABLED,
-        palette::TEXT.with_alpha(0.4),
+        palette::TEXT_MUTED,
     );
     recolor(
         &mut props,
         &tokens::semantic::TEXT_ON_ACCENT,
         palette::TEXT_ON_ACCENT,
     );
+    // Feathers shares this token with white-on-accent text; our amber needs
+    // dark text only on primary buttons, never on neutral controls.
+    props
+        .token_assignments
+        .insert(tokens::BUTTON_TEXT, tokens::semantic::TEXT_DEFAULT.clone());
 
     // Accent: checked checkboxes, slider bars, primary buttons, focus ring.
     recolor(
@@ -137,12 +142,12 @@ pub fn konung_theme() -> UiTheme {
     recolor(
         &mut props,
         &tokens::semantic::FILL_SOLID_DEFAULT,
-        palette::SURFACE_RAISED,
+        palette::CONTROL_BG,
     );
     recolor(
         &mut props,
         &tokens::semantic::FILL_SOLID_HOVER,
-        palette::BORDER,
+        palette::CONTROL_HOVER,
     );
     recolor(
         &mut props,
@@ -236,6 +241,12 @@ mod tests {
         assert_eq!(theme.color(&tokens::WINDOW_BG), palette::WINDOW_BG);
         assert_eq!(theme.color(&tokens::TEXT_MAIN), palette::TEXT);
         assert_eq!(theme.color(&tokens::TEXT_DIM), palette::TEXT_MUTED);
+        assert_eq!(theme.color(&tokens::BUTTON_TEXT), palette::TEXT);
+        assert_eq!(
+            theme.color(&tokens::BUTTON_PRIMARY_TEXT),
+            palette::TEXT_ON_ACCENT
+        );
+        assert_eq!(theme.color(&tokens::BUTTON_BG), palette::CONTROL_BG);
         assert_eq!(theme.color(&tokens::BUTTON_PRIMARY_BG), palette::ACCENT);
         assert_eq!(
             theme.color(&tokens::BUTTON_PRIMARY_BG_HOVER),
@@ -268,7 +279,7 @@ mod tests {
         );
         assert_eq!(
             theme.color(&tokens::BUTTON_TEXT_DISABLED),
-            palette::TEXT.with_alpha(0.4),
+            palette::TEXT_MUTED,
             "text disabled"
         );
     }
@@ -303,7 +314,7 @@ mod tests {
     fn the_base_surface_keeps_its_unlifted_solid_fill() {
         assert_eq!(
             konung_theme().context_color(&tokens::BUTTON_BG, SurfaceLevel::Base),
-            palette::SURFACE_RAISED,
+            palette::CONTROL_BG,
         );
     }
 }

@@ -26,6 +26,12 @@ pub const SURFACE: Color = rgb(0x1E, 0x1B, 0x17);
 pub const SURFACE_RAISED: Color = rgb(0x26, 0x22, 0x1D);
 /// Borders and outlines. `#3A342C`.
 pub const BORDER: Color = rgb(0x3A, 0x34, 0x2C);
+/// Neutral control fill, visibly raised above the panel. `#373027`.
+pub const CONTROL_BG: Color = rgb(0x37, 0x30, 0x27);
+/// Neutral control hover fill. `#4A4033`.
+pub const CONTROL_HOVER: Color = rgb(0x4A, 0x40, 0x33);
+/// Control outline, distinct from the panel border. `#6D604E`.
+pub const CONTROL_BORDER: Color = rgb(0x6D, 0x60, 0x4E);
 /// Primary text. `#E8E2D6`.
 pub const TEXT: Color = rgb(0xE8, 0xE2, 0xD6);
 /// Secondary, dimmed text. `#A79E8E`.
@@ -83,6 +89,13 @@ mod tests {
     #[test]
     fn text_on_surface_raised_passes_aa() {
         assert!(contrast_ratio(TEXT, SURFACE_RAISED) >= AA);
+    }
+
+    #[test]
+    fn neutral_control_text_passes_aa() {
+        for background in [CONTROL_BG, CONTROL_HOVER] {
+            assert!(contrast_ratio(TEXT, background) >= AA);
+        }
     }
 
     #[test]

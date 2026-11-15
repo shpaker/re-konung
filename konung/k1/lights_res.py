@@ -1,7 +1,6 @@
-"""LIGHTS.RES — маски света (docs/k1/formats/lights-res.md).
+"""LIGHTS.RES brightness masks; LIGHTS.N selects the tile masks.
 
-Заголовка нет: маска 64 × 64, маска 64 × 43 и 19 масок тайлов 114 × 64, байт на
-пиксель — яркость. Номер маски тайла хранит первый блок LIGHTS.N (map_file.Lights).
+Format contract: docs/research/k1/formats/lights-res.md.
 """
 
 from dataclasses import dataclass

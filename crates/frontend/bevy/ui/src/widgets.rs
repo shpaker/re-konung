@@ -22,7 +22,7 @@ use bevy::prelude::*;
 use bevy::scene::EntityScene;
 use bevy::text::FontWeight;
 
-use crate::{spacing, theme::PANEL_BORDER, typo, typo::KonungFonts};
+use crate::{palette, spacing, theme::PANEL_BORDER, typo, typo::KonungFonts};
 
 /// A panel: the base container of kn-ui screens.
 ///
@@ -63,7 +63,10 @@ pub fn menu_button(fonts: &KonungFonts, label: &str) -> impl Scene {
         }
         Node {
             height: spacing::CONTROL_MIN_HEIGHT,
+            border: px(1),
+            flex_shrink: 0.0,
         }
+        BorderColor::all(palette::CONTROL_BORDER)
         InheritableFont {
             font: {fonts.regular.clone()},
             font_size: typo::BODY,

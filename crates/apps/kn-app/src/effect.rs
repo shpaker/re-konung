@@ -9,9 +9,17 @@ use kn_settings::Settings;
 /// none, so the frame pipeline has no feedback loops.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Effect {
-    /// Build the game session (the frontend runs the current start-map flow)
-    /// and report back with `Loading(Succeeded)` or `Loading(Failed(e))`.
-    StartSession,
+    /// Build the game session for the chosen hero: the frontend opens the
+    /// hero's start map at the hero's on-map position and reports back with
+    /// `Loading(Succeeded)` or `Loading(Failed(e))`. `hero` is the `Game.N`
+    /// starting-state file. The complete constructor draft travels with it,
+    /// so the preview and the running character use the same choices.
+    StartSession {
+        /// The chosen hero's starting-state number.
+        hero: u32,
+        /// The constructor snapshot at confirmation.
+        draft: crate::NewGameDraft,
+    },
     /// Apply `Settings` to the running app and persist; on persist failure the
     /// frontend rolls the runtime back to the current `applied` and reports
     /// `Persisted(SaveFailed(e))`, on success `Persisted(Saved)`.

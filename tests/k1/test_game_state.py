@@ -95,8 +95,8 @@ def test_serialize_keeps_edits():
 
 
 def test_character_field_edits_touch_only_their_bytes(k1_game):
-    # Поля, которые правятся в Tiled: класс, уровень, имя, прозвище, набор спрайтов,
-    # золото, очки, опыт, навыки, характеристики (смещения — docs/k1/formats/game-state.md)
+    # Read edited fields by documented offsets, independently of the serializer.
+    # See docs/research/k1/formats/game-state.md.
     data = next(p for p in _state_files(k1_game) if p.name.lower() == "game.0").read_bytes()
     state = game_state.parse(data)
     character = next(c for c in state.characters if c and not c.has_dynamic_sprite)

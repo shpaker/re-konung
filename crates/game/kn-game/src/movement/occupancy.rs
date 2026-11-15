@@ -8,7 +8,7 @@ use super::grid::Cell;
 /// Who holds a cell.
 ///
 /// A creature owns the cell it stands on and reserves the one it is stepping
-/// into for the duration of the step (docs/rust.md, "Decision: who yields a
+/// into for the duration of the step (docs/development/rust/movement.md, "Decision: who yields a
 /// cell"). The reservation is the answer to a head-on exchange: a cell someone
 /// is already stepping into is taken, and nobody else enters it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

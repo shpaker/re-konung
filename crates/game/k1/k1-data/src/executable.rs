@@ -1,14 +1,5 @@
-//! Таблицы из исполняемого файла игры (docs/k1/formats/executable.md,
-//! эталон — `konung/k1/executable.py`).
-//!
-//! Снаряжение персонажа рисуется наборами спрайтов GRAPH.RES, а какой набор
-//! у какого предмета, игра берёт из таблицы в exe. В RUS это `konung.res`
-//! (переименованный установщиком PE), в ENG — `KONUNG.EXE`. Таблицы ищутся
-//! по строению, а не по смещению: в изданиях они лежат в разных местах.
-//!
-//! Перенесены таблицы для отрисовки (снаряжение, порядок слотов, анимации
-//! огней) и тексты — названия монстров, имена, прозвища и названия карт.
-//! Описания предметов (украшения, зелья, прочие) пока только в Python-эталоде.
+//! Embedded graphics/text tables, discovered by structure rather than edition offsets.
+//! Reference: `konung/k1/executable.py`; docs/research/k1/formats/executable.md.
 
 use std::path::{Path, PathBuf};
 
@@ -59,6 +50,13 @@ pub const NAMES_BLOCK: usize = MONSTER_NAMES + PEOPLE_NAMES + NICKNAMES;
 // Названия карт: 56 записей по 40 байт, номер записи — номер карты минус 1
 pub const MAP_NAME_SIZE: usize = 40;
 pub const MAP_NAMES: usize = 56;
+// Строки меню новой игры: 20 записей по 512 байт; 0–2 — описания героев в
+// порядке боксов экрана (Драгомир, Михаил, Волк), 3–6 — описания классов,
+// 7–19 — подсказки по наведению (Slavik game_newgame.cpp:276-365,
+// Locale::NewGameMenu). Наш замер: RUS — konung.res, ENG — KONUNG.EXE,
+// по одной такой серии в каждом (found by structure, like the rest).
+pub const NEWGAME_TEXT_SIZE: usize = 512;
+pub const NEWGAME_TEXTS: usize = 20;
 // Классы 0x41–0x50 (бит 0x40, виды от 0) называются по виду из таблицы монстров;
 // с 0x51 — женщины и дети деревень, они по имени, как люди
 pub const MONSTER_CLASS: u8 = 0x40;
@@ -93,6 +91,10 @@ pub struct Texts {
     pub nicknames: Vec<String>,
     /// Названия карт: [номер карты − 1]
     pub maps: Vec<String>,
+    /// Строки меню новой игры: [0–2] — описания героев в порядке боксов
+    /// экрана (Драгомир, Михаил, Волк; `Game.N` 1, 2, 0), [3–6] — классы,
+    /// [7–19] — подсказки по наведению
+    pub newgame: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,18 +148,8 @@ fn text(field: &[u8]) -> Option<&[u8]> {
     Some(text)
 }
 
-/// Начало текста записи снаряжения, или None, если записи не подходят.
-///
-/// Проверка слабее, чем у [text]: и эталон (`_is_equipment_table` в
-/// `konung/k1/executable.py`), и расширение Tiled (`isEquipmentTable` в
-/// `tiled/konung/lib/k1.mjs`) смотрят только первый байт имени, управляющие
-/// байты в середине не отбрасывают таблицу. Строгую [text] здесь применять
-/// нельзя: на издании с таким именем Rust отвергнул бы таблицу, которую
-/// эталон принимает, а без таблицы снаряжения не разобрались бы вовсе.
-///
-/// Имя без терминатора (все 44 байта заняты) эталон принимает — здесь тоже;
-/// расширение Tiled в этом случае запись отбрасывает, расхождение описано в
-/// docs/k1/formats/executable.md.
+/// Equipment recognition deliberately accepts interior controls and full 44-byte names, matching Python.
+/// See docs/research/k1/formats/executable.md.
 fn equipment_text_start(field: &[u8]) -> Option<usize> {
     let end = field.iter().position(|&b| b == 0).unwrap_or(field.len());
     if field.is_empty() || field[0] < 0x20 {
@@ -394,6 +386,20 @@ fn text_runs(data: &[u8], size: usize, is_record: impl Fn(&[u8]) -> bool) -> Vec
     runs
 }
 
+/// Начало блока строк меню новой игры — единственная серия из 20 записей
+/// по 512 байт.
+fn find_newgame_texts(data: &[u8]) -> Result<usize> {
+    let found = text_runs(data, NEWGAME_TEXT_SIZE, |field| text(field).is_some())
+        .into_iter()
+        .filter(|&(_, count)| count == NEWGAME_TEXTS)
+        .map(|(start, _)| start)
+        .collect::<Vec<_>>();
+    if found.len() != 1 {
+        return Err(ambiguous("строк новой игры", &found));
+    }
+    Ok(found[0])
+}
+
 /// Начало блока названий карт — единственная серия из 56 записей по 40 байт.
 fn find_map_names(data: &[u8]) -> Result<usize> {
     let found = text_runs(data, MAP_NAME_SIZE, |field| text(field).is_some())
@@ -413,6 +419,7 @@ pub fn parse_texts(data: &[u8]) -> Result<Texts> {
     let start = find_names(data)?;
     let at = |index: usize| decoded_field(record_at(data, start, index, NAME_SIZE));
     let maps_start = find_map_names(data)?;
+    let newgame_start = find_newgame_texts(data)?;
     Ok(Texts {
         monsters: (0..MONSTER_NAMES).map(at).collect(),
         names: (MONSTER_NAMES..MONSTER_NAMES + PEOPLE_NAMES)
@@ -423,6 +430,9 @@ pub fn parse_texts(data: &[u8]) -> Result<Texts> {
             .collect(),
         maps: (0..MAP_NAMES)
             .map(|index| decoded_field(record_at(data, maps_start, index, MAP_NAME_SIZE)))
+            .collect(),
+        newgame: (0..NEWGAME_TEXTS)
+            .map(|index| decoded_field(record_at(data, newgame_start, index, NEWGAME_TEXT_SIZE)))
             .collect(),
     })
 }
@@ -435,17 +445,8 @@ fn entry(table: &[String], index: i32) -> &str {
         .map_or("", String::as_str)
 }
 
-/// Имя персонажа, как его собирает игра: у монстров — название вида,
-/// у людей, женщин и детей — имя и прозвище через пробел (прозвище 0 — без него).
-///
-/// Номер вне таблицы — пустая строка. Номера имя и прозвище — байты 0xD4 и 0xD5
-/// записи персонажа (docs/k1/formats/game-state.md).
-///
-/// Отличие от эталона: пустую часть имени не склеиваем с непустой через пробел,
-/// чтобы в подписи не висел ведущий или хвостовой пробел. Эталон
-/// (`executable.character_name`) при номере вне таблицы даёт `{имя} ` или ` {прозвище}`;
-/// на наших файлах различие не видно — у всех расставленных персонажей оба
-/// номера указывают в заполненные записи, кроме одного жителя без того и другого.
+/// Name indices are bytes 0xD4/0xD5; omit empty parts rather than adding stray spaces.
+/// See docs/research/k1/formats/game-state.md.
 pub fn character_name(texts: Option<&Texts>, class_id: u8, name_id: u8, nick_id: u8) -> String {
     let Some(texts) = texts else {
         return String::new();
@@ -571,12 +572,22 @@ mod tests {
             .collect()
     }
 
-    /// exe-подобные байты: блок имён, нули, названия карт, нули.
+    /// Серия строк меню новой игры: `count` заполненных записей по 512 байт.
+    fn newgame_texts(count: usize) -> Vec<u8> {
+        (0..count)
+            .flat_map(|index| field(&format!("ng{index:02}"), NEWGAME_TEXT_SIZE))
+            .collect()
+    }
+
+    /// exe-подобные байты: блок имён, нули, названия карт, нули, строки меню
+    /// новой игры, нули.
     fn texts_data(count: usize) -> Vec<u8> {
         let mut data = names_block();
         data.extend(vec![0u8; MAP_NAME_SIZE]);
         data.extend(map_names(count));
         data.extend(vec![0u8; MAP_NAME_SIZE]);
+        data.extend(newgame_texts(NEWGAME_TEXTS));
+        data.extend(vec![0u8; NEWGAME_TEXT_SIZE]);
         data
     }
 
@@ -635,6 +646,9 @@ mod tests {
         assert_eq!(texts.nicknames[0], "");
         assert_eq!(texts.nicknames[NICKNAMES - 1], "nick020");
         assert!(texts.maps.iter().all(|map| !map.is_empty()));
+        assert_eq!(texts.newgame.len(), NEWGAME_TEXTS);
+        assert_eq!(texts.newgame[0], "ng00");
+        assert_eq!(texts.newgame[NEWGAME_TEXTS - 1], "ng19");
     }
 
     #[test]

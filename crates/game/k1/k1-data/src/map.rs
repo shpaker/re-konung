@@ -1,5 +1,5 @@
-//! `Konung.N` — карта локации N; `LIGHTS.N` — её освещение
-//! (docs/k1/formats/map.md, эталон — `konung/k1/map_file.py`).
+//! Konung.N and LIGHTS.N codecs preserve unknown fields and raw decoration slots.
+//! Reference: `konung/k1/map_file.py`; docs/research/k1/formats/map.md.
 
 use thiserror::Error;
 
@@ -68,9 +68,8 @@ pub struct Decoration {
 }
 
 impl Decoration {
-    /// Запись с тайлом за пределами GRAPH.RES: её не нарисовать, она хранится
-    /// как есть и пишется обратно в свой слот, а не подряд с обычными
-    /// (docs/k1/formats/map.md, «Запись»).
+    /// Undrawable out-of-bank decorations retain their raw bytes and original slots.
+    /// See docs/research/k1/formats/map.md.
     pub fn is_raw(&self) -> bool {
         self.tile >= TILE_SLOTS as i32
     }

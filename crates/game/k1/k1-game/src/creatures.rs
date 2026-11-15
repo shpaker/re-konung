@@ -15,7 +15,7 @@ use k1_data::graph_res::{DIRECTIONS, GraphRes};
 use k1_data::objects_res::ObjectsRes;
 
 /// Where a villager's job sends them: the place's own cell and its direction
-/// (docs/k1/formats/game-state.md, the `Job` block).
+/// (docs/research/k1/formats/game-state.md, the `Job` block).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Workplace {
     pub cell: (i16, i16),
@@ -23,7 +23,7 @@ pub struct Workplace {
     pub role: &'static str,
     /// Record number the slot points at. `0` is the game's empty-slot marker,
     /// not record 0: the hero never owns an open slot
-    /// (docs/k1/creatures.md, "The villager decision").
+    /// (docs/research/k1/creatures/behavior.md, "The villager decision").
     pub character: i16,
 }
 
@@ -38,25 +38,25 @@ pub struct Creature {
     pub direction: u8,
     pub state: u8,
     /// Byte 0x04 of the character record: class bits (work, dead flag, sprite source).
-    /// See docs/k1/formats/game-state.md, `Character` offset 0x04.
+    /// See docs/research/k1/formats/game-state.md, `Character` offset 0x04.
     pub class_id: u8,
     pub group: usize,
     /// Group kind byte from Game.N (`kind` field): 0x20 player, 0x41–0x50 roaming,
     /// 0x53 lone NPC, 0x80–0x82 villagers. Used for behavior classification.
-    /// See docs/k1/formats/game-state.md, `Group` offset 0x1E.
+    /// See docs/research/k1/formats/game-state.md, `Group` offset 0x1E.
     pub group_kind: u8,
     pub roaming: bool,
     /// Rectangle the creature's group was put in the map for.
     pub spawn: Rect,
     pub workplace: Option<Workplace>,
     /// Byte 0xD4 of the character record: the name table index in the
-    /// executable's texts (docs/k1/formats/game-state.md, offset 0xD4).
+    /// executable's texts (docs/research/k1/formats/game-state.md, offset 0xD4).
     pub name_id: u8,
     /// Byte 0xD5 of the character record: the nickname table index; 0 — no
-    /// nickname. See docs/k1/formats/game-state.md, offset 0xD4.
+    /// nickname. See docs/research/k1/formats/game-state.md, offset 0xD4.
     pub nick_id: u8,
     /// Byte 0xD6 of the character record: sprite set selector (GRAPH.RES models 0–2 or
-    /// Objects.res dynamic objects 0–29). See docs/k1/formats/game-state.md, offset 0xD6.
+    /// Objects.res dynamic objects 0–29). See docs/research/k1/formats/game-state.md, offset 0xD6.
     pub sprite_set: u8,
 }
 
@@ -103,9 +103,9 @@ fn creature(character: &Character, group: &Group, places: &HashMap<usize, Workpl
 }
 
 /// The village job slots of `map_number` in file order: index = slot, five per
-/// village (docs/k1/formats/game-state.md, the `Job` block).
+/// village (docs/research/k1/formats/game-state.md, the `Job` block).
 ///
-/// Our data has at most one village per map (docs/k1/creatures.md, our
+/// Our data has at most one village per map (docs/research/k1/creatures/behavior.md, our
 /// measurement over `Game.0`–`Game.2`); were there more, the first is taken.
 /// No village on the map — an empty list, and the rules find no work anywhere.
 pub fn job_slots(state: &GameState, map_number: usize) -> Vec<Workplace> {
@@ -132,7 +132,7 @@ pub fn job_slots(state: &GameState, map_number: usize) -> Vec<Workplace> {
 /// Workplace of every character of this map that has one, keyed by record number.
 ///
 /// An empty slot carries `character == 0`, the game's own test
-/// (`Jobs[job].CharID != 0`, docs/k1/creatures.md, "The villager decision"):
+/// (`Jobs[job].CharID != 0`, docs/research/k1/creatures/behavior.md, "The villager decision"):
 /// keying on it as record 0 would hand the hero a workplace on every map with
 /// an open slot.
 fn workplaces(entities: &MapEntities) -> HashMap<usize, Workplace> {
@@ -154,7 +154,7 @@ fn workplaces(entities: &MapEntities) -> HashMap<usize, Workplace> {
 }
 
 /// How many ticks one step of each roster creature lasts, per direction: the walk
-/// animation's frame count (docs/k1/movement.md, "Step duration").
+/// animation's frame count (docs/research/k1/movement.md, "Step duration").
 ///
 /// The table is indexed like the roster, because parsing `GRAPH.RES` and
 /// `Objects.res` costs 66 megabytes and a moving creature would otherwise ask for
@@ -184,7 +184,7 @@ pub fn step_durations(
 /// [`crate::creature_anim::Seed::special_frames`] on world load.
 ///
 /// Only the three dynamic classes 0x46, 0x4c and 0x55 record state 4 in the
-/// shipped files (docs/k1/creatures.md, "Our measurement"); a human is queried
+/// shipped files (docs/research/k1/creatures/animation.md, "Our measurement"); a human is queried
 /// the same way and answers 0, so the machine never seeds it into Special.
 pub fn special_frame_counts(
     state: &GameState,
@@ -252,6 +252,7 @@ mod tests {
             names: (0..8).map(|index| format!("name{index:03}")).collect(),
             nicknames: (0..8).map(|index| format!("nick{index:03}")).collect(),
             maps: (0..4).map(|index| format!("map{index:02}")).collect(),
+            newgame: Vec::new(),
         };
         let creature = |id: usize, class_id: u8, name_id: u8, nick_id: u8| Creature {
             id,

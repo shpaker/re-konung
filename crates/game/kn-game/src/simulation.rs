@@ -116,7 +116,7 @@ pub struct Simulation {
     /// reports them. After the load-time re-placement every refusal is a fact
     /// of the record itself — the file stands it in blocked foot data or in a
     /// cell another record already holds — so the consumer presents it as
-    /// data, not as an error (docs/k1/creatures.md, "Load-time refusals").
+    /// data, not as an error (docs/research/k1/creatures/placement.md, "Load-time refusals").
     spawn_failures: Vec<(usize, WorldError)>,
     /// Load-time cell of each roster entry once the roaming squads have been
     /// re-placed (indexed like the roster): what `world.add` was asked for,
@@ -124,7 +124,7 @@ pub struct Simulation {
     load_cells: Vec<(i16, i16)>,
     /// Record numbers the load placement trimmed for want of a free cell in
     /// the squad's spawn area — the original shrinks `GroupSize` and leaves
-    /// them out of the game (`game.cpp:654-655`, docs/k1/creatures.md,
+    /// them out of the game (`game.cpp:654-655`, docs/research/k1/creatures/placement.md,
     /// «Roaming squad placement on map load»). Confirmed behavior, so they
     /// are reported as data, not as refusals.
     load_trimmed: Vec<usize>,
@@ -142,7 +142,7 @@ pub struct Simulation {
 }
 
 /// One creature's completed confirmed orders, counted from the movement
-/// events (docs/k1/creatures.md, "Goal reach"): an order counts when the
+/// events (docs/research/k1/creatures/placement.md, "Goal reach"): an order counts when the
 /// creature arrived on the very cell the rules commanded, and only targets
 /// the rules were confirmed for are counted.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -176,7 +176,7 @@ impl Simulation {
 
         let roster = creatures::roster(state, map_number, hero);
         let labels = creatures::labels(&roster, texts);
-        // The confirmed load-time rule (docs/k1/creatures.md, «Roaming squad
+        // The confirmed load-time rule (docs/research/k1/creatures/placement.md, «Roaming squad
         // placement on map load»): the game never leaves a roaming squad at
         // the cells its records carry — every member is re-placed near the
         // spawn area's centre, and the squad is trimmed where the area runs
@@ -214,7 +214,7 @@ impl Simulation {
             }
         }
 
-        // The "the creature entered the world" event (docs/k1/creatures.md,
+        // The "the creature entered the world" event (docs/research/k1/creatures/animation.md,
         // our divergence for #38): every state-4 record starts its special at
         // frame 0. The temporary trigger is this call site, not the original's
         // AI-released hold of frame 0 (which needs #38's decision slot).
@@ -251,7 +251,7 @@ impl Simulation {
     /// `Creature.id` and the reason; never dropped silently. After the
     /// load-time re-placement a refusal can only be the record's own fact —
     /// the file stands it in blocked foot data or in a cell another record
-    /// holds — so the consumer reports it as data (docs/k1/creatures.md,
+    /// holds — so the consumer reports it as data (docs/research/k1/creatures/placement.md,
     /// "Load-time refusals"), while the shipped tests hold the exact list
     /// against the regressions a data fact can never excuse.
     pub fn spawn_failures(&self) -> &[(usize, WorldError)] {
@@ -311,7 +311,7 @@ impl Simulation {
     /// — and reported through [`Self::spawn_failures`] next to it. A creature
     /// the load trimmed ([`Self::load_trimmed`]) is absent: the original
     /// shrank `GroupSize`, so it is out of the game and stands nowhere — the
-    /// renderer must not build a node for it (docs/k1/creatures.md, «Roaming
+    /// renderer must not build a node for it (docs/research/k1/creatures/placement.md, «Roaming
     /// squad placement on map load»).
     pub fn initial_pixels(&self) -> Vec<(usize, (i32, i32))> {
         self.roster
@@ -388,7 +388,7 @@ impl Simulation {
             .collect();
         // Through the cooldown: the rules re-decide every tick and may pick a
         // fresh cell, so a creature with an unreachable goal would otherwise
-        // pay a search per tick (docs/rust.md, "Decision: repathing without
+        // pay a search per tick (docs/development/rust/movement.md, "Decision: repathing without
         // thrash"). The outcomes are never dropped: "no route" is the rules'
         // normal verdict, every other rejection is a bug or bad data.
         let applied = self.cooldown.apply(&mut self.world, &pairs);
@@ -567,7 +567,7 @@ impl Simulation {
 // `k1_game::rules::villager_decision` (the dynamic workplace, the static-work
 // neighbour, and the pick band of `walk_target`). A roaming monster's only
 // `MoveTo` is `monster_return`, whose target lies inside the spawn interior
-// but earns no counter (docs/k1/creatures.md, "Goal reach"). Anything else an
+// but earns no counter (docs/research/k1/creatures/placement.md, "Goal reach"). Anything else an
 // order aimed at — a cell no confirmed villager rule sends to — earns none.
 
 /// Which confirmed counter a completed order earns, if any.
@@ -585,7 +585,7 @@ enum GoalField {
 /// [`stands_on_workplace`], else a cell inside the spawn interior via
 /// [`inside_spawn_interior`]. A roaming monster's `monster_return` targets the
 /// interior, so the gate is what stops its return home from being counted as
-/// a walk (docs/k1/creatures.md, "Goal reach").
+/// a walk (docs/research/k1/creatures/placement.md, "Goal reach").
 fn goal_reach_field(
     creature: &Creature,
     jobs: &[Workplace],
@@ -658,7 +658,7 @@ mod tests {
     /// Routes gate movement on exactly the confirmed foot rule and nothing more.
     ///
     /// A cell is impassable iff the low nibble of its `foot` byte is `0xF`
-    /// (docs/k1/formats/map.md, `is_blocked`). No road, terrain or other modifier
+    /// (docs/research/k1/formats/map.md, `is_blocked`). No road, terrain or other modifier
     /// belongs here unless it is confirmed — the original's route *preference* for
     /// roads (if any) is unconfirmed and must not be invented (review #68). This
     /// locks `MapPassage` to `!is_blocked` so a future unconfirmed rule fails here.
@@ -1267,7 +1267,7 @@ mod tests {
     const OTHER_SEED: u64 = 99;
 
     /// Stepping one full cycle of the real simulation reproduces the interval trace
-    /// `docs/k1/time-of-day.md` records: the ground window opens at 8100 and closes at
+    /// `docs/research/k1/time.md` records: the ground window opens at 8100 and closes at
     /// 18900, and each ramp leaves the value it comes from on the tick whose integer
     /// half first turns non-zero — warm at 1802, neutral at 3593, dark at 5402 —
     /// while window 13's ramp reaches `(0, 0, 0)` at 19020.

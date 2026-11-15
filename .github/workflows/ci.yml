@@ -60,7 +60,7 @@ jobs:
   # The PR build gate: full compile and link of both apps in dev-runtime, the
   # profile every local session runs (`just viewer`, `just game`). On Linux —
   # the same profile measured 1.4× faster here than on windows-latest
-  # (14m50s vs 21m1s cold; docs/rust.md, "Build profiles"). --timings
+  # (14m50s vs 21m1s cold; docs/development/building.md, "Build profiles"). --timings
   # publishes cargo-timing.html as a workflow artifact of every run.
   build:
     runs-on: ubuntu-latest

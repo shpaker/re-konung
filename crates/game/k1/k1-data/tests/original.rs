@@ -30,8 +30,8 @@ fn serialize_returns_every_map_byte_for_byte() {
 
 #[test]
 fn foot_has_only_four_values() {
-    // Правило Slavik «младшие 4 бита = 0xF» и его версия с ошибкой приоритета
-    // («младший бит», docs/k1/formats/map.md) на этих значениях совпадают
+    // Slavik's low-bit precedence bug matches the intended low-nibble rule on these values.
+    // See docs/research/k1/formats/map.md.
     for (edition, game) in game_dirs() {
         for number in game.map_numbers(GAME_FILES).unwrap() {
             let konung_map = map::parse(&game.map_bytes(number, GAME_FILES).unwrap()).unwrap();

@@ -1,5 +1,5 @@
-//! GRAPH.RES — палитры, курсоры, тайлы земли и спрайты персонажей
-//! (docs/k1/formats/graph-res.md, эталон — `konung/k1/graph_res.py`).
+//! GRAPH.RES color bank and sprite blocks; offsets and block sizes are format-specific.
+//! Reference: `konung/k1/graph_res.py`; docs/research/k1/formats/graph-res.md.
 
 use thiserror::Error;
 

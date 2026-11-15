@@ -16,6 +16,65 @@ pub enum Text {
     /// The game's own name in its release spelling per language.
     Title,
     NewGame,
+    /// The hero selection screen's heading.
+    HeroTitle,
+    /// The character constructor's occupation section, and the four
+    /// occupations.
+    HeroClass,
+    /// The two specialization groups of the constructor.
+    HeroSpec,
+    HeroSecondary,
+    ClassWarrior,
+    ClassHunter,
+    ClassMerchant,
+    ClassChief,
+    /// A hero button when the game data carries no name for it (no texts, an
+    /// unnamed record, no game at all); `n` is the 1-based row, not the
+    /// `Game.N` number.
+    HeroSlot(usize),
+    /// Leaving the hero selection back to the main menu.
+    Back,
+    /// Starting a session with the hero the screen previews.
+    Start,
+    /// The hero-select detail panel's section headings.
+    HeroAttributes,
+    HeroSkills,
+    HeroOther,
+    /// The detail panel's row labels, the original's menu vocabulary
+    /// (base attributes, the seven skills, the remaining record facts).
+    LabelAgility,
+    LabelCharisma,
+    LabelStrength,
+    LabelEndurance,
+    LabelHealth,
+    LabelCarrying,
+    LabelMaxParty,
+    LabelFencing,
+    LabelTrading,
+    LabelAccuracy,
+    LabelCarpentry,
+    LabelMedicine,
+    LabelIdentification,
+    LabelSmithery,
+    LabelLevel,
+    LabelExperience,
+    LabelGold,
+    LabelFreePoints,
+    AllocationHelp,
+    Increase,
+    Decrease,
+    AttributeMinimum,
+    AttributeMaximum,
+    InsufficientPoints,
+    ClassResetHelp,
+    AllocationReset,
+    UnspentPointsHelp,
+    Baseline,
+    ChooseHero,
+    ChooseClass,
+    RequiredChoices,
+    Reset,
+
     Settings,
     Exit,
     Loading,
@@ -44,6 +103,206 @@ pub fn t(language: Language, text: Text) -> &'static str {
         Text::NewGame => match language {
             Language::Russian => "Новая игра",
             Language::English => "New game",
+        },
+        Text::HeroTitle => match language {
+            Language::Russian => "Выбор героя",
+            Language::English => "Choose your hero",
+        },
+        Text::HeroClass => match language {
+            Language::Russian => "Класс",
+            Language::English => "Class",
+        },
+        Text::HeroSpec => match language {
+            Language::Russian => "Боевой стиль",
+            Language::English => "Combat style",
+        },
+        Text::HeroSecondary => match language {
+            Language::Russian => "Вторичные навыки",
+            Language::English => "Secondary skills",
+        },
+        Text::ClassWarrior => match language {
+            Language::Russian => "Воин",
+            Language::English => "Warrior",
+        },
+        Text::ClassHunter => match language {
+            Language::Russian => "Охотник",
+            Language::English => "Hunter",
+        },
+        Text::ClassMerchant => match language {
+            Language::Russian => "Купец",
+            Language::English => "Merchant",
+        },
+        Text::ClassChief => match language {
+            Language::Russian => "Вождь",
+            Language::English => "Chief",
+        },
+        Text::HeroSlot(n) => match language {
+            Language::Russian => match n {
+                1 => "Герой 1",
+                2 => "Герой 2",
+                3 => "Герой 3",
+                _ => "Герой",
+            },
+            Language::English => match n {
+                1 => "Hero 1",
+                2 => "Hero 2",
+                3 => "Hero 3",
+                _ => "Hero",
+            },
+        },
+        Text::Back => match language {
+            Language::Russian => "Назад",
+            Language::English => "Back",
+        },
+        Text::Start => match language {
+            Language::Russian => "Начать",
+            Language::English => "Start",
+        },
+        Text::HeroAttributes => match language {
+            Language::Russian => "Характеристики",
+            Language::English => "Attributes",
+        },
+        Text::HeroSkills => match language {
+            Language::Russian => "Навыки",
+            Language::English => "Skills",
+        },
+        Text::HeroOther => match language {
+            Language::Russian => "Прочее",
+            Language::English => "Other",
+        },
+        Text::LabelAgility => match language {
+            Language::Russian => "Ловкость",
+            Language::English => "Agility",
+        },
+        Text::LabelCharisma => match language {
+            Language::Russian => "Харизма",
+            Language::English => "Charisma",
+        },
+        Text::LabelStrength => match language {
+            Language::Russian => "Сила",
+            Language::English => "Strength",
+        },
+        Text::LabelEndurance => match language {
+            Language::Russian => "Выносливость",
+            Language::English => "Endurance",
+        },
+        Text::LabelHealth => match language {
+            Language::Russian => "Здоровье",
+            Language::English => "Health",
+        },
+        Text::LabelCarrying => match language {
+            Language::Russian => "Носимый вес",
+            Language::English => "Carry limit",
+        },
+        Text::LabelMaxParty => match language {
+            Language::Russian => "Макс. отряд",
+            Language::English => "Max party",
+        },
+        Text::LabelFencing => match language {
+            Language::Russian => "Фехтование",
+            Language::English => "Fencing",
+        },
+        Text::LabelTrading => match language {
+            Language::Russian => "Торговля",
+            Language::English => "Trading",
+        },
+        Text::LabelAccuracy => match language {
+            Language::Russian => "Меткость",
+            Language::English => "Accuracy",
+        },
+        Text::LabelCarpentry => match language {
+            Language::Russian => "Плотницкое дело",
+            Language::English => "Carpentry",
+        },
+        Text::LabelMedicine => match language {
+            Language::Russian => "Медицина",
+            Language::English => "Medicine",
+        },
+        Text::LabelIdentification => match language {
+            Language::Russian => "Опознание",
+            Language::English => "Identification",
+        },
+        Text::LabelSmithery => match language {
+            Language::Russian => "Кузнечное дело",
+            Language::English => "Smithery",
+        },
+        Text::LabelLevel => match language {
+            Language::Russian => "Уровень",
+            Language::English => "Level",
+        },
+        Text::LabelExperience => match language {
+            Language::Russian => "Опыт",
+            Language::English => "Experience",
+        },
+        Text::LabelGold => match language {
+            Language::Russian => "Золото",
+            Language::English => "Gold",
+        },
+        Text::LabelFreePoints => match language {
+            Language::Russian => "Свободные очки",
+            Language::English => "Free points",
+        },
+        Text::AllocationHelp => match language {
+            Language::Russian => {
+                "Каждое нажатие изменяет характеристику на 1. Стоимость зависит от текущего значения."
+            }
+            Language::English => {
+                "Each click changes an attribute by 1. The cost depends on its current value."
+            }
+        },
+        Text::Increase => match language {
+            Language::Russian => "Повысить",
+            Language::English => "Increase",
+        },
+        Text::Decrease => match language {
+            Language::Russian => "Понизить",
+            Language::English => "Decrease",
+        },
+        Text::AttributeMinimum => match language {
+            Language::Russian => "Минимум характеристики",
+            Language::English => "Attribute minimum",
+        },
+        Text::AttributeMaximum => match language {
+            Language::Russian => "Максимум характеристики",
+            Language::English => "Attribute maximum",
+        },
+        Text::InsufficientPoints => match language {
+            Language::Russian => "Не хватает очков",
+            Language::English => "Not enough points",
+        },
+        Text::ClassResetHelp => match language {
+            Language::Russian => {
+                "Смена класса сбрасывает распределение к параметрам нового класса."
+            }
+            Language::English => "Changing class resets allocation to the new class defaults.",
+        },
+        Text::AllocationReset => match language {
+            Language::Russian => "Распределение сброшено к параметрам класса.",
+            Language::English => "Allocation reset to class defaults.",
+        },
+        Text::UnspentPointsHelp => match language {
+            Language::Russian => "Неиспользованные очки сохранятся в игре.",
+            Language::English => "Unspent points carry into the game.",
+        },
+        Text::Baseline => match language {
+            Language::Russian => "Исходное",
+            Language::English => "Default",
+        },
+        Text::ChooseHero => match language {
+            Language::Russian => "Выберите персонажа",
+            Language::English => "Choose a character",
+        },
+        Text::ChooseClass => match language {
+            Language::Russian => "Выберите класс",
+            Language::English => "Choose a class",
+        },
+        Text::RequiredChoices => match language {
+            Language::Russian => "Выберите",
+            Language::English => "Choose",
+        },
+        Text::Reset => match language {
+            Language::Russian => "Сбросить",
+            Language::English => "Reset",
         },
         Text::Settings => match language {
             Language::Russian => "Настройки",
@@ -101,6 +360,19 @@ pub fn t(language: Language, text: Text) -> &'static str {
     }
 }
 
+/// Localized point counts, including Russian singular and plural forms.
+pub fn points(language: Language, count: i32) -> String {
+    let noun = match language {
+        Language::English if count == 1 => "point",
+        Language::English => "points",
+        Language::Russian if (11..=14).contains(&(count % 100)) => "очков",
+        Language::Russian if count % 10 == 1 => "очко",
+        Language::Russian if (2..=4).contains(&(count % 10)) => "очка",
+        Language::Russian => "очков",
+    };
+    format!("{count} {noun}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +383,51 @@ mod tests {
         let mut keys = vec![
             Text::Title,
             Text::NewGame,
+            Text::HeroTitle,
+            Text::HeroClass,
+            Text::HeroSpec,
+            Text::HeroSecondary,
+            Text::ClassWarrior,
+            Text::ClassHunter,
+            Text::ClassMerchant,
+            Text::ClassChief,
+            Text::Back,
+            Text::Start,
+            Text::HeroAttributes,
+            Text::HeroSkills,
+            Text::HeroOther,
+            Text::LabelAgility,
+            Text::LabelCharisma,
+            Text::LabelStrength,
+            Text::LabelEndurance,
+            Text::LabelHealth,
+            Text::LabelCarrying,
+            Text::LabelMaxParty,
+            Text::LabelFencing,
+            Text::LabelTrading,
+            Text::LabelAccuracy,
+            Text::LabelCarpentry,
+            Text::LabelMedicine,
+            Text::LabelIdentification,
+            Text::LabelSmithery,
+            Text::LabelLevel,
+            Text::LabelExperience,
+            Text::LabelGold,
+            Text::LabelFreePoints,
+            Text::AllocationHelp,
+            Text::Increase,
+            Text::Decrease,
+            Text::AttributeMinimum,
+            Text::AttributeMaximum,
+            Text::InsufficientPoints,
+            Text::ClassResetHelp,
+            Text::AllocationReset,
+            Text::UnspentPointsHelp,
+            Text::Baseline,
+            Text::ChooseHero,
+            Text::ChooseClass,
+            Text::RequiredChoices,
+            Text::Reset,
             Text::Settings,
             Text::Exit,
             Text::Loading,
@@ -122,6 +439,7 @@ mod tests {
             Text::Save,
             Text::Cancel,
         ];
+        keys.extend([1, 2, 3, 4].map(Text::HeroSlot));
         keys.extend(
             [
                 SessionError::Map,
@@ -151,6 +469,11 @@ mod tests {
     fn the_two_languages_actually_differ() {
         for key in [
             Text::NewGame,
+            Text::Start,
+            Text::ClassWarrior,
+            Text::ClassHunter,
+            Text::ClassMerchant,
+            Text::ClassChief,
             Text::Settings,
             Text::Exit,
             Text::Fullscreen,

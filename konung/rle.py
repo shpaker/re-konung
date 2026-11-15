@@ -1,10 +1,6 @@
-"""Построчное RLE-сжатие спрайтов (docs/k1/formats/rle.md).
+"""Row-based sprite RLE, with transparent skips and kind-dependent pixel payloads.
 
-Заголовок: ширина s16, высота s16, длины строк s16 × высота.
-Строка — последовательность команд, байт n:
-- 0 — конец строки;
-- n & 0x80 — пропустить n & 0x7F прозрачных пикселей;
-- иначе — n пикселей следом (байт индекса палитры или u16 RGB555 — зависит от вида).
+Format contract: docs/research/k1/formats/rle.md.
 """
 
 from dataclasses import dataclass

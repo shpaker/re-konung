@@ -1,9 +1,6 @@
-"""Кадр персонажа на карте: модель или монстр, снаряжение, тень (docs/k1/formats/graph-res.md).
+"""Character frames from base/dynamic sprites, equipment and shadows.
 
-Воин — модель GRAPH.RES по Character.sprite_set с его палитрой, поверх неё —
-наборы снаряжения надетых предметов в порядке слотов для его направления.
-Монстры, женщины и дети — динамический объект OBJECTS.RES с тем же номером,
-без снаряжения.
+Format contract: docs/research/k1/formats/graph-res.md.
 """
 
 from dataclasses import dataclass
@@ -20,7 +17,7 @@ COLORS_PER_PALETTE = 256
 DYNAMIC_ANIMATIONS = 6
 
 # Walking is animation 1 of a sprite table: state 1 and state 7 (a weapon in hand)
-# share its frame count: the animation-states table of docs/k1/creatures.md
+# share its frame count: the animation-states table of docs/research/k1/creatures/animation.md
 WALK_ANIMATION = 1
 
 
@@ -77,7 +74,7 @@ def walk_frame_counts(
 ) -> list[int]:
     """Frame counts of the walk animation in all eight directions.
 
-    A step to a neighbouring cell lasts this many ticks (docs/k1/movement.md), so
+    A step to a neighbouring cell lasts this many ticks (docs/research/k1/movement.md), so
     a duration supplier reads it once per creature instead of once per step. A
     creature with no walk frames answers 0 in every direction.
     """

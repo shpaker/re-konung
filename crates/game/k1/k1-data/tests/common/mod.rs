@@ -1,11 +1,5 @@
-//! Общий хелпер тестов на данных игры из `original/` (в git их нет).
-//!
-//! Без распакованного издания тест пропускается: пустой список папок,
-//! аналог pytest.skip в tests/conftest.py. Как получить original/ —
-//! docs/k1/editions.md.
-//!
-//! Если же `original/k1` существует, но ни одно издание не нашлось, тесты
-//! молча прошли бы без работы — в этом случае они падают с объяснением.
+//! Missing originals skip data tests; an existing original/k1 with no discoverable edition is an error.
+//! See docs/research/k1/editions.md.
 
 #![allow(dead_code)] // каждый тестовый бинарь использует не всё
 
@@ -22,7 +16,7 @@ pub fn game_dirs() -> Vec<(&'static str, GameDir)> {
             if game.root().is_dir() {
                 Some((edition, game))
             } else {
-                eprintln!("пропуск: нет original/k1/{edition}/game (docs/k1/editions.md)");
+                eprintln!("пропуск: нет original/k1/{edition}/game (docs/research/k1/editions.md)");
                 None
             }
         })
@@ -30,7 +24,7 @@ pub fn game_dirs() -> Vec<(&'static str, GameDir)> {
     assert!(
         !root.is_dir() || !dirs.is_empty(),
         "{} существует, но ни одного издания с папкой game/ в нём нет: \
-         тесты на данных не выполнились бы. Как распаковать — docs/k1/editions.md",
+         тесты на данных не выполнились бы. Как распаковать — docs/research/k1/editions.md",
         root.display()
     );
     dirs

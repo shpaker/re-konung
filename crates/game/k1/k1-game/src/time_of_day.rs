@@ -1,6 +1,6 @@
 //! K1 time-of-day model: the thirteen windows of a 21600-tick cycle.
 //!
-//! Evidence base: `docs/k1/time-of-day.md`. The cycle is the simulation's own tick
+//! Evidence base: `docs/research/k1/lighting.md`. The cycle is the simulation's own tick
 //! modulo 21600; no independent clock exists here.
 //!
 //! The model reports the ambient triple the original's light routine builds for a
@@ -118,7 +118,7 @@ fn half(t: f32) -> f32 {
 ///
 /// Every branch — the ramp condition, the halving and the returned triple — mirrors
 /// a branch of the original's light routine as recorded, per build, in
-/// `docs/k1/time-of-day.md`. The ramp value `u` is the integer half of the distance
+/// `docs/research/k1/time.md`. The ramp value `u` is the integer half of the distance
 /// from the window's start; the channels that the routine scales by the pool
 /// constants (`{0.4, 0.2, 1/3, 10.0, 0.66, -50.0, 0.5988, -60.0}`) are shown as the
 /// unrounded product — the original packs the channels as bytes before the shader
@@ -290,7 +290,7 @@ mod tests {
     /// The observable interval trace of one cycle: every tick at which
     /// `(ambient_kind, ground_window)` changes, and the state each window starts
     /// in. This — not any phase name — is the contract of the model
-    /// (`docs/k1/time-of-day.md`). The ramp ticks come from the original's
+    /// (`docs/research/k1/time.md`). The ramp ticks come from the original's
     /// integer halving: a ramp leaves the value it comes from on the tick whose
     /// integer half first turns non-zero.
     fn observable_transitions() -> Vec<(u64, Ambient, bool)> {
@@ -588,7 +588,7 @@ mod tests {
     /// may not cut the cycle anywhere the intervals do not: if two consecutive
     /// ticks observe the same state, they must read the same word. Which words
     /// the cycle spells is not asserted here — the original names no phase, and
-    /// `docs/k1/time-of-day.md` refuses the four-name trace as a property of the
+    /// `docs/research/k1/time.md` refuses the four-name trace as a property of the
     /// game; `day_phase_labels_the_intervals` pins the words at a few cycle
     /// points as the display rule they are.
     #[test]

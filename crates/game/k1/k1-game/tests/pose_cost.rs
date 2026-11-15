@@ -1,14 +1,14 @@
 //! Measurement of what a creature pose costs to assemble (issue #36, criterion 10).
 //!
 //! An `#[ignore]`d test: it measures in release and prints a table, so it does not
-//! get in the way of an ordinary `cargo test`. The numbers go to `docs/rust.md`.
+//! get in the way of an ordinary `cargo test`. The numbers go to `docs/development/rust/data-scene.md`.
 //!
 //! ```bash
 //! cargo test --release --manifest-path crates/Cargo.toml -p k1-game \
 //!     --test pose_cost -- --ignored --nocapture
 //! ```
 //!
-//! Skipped when `original/` is absent (docs/k1/editions.md).
+//! Skipped when `original/` is absent (docs/research/k1/editions.md).
 
 use std::hint::black_box;
 use std::path::PathBuf;

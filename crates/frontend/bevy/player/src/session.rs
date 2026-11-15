@@ -1,5 +1,5 @@
 //! Session build and teardown of the start map: everything between
-//! `MainMenuAction::NewGame` and the `Loading` report the watcher submits.
+//! `HeroSelectAction::Choose` and the `Loading` report the watcher submits.
 //!
 //! [`init`] is the synchronous half of the old startup loader: it requests the
 //! hero's creatures from the shared subsystem, builds the lighting pool and the
@@ -16,12 +16,6 @@ use kn_render::{
     CreatureMotion, CreatureRoot, CreatureSim, FineLightGrid, GameResource, KonungLightMaterial,
     LightingMaterials, MapRoot, PendingFrame, TextureCache, load_scene,
 };
-
-/// Hero for the new game: the start map and the on-map position depend on it.
-#[derive(Resource)]
-pub struct NewGame {
-    pub hero: u32,
-}
 
 /// Present from a successful [`init`] until the watcher reports the session's
 /// outcome; nothing else builds a session while it is in the world.
@@ -73,17 +67,32 @@ fn request_start_creatures(
     Ok((map_ref, scene))
 }
 
-/// Builds the session: the creature request, the lighting pool, the fine grid
-/// and the scene sprites — all-or-nothing. On success only [`SessionInit`] is
-/// inserted (readiness is the watcher's call, not the builder's); on failure
-/// everything built along the way is torn back down and the kind is returned
-/// for the `Loading` report.
+/// Builds the session of `hero`: the creature request, the lighting pool, the
+/// fine grid and the scene sprites — all-or-nothing. The hero arrives as the
+/// `StartSession` effect's payload (the reducer is where the choice lives); it
+/// decides the start map and the on-map position. On success only
+/// [`SessionInit`] is inserted (readiness is the watcher's call, not the
+/// builder's); on failure everything built along the way is torn back down and
+/// the kind is returned for the `Loading` report.
 ///
 /// A texture that fails to decode fails the whole session: a map drawn with
 /// holes is not a session. The old startup loader only warned and continued —
 /// the all-or-nothing rule of the app plan replaces that.
-pub fn init(world: &mut World) -> Result<(), SessionError> {
-    let hero = world.resource::<NewGame>().hero;
+pub fn init(world: &mut World, hero: u32, draft: kn_app::NewGameDraft) -> Result<(), SessionError> {
+    world
+        .resource_mut::<GameResource>()
+        .0
+        .configure_new_game(
+            hero,
+            draft.class,
+            draft.combat_style,
+            draft.secondary,
+            draft.attributes,
+        )
+        .map_err(|error| {
+            error!("new game configuration failed: {error}");
+            SessionError::Scene
+        })?;
     let (map_ref, scene) = world.resource_scope::<CreatureMotion, _>(|world, mut motion| {
         let game = world.resource::<GameResource>();
         request_start_creatures(&game.0, hero, &mut motion)
@@ -198,6 +207,9 @@ pub fn teardown(world: &mut World) {
     world.remove_resource::<FineLightGrid>();
     world.remove_resource::<LightingMaterials>();
     world.remove_resource::<SessionInit>();
+    if let Some(mut game) = world.get_resource_mut::<GameResource>() {
+        game.0.clear_new_game();
+    }
 }
 
 /// The LIGHTS.RES tile masks of the opened game: raw brightness bytes with

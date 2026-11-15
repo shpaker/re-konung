@@ -1,7 +1,6 @@
-"""Тесты на реальных файлах игры: оригиналы лежат в original/ (в git их нет).
+"""Local game-data tests skip without originals; synthetic tests always run.
 
-Без них тесты на данных пропускаются, синтетические идут всегда.
-Как получить original/ — docs/k1/editions.md.
+Preparation: docs/guides/game-files.md.
 """
 
 from pathlib import Path
@@ -14,7 +13,9 @@ K1 = ROOT / "original" / "k1"
 
 def _need(path: Path) -> Path:
     if not path.exists():
-        pytest.skip(f"нет {path.relative_to(ROOT)}: распакуйте оригинал (docs/k1/editions.md)")
+        pytest.skip(
+            f"нет {path.relative_to(ROOT)}: распакуйте оригинал (docs/research/k1/editions.md)"
+        )
     return path
 
 

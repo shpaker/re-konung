@@ -1,8 +1,5 @@
-//! OBJECTS.RES — объекты карты: 30 динамических и 482 простых
-//! (docs/k1/formats/objects-res.md, эталон — `konung/k1/objects_res.py`).
-//!
-//! Простой объект — до 8 кадров (картинка + тень) со смещениями и точками огней.
-//! Динамический объект — монстр: анимации по 8 направлениям, как спрайт персонажа.
+//! OBJECTS.RES simple/dynamic sprite blocks, offsets and flame points.
+//! Reference: `konung/k1/objects_res.py`; docs/research/k1/formats/objects-res.md.
 
 use thiserror::Error;
 

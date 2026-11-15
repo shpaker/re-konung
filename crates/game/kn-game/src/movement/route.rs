@@ -6,7 +6,7 @@
 //!
 //! The route comes from an off-the-shelf A\* (`pathfinding::astar`); the
 //! original's algorithm is not ported and we have no 32-step limit — a
-//! deliberate departure from the original (docs/rust.md, "Decision: routes
+//! deliberate departure from the original (docs/development/rust/movement.md, "Decision: routes
 //! without the 32-step limit").
 
 use std::collections::HashSet;
@@ -189,7 +189,7 @@ pub fn find_route<P: Passage>(request: &RouteRequest<'_, P>, rng: &mut Rng) -> O
     // Rings apply only to a goal that cannot be entered: taken or impassable. A
     // free but unreachable goal stays unreachable — otherwise the creature
     // would stand beside it and report `Arrived` instead of `NoRoute`
-    // (docs/rust.md, "Decision: an occupied goal takes the nearest ring").
+    // (docs/development/rust/movement.md, "Decision: an occupied goal takes the nearest ring").
     let rings = if request.enterable(request.goal) {
         0
     } else {
@@ -222,7 +222,7 @@ fn astar_to<P: Passage>(
     let from = request.from;
     // One goal cell: the estimate is exactly to it. A ring of several cells:
     // the estimate is to the ring's centre minus the ring's longest offset,
-    // or it would overestimate the way to the farthest cell (docs/rust.md,
+    // or it would overestimate the way to the farthest cell (docs/development/rust/movement.md,
     // "Decision: step cost and the A* heuristic").
     let anchor = if candidates.len() == 1 {
         candidates[0]
@@ -540,7 +540,7 @@ mod tests {
         // The goal is walkable and free, but all eight neighbours are wall: it
         // cannot be entered, and a neighbouring cell in its place is not the
         // answer to "go to the goal" — it is a substituted goal. The rings
-        // apply only to a taken or impassable goal (docs/rust.md, "Decision: an
+        // apply only to a taken or impassable goal (docs/development/rust/movement.md, "Decision: an
         // occupied goal takes the nearest ring"); here there is no answer.
         let grid = Grid::new(24, 24);
         let mut map = Map::default();

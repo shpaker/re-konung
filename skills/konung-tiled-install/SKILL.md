@@ -77,4 +77,5 @@ description: >
 
    Если похоже на новый баг Tiled или tiled-mcp — сказать, что не так и как воспроизвести, со ссылкой на репозиторий; не обходить молча.
 
-Как карта раскладывается по слоям и что можно править — `docs/k1/tiled.md` в корне плагина.
+Usage and editable fields: `docs/guides/tiled.md` in the plugin root.
+Layer/property contracts and byte-exact checks: `docs/development/tiled.md`.

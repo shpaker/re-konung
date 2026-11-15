@@ -147,7 +147,7 @@ def test_every_character_on_every_map_is_drawn(k1_game, k1_file):
 
 
 # Frames of the walk animation per direction, measured over both editions; the
-# table and its meaning — docs/k1/movement.md, "Step duration".
+# table and its meaning — docs/research/k1/movement.md, "Step duration".
 WALK_FRAMES = [12] * 8
 SPECIAL_DYNAMIC = {
     3: [0, 0, 0, 0, 0, 0, 0, 0],

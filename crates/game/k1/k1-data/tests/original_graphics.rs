@@ -93,9 +93,8 @@ fn character_sprites_end_with_their_blocks() {
     }
 }
 
-/// Анимации 6–9 — те же 0–3 без оружия в руках (бит 0x04 байта 0x03): у каждого
-/// блока спрайтов кадры пар состояний совпадают числом, а блоков ровно десять.
-/// Подтверждение гипотезы — docs/k1/formats/graph-res.md, docs/k1/creatures.md.
+/// Paired weapon-state animations must have matching counts in every sprite block.
+/// See docs/research/k1/formats/graph-res.md.
 #[test]
 fn animations_six_to_nine_mirror_zero_to_three() {
     for (edition, game) in game_dirs() {
@@ -232,7 +231,8 @@ fn text_tables_are_found_and_shaped() {
             "{edition}: прозвища"
         );
         assert_eq!(texts.maps.len(), executable::MAP_NAMES, "{edition}: карты");
-        // У монстров заполнены первые 20 записей, хвост пуст (docs/k1/formats/executable.md)
+        // Only the first 20 monster-name records are filled; the tail is empty.
+        // See docs/research/k1/formats/executable.md.
         assert!(
             texts.monsters[..20].iter().all(|name| !name.is_empty()),
             "{edition}: названия монстров"
@@ -255,6 +255,16 @@ fn text_tables_are_found_and_shaped() {
         assert!(
             texts.maps.iter().all(|map| !map.is_empty()),
             "{edition}: карты"
+        );
+        assert_eq!(
+            texts.newgame.len(),
+            executable::NEWGAME_TEXTS,
+            "{edition}: строки меню новой игры"
+        );
+        // Первые три — описания героев, последние — подсказки по наведению
+        assert!(
+            texts.newgame.iter().all(|text| !text.is_empty()),
+            "{edition}: все 20 строк заполнены"
         );
         // Без таблиц разбор exe не падает: их отсутствие — None, а не ошибка
         assert!(

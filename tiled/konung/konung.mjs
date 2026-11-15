@@ -1,9 +1,5 @@
-// Расширение Tiled: открывает оригинальные карты «Князя» (Konung.N) как обычные
-// карты Tiled и сохраняет их обратно. Меняются тайлы, декорации, объекты и
-// проходимость карты, её свет в LIGHTS.N, а в Game.N рядом с картой — персонажи,
-// отряды, клады и переходы этой карты; GRAPH.RES, Objects.res, LIGHTS.RES и exe
-// лишь читаются. Карты обучения Tutorial.N берут свет из TLights.N и состояние
-// из TGame.N (k1.fileSet). Слои — docs/k1/tiled.md.
+// Original map/state editing uses the Tiled extension; graphics remain read-only.
+// See docs/development/tiled.md.
 
 import * as k1 from "./lib/k1.mjs";
 
@@ -25,8 +21,8 @@ const FOOT_MASKS = 16;
 // Свет — тот же цвет, что в `konung k1 map --lights`
 const LIGHT_COLOR = 0xffd278;
 
-// Значения полей для декораций и объектов, поставленных в Tiled: самые частые
-// в картах дистрибутива (docs/k1/formats/map.md)
+// New record defaults use the most common observed map bytes.
+// See docs/research/k1/formats/map.md.
 const NEW_DECORATION_UNKNOWN = "0016000000000000";
 const NEW_OBJECT = {
     unknown: "00000000",
@@ -477,7 +473,8 @@ function checksum(buffer) {
     return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-// Каждый Game.N (TGame.N у обучения) — группа слоёв game.K; видна первая. docs/k1/tiled.md
+// Each Game.N/TGame.N has a game.K layer group; the first is visible.
+// See docs/development/tiled.md.
 function addGameStates(map, directory, number, graph, files) {
     const states = gameFiles(directory, files);
     if (!states.length)
@@ -666,9 +663,8 @@ function buildGameGroup(map, state, hero, number, graph, dynamicSprites, tables)
     return group;
 }
 
-// Огни объектов: тайлсет flames — тайл на каждый кадр FLAMES.RES, у первого кадра
-// каждого вида анимация по тику; слой flames над объектами выводится из них
-// и при сохранении не читается (docs/k1/tiled.md)
+// Flame tiles animate over their objects; the derived layer is not read when saving.
+// See docs/development/tiled.md.
 function addFlames(map, directory, objects, placed) {
     const frames = loadFlames(directory);
     const animations = loadTables(directory).flameAnimations;
@@ -874,7 +870,8 @@ function integerProperty(object, name, fallback, min, max) {
 
 const DIRECTION_MAX = 7;
 const U8_MAX = 0xff, S16_MIN = -0x8000, S16_MAX = 0x7fff, S32_MIN = -0x80000000, S32_MAX = 0x7fffffff;
-// Номера имени и прозвища — записи таблиц exe (docs/k1/formats/executable.md)
+// Name/nickname limits follow the EXE table sizes.
+// See docs/research/k1/formats/executable.md.
 const NAME_ID_MAX = 170, NICK_ID_MAX = 20;
 
 // Классы, которые разбирает код: без бита 0x80 («мёртв»); у людей род занятий

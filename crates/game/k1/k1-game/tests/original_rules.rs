@@ -1,5 +1,5 @@
 //! The villager and monster rules over the real rosters of both editions
-//! (skipped when `original/` is absent — docs/k1/editions.md).
+//! (skipped when `original/` is absent — docs/research/k1/editions.md).
 //!
 //! Criteria 3 and 4 of #36 on shipped data: the same seed must decide the
 //! same way twice, every order a creature gets must land strictly inside its
@@ -29,7 +29,7 @@ fn game_dirs() -> Vec<(&'static str, GameDir)> {
             if game.root().is_dir() {
                 Some((edition, game))
             } else {
-                eprintln!("skipping: no original/k1/{edition}/game (docs/k1/editions.md)");
+                eprintln!("skipping: no original/k1/{edition}/game (docs/research/k1/editions.md)");
                 None
             }
         })
@@ -37,7 +37,7 @@ fn game_dirs() -> Vec<(&'static str, GameDir)> {
     assert!(
         !root.is_dir() || !dirs.is_empty(),
         "{} exists but holds no edition with a game/ folder: the tests on data would \
-         not have run. How to unpack one — docs/k1/editions.md",
+         not have run. How to unpack one — docs/research/k1/editions.md",
         root.display()
     );
     dirs
@@ -240,7 +240,7 @@ fn rules_hold_their_invariants_on_every_map_of_both_editions() {
                     // can hold a state: the file's `ai_state` is 0x80 for
                     // every squad in `Game.0`–`Game.2` and no rule reads it,
                     // so these states are recomputed from positions alone
-                    // (docs/k1/creatures.md).
+                    // (docs/research/k1/creatures/behavior.md).
                     match rules::classify(creature) {
                         CreatureType::RoamingMonster => {
                             if squad_state == GroupState::Calm {
@@ -270,7 +270,7 @@ fn rules_hold_their_invariants_on_every_map_of_both_editions() {
 
                 // Job holders that start on their place are turned or left
                 // alone, never sent away: the starting data stands every
-                // holder exactly on its cell (docs/k1/creatures.md).
+                // holder exactly on its cell (docs/research/k1/creatures/placement.md).
                 for job in &jobs {
                     if job.character <= 0 {
                         continue;
@@ -298,7 +298,7 @@ fn rules_hold_their_invariants_on_every_map_of_both_editions() {
                 // The workplace fix in real data: record 0 is the player's
                 // hero and never owns a slot, and every filled slot points
                 // at a villager of this map's village squad
-                // (docs/k1/creatures.md).
+                // (docs/research/k1/creatures/behavior.md).
                 for creature in &roster {
                     if creature.group_kind == PLAYER {
                         assert!(
@@ -474,5 +474,70 @@ fn roaming_squads_are_re_placed_on_free_cells_inside_their_areas() {
             "{edition}: no roaming squad was ever re-placed"
         );
         println!("{edition}: {squads} squads, {placed_members} members re-placed");
+    }
+}
+
+/// #121, the decision half of "the world does not reorganize around a marked
+/// hero": over the SAME world content — the same start map, the same occupied
+/// cells (the hero squad's included), the same seed — the rules decide
+/// identically for every NPC whether the player squad joins the roster or
+/// not, and the squad itself earns no decision at all. Both variants see one
+/// ground on purpose: the squad's physical cells DO shift villager walk
+/// draws in a full world (the walk rule's occupancy test over the shared
+/// decision RNG, a documented difference of ours — docs/development/rust/simulation.md, "The
+/// marked hero's footprint"), and that coupling is hero-agnostic. What must
+/// not exist is hero-specific leakage into the decision inputs, which this
+/// comparison would catch.
+#[test]
+fn a_marked_hero_squad_earns_no_decision_and_changes_nobody_elses() {
+    const SEED: u64 = 0x5eed_1211_0000_0042;
+    for (edition, game) in game_dirs() {
+        for (hero, state) in states(&game) {
+            let map_number = game_state::start_map(hero);
+            let map_bytes = game.map_bytes(map_number as u32, GAME_FILES).unwrap();
+            let map = map::parse(&map_bytes).unwrap();
+            let marked_roster = creatures::roster(&state, map_number, Some(hero));
+            let unmarked_roster = creatures::roster(&state, map_number, None);
+            assert!(marked_roster.len() > unmarked_roster.len());
+            // One ground for both variants: the cells of the world the hero
+            // actually stands in — blocked foot plus every file cell of the
+            // marked roster.
+            let ground = foot_ground(&map, &marked_roster);
+            let jobs = creatures::job_slots(&state, map_number);
+            let run_variant = |roster: &[creatures::Creature]| {
+                let live = file_live(roster);
+                let squad_states = rules::group_states(roster, &live);
+                run(roster, &live, &ground, &jobs, &squad_states, SEED)
+            };
+            let marked = run_variant(&marked_roster);
+            let unmarked = run_variant(&unmarked_roster);
+            // The squad joined to stand, not to act: the rules dispatch
+            // neither the player group nor a warrior.
+            for (creature, decision) in marked_roster.iter().zip(&marked) {
+                if creature.group_kind == PLAYER {
+                    assert_eq!(
+                        *decision,
+                        Decision::None,
+                        "{edition} Game.{hero}: squad member {} was given an order",
+                        creature.id
+                    );
+                }
+            }
+            // The NPC decisions line up by record number, stream for stream.
+            let by_id: std::collections::HashMap<usize, Decision> = marked_roster
+                .iter()
+                .zip(&marked)
+                .map(|(creature, decision)| (creature.id, *decision))
+                .collect();
+            for (creature, decision) in unmarked_roster.iter().zip(&unmarked) {
+                assert_eq!(
+                    by_id.get(&creature.id).expect("NPC lost between rosters"),
+                    decision,
+                    "{edition} Game.{hero}: NPC {} decided differently because of \
+                     the marked squad",
+                    creature.id
+                );
+            }
+        }
     }
 }
