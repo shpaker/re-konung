@@ -14,7 +14,7 @@ use bevy::{
         theme::{InheritableThemeTextColor, ThemeBackgroundColor},
         tokens,
     },
-    input_focus::InputFocus,
+    input_focus::{InputFocus, InputFocusVisible},
     picking::{events::PointerScroll, hover::Hovered},
     prelude::*,
     text::EditableText,
@@ -109,6 +109,10 @@ pub(crate) fn install(app: &mut App) {
                 sync_speed,
                 publish_viewport.before(kn_render::CameraApply),
             ),
+        )
+        .add_systems(
+            PostUpdate,
+            reveal_display_focus.after(bevy::ui::UiSystems::PostLayout),
         )
         .add_systems(
             PostUpdate,
@@ -251,8 +255,8 @@ fn setup(mut commands: Commands, viewer: Res<Viewer>, fonts: Res<kn_ui::KonungFo
                 ]
             ]
             --
-            Node { position_type: PositionType::Absolute, top: px(48), left: px(330), padding: UiRect::all(PANEL_PADDING), display: Display::None, flex_direction: FlexDirection::Column, row_gap: SPACE_4 }
-            Hovered ThemeBackgroundColor(tokens::WINDOW_BG) DisplayDetails
+            Node { position_type: PositionType::Absolute, top: px(48), left: px(330), max_height: percent(65), padding: UiRect::all(PANEL_PADDING), display: Display::None, flex_direction: FlexDirection::Column, row_gap: SPACE_4, overflow: Overflow::scroll_y() }
+            Hovered ScrollPosition::default() on(scroll) ThemeBackgroundColor(tokens::WINDOW_BG) DisplayDetails
             Children[
                 @caption("SCENE")
                 TextFont { font: bevy::text::FontSourceTemplate::Handle({fonts.regular.clone()}), font_size: kn_ui::typo::BODY }
@@ -413,6 +417,72 @@ fn scroll(
         event.propagate(false);
     }
 }
+fn reveal_display_focus(
+    focus: Res<InputFocus>,
+    visible: Res<InputFocusVisible>,
+    control: Option<Res<crate::control::ControlServer>>,
+    mut last_focus: Local<Option<Entity>>,
+    parents: Query<&ChildOf>,
+    nodes: Query<(&ComputedNode, &UiGlobalTransform)>,
+    mut display: Query<
+        (
+            Entity,
+            &ComputedNode,
+            &UiGlobalTransform,
+            &mut ScrollPosition,
+        ),
+        With<DisplayDetails>,
+    >,
+) {
+    if capturing(&control) {
+        return;
+    }
+    let focused = focus.get();
+    if *last_focus == focused {
+        return;
+    }
+    *last_focus = focused;
+    if !visible.0 {
+        return;
+    }
+    let Some(target) = focused else {
+        return;
+    };
+    let Ok((display_entity, viewport, viewport_transform, mut position)) = display.single_mut()
+    else {
+        return;
+    };
+    let mut child = target;
+    while child != display_entity {
+        let Ok(parent) = parents.get(child) else {
+            return;
+        };
+        child = parent.parent();
+    }
+    let Ok((node, transform)) = nodes.get(target) else {
+        return;
+    };
+    if node.size.y <= 0.0 || viewport.size.y <= 0.0 {
+        return;
+    }
+    let target_center = transform.affine().translation.y;
+    let viewport_center = viewport_transform.affine().translation.y;
+    let target_min = target_center - node.size.y / 2.0;
+    let target_max = target_center + node.size.y / 2.0;
+    let viewport_min = viewport_center - viewport.size.y / 2.0;
+    let viewport_max = viewport_center + viewport.size.y / 2.0;
+    let delta = if target_min < viewport_min {
+        target_min - viewport_min
+    } else if target_max > viewport_max {
+        target_max - viewport_max
+    } else {
+        0.0
+    };
+    let scale = viewport.inverse_scale_factor;
+    let maximum = (viewport.content_size.y - viewport.size.y).max(0.0) * scale;
+    position.y = (position.y + delta * scale).clamp(0.0, maximum);
+}
+
 fn sync_inputs(
     map: Query<(Entity, &EditableText), With<MapFilter>>,
     creature: Query<(Entity, &EditableText), With<CreatureFilter>>,
@@ -1135,5 +1205,60 @@ mod layout_tests {
         });
         app.update();
         assert!(app.world().get::<ScrollPosition>(scroll).unwrap().y > 0.0);
+    }
+    #[test]
+    fn keyboard_focus_reveals_bottom_display_control_without_fighting_pointer_scroll() {
+        use bevy::input_focus::{FocusCause, InputFocus, InputFocusVisible};
+        for (width, height) in [(1024, 720), (960, 640)] {
+            let mut app = app(width, height);
+            app.world_mut()
+                .resource_mut::<ViewerWorkspace>()
+                .display_open = true;
+            for _ in 0..4 {
+                app.update();
+            }
+            let display = only::<DisplayDetails>(&mut app);
+            app.world_mut().get_mut::<Node>(display).unwrap().max_height = px(100);
+            for _ in 0..3 {
+                app.update();
+            }
+            let target = app
+                .world_mut()
+                .query::<(Entity, &ToggleAction)>()
+                .iter(app.world())
+                .find(|(_, action)| matches!(action, ToggleAction::Markers))
+                .unwrap()
+                .0;
+            let before = bounds(app.world(), target);
+            let viewport = bounds(app.world(), display);
+            assert!(
+                before.max.y > viewport.max.y,
+                "control must start clipped: {before:?} {viewport:?}"
+            );
+            app.world_mut()
+                .resource_mut::<InputFocus>()
+                .set(target, FocusCause::Navigated);
+            app.world_mut().resource_mut::<InputFocusVisible>().0 = true;
+            for _ in 0..3 {
+                app.update();
+            }
+            let after = bounds(app.world(), target);
+            let viewport = bounds(app.world(), display);
+            assert!(
+                inside(after, viewport),
+                "keyboard focus did not reveal control: {after:?} {viewport:?}"
+            );
+            assert!(app.world().get::<ScrollPosition>(display).unwrap().y > 0.0);
+            app.world_mut()
+                .get_mut::<ScrollPosition>(display)
+                .unwrap()
+                .y = 0.0;
+            app.update();
+            assert_eq!(
+                app.world().get::<ScrollPosition>(display).unwrap().y,
+                0.0,
+                "unchanged focus must not undo pointer scrolling"
+            );
+        }
     }
 }

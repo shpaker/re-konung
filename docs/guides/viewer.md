@@ -104,6 +104,11 @@ action, while camera input and hover remain responsive.
 | `{"type":"capture","path":"out/workspace.png"}` | Save the current workspace and paired `out/workspace.json` |
 | `{"type":"escape"}` | Close disclosures and return to Select |
 
+Window state includes logical dimensions, scale factor, `focused` and `visible`.
+`occluded` is the last observed window-occlusion event, or `null` when no event
+has been observed; these fields do not prove that a capture contains a rendered frame.
+Empty/black readback is rejected before writing either capture file.
+
 `state` distinguishes requested/displayed maps, clock/simulation ticks,
 readiness phase, render acknowledgement frame, selection, mode, visible
 layers, camera, inspector facts and actual rendered animation layers.
@@ -127,7 +132,7 @@ work. An error retains the displayed scene and remains visible in read state.
 Capture holds playback and workspace input until screenshot readback and both
 file writes finish, then restores the previous play state. Its paired JSON
 records the state of the captured render frame, rather than the later frame
-when GPU readback returns. Save failures and readiness timeouts return errors;
+when GPU readback returns. Save failures, empty or entirely black window readback (`capture_failed`), and readiness timeouts return errors;
 a fixed frame count or the existence of a file is not a success condition.
 Captures contain local game-derived pixels and must remain in `out/`.
 

@@ -56,6 +56,53 @@ pub(crate) struct ControlServer {
     requested_tick: Option<u64>,
 }
 
+#[derive(Resource, Default)]
+struct WindowObservations(std::collections::HashMap<Entity, bool>);
+
+pub(crate) fn window_occluded(world: &World, window: Entity) -> Option<bool> {
+    world
+        .get_resource::<WindowObservations>()
+        .and_then(|observations| observations.0.get(&window).copied())
+}
+
+fn observe_windows(
+    mut events: MessageReader<bevy::window::WindowOccluded>,
+    mut observations: ResMut<WindowObservations>,
+) {
+    for event in events.read() {
+        observations.0.insert(event.window, event.occluded);
+    }
+}
+
+fn save_workspace_capture(image: &Image, path: &Path, snapshot: &Value) -> Result<Value, String> {
+    let image = image
+        .clone()
+        .try_into_dynamic()
+        .map_err(|error| error.to_string())?;
+    let black = if let Some(rgba) = image.as_rgba8() {
+        rgba.pixels()
+            .all(|pixel| pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0)
+    } else {
+        image
+            .to_rgb8()
+            .pixels()
+            .all(|pixel| pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0)
+    };
+    if image.width() == 0 || image.height() == 0 || black {
+        return Err(
+            "Window readback is empty or entirely black; no capture files were written".into(),
+        );
+    }
+    image.save(path).map_err(|error| error.to_string())?;
+    let metadata = path.with_extension("json");
+    std::fs::write(
+        &metadata,
+        serde_json::to_vec_pretty(snapshot).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(json!({"image":path,"metadata":metadata}))
+}
+
 impl ControlServer {
     pub(crate) fn capturing(&self) -> bool {
         self.capture.is_some()
@@ -105,6 +152,9 @@ pub(crate) fn install(app: &mut App, path: &Path) -> Result<(), String> {
         .map_err(|error| format!("{}: {error}", path.display()))?;
     file.write_all(session.to_string().as_bytes())
         .map_err(|error| error.to_string())?;
+    app.init_resource::<WindowObservations>()
+        .add_message::<bevy::window::WindowOccluded>()
+        .add_systems(Update, observe_windows.before(poll));
     app.insert_resource(ControlServer {
         listener,
         path: path.to_owned(),
@@ -409,23 +459,8 @@ pub(crate) fn finish(world: &mut World) {
                     {
                         return;
                     }
-                    let result = (|| -> Result<Value, String> {
-                        let image = event
-                            .image
-                            .clone()
-                            .try_into_dynamic()
-                            .map_err(|error| error.to_string())?;
-                        image.save(&path).map_err(|error| error.to_string())?;
-                        let metadata = path.with_extension("json");
-                        std::fs::write(
-                            &metadata,
-                            serde_json::to_vec_pretty(&snapshot)
-                                .map_err(|error| error.to_string())?,
-                        )
-                        .map_err(|error| error.to_string())?;
-                        Ok(json!({"image":path,"metadata":metadata}))
-                    })()
-                    .map_err(|error| format!("Capture failed: {error}"));
+                    let result = save_workspace_capture(&event.image, &path, &snapshot)
+                        .map_err(|error| format!("Capture failed: {error}"));
                     if let Some(capture) = server.capture.take() {
                         viewer.playback = playback_for(capture.playing);
                         let output = response(capture.id, result, capture.state);
@@ -859,5 +894,78 @@ mod tests {
         assert_eq!(receive_response(&mut app, &mut reader)["success"], true);
         assert!(app.world().resource::<ControlServer>().capturing());
         assert!(received(&mut capturing).is_none());
+    }
+    #[test]
+    fn black_readback_fails_without_writing_files_and_restores_playback() {
+        let (mut app, directory, token) = app();
+        let path = directory.path().join("black.png");
+        let mut stream = request(&app, &token, 200, json!({"type":"capture","path":path}));
+        drive_until(&mut app, |world| {
+            world
+                .query_filtered::<Entity, With<Screenshot>>()
+                .iter(world)
+                .next()
+                .is_some()
+        });
+        let entity = app
+            .world_mut()
+            .query_filtered::<Entity, With<Screenshot>>()
+            .single(app.world())
+            .unwrap();
+        let image = Image::new_fill(
+            bevy::render::render_resource::Extent3d {
+                width: 2,
+                height: 2,
+                depth_or_array_layers: 1,
+            },
+            bevy::render::render_resource::TextureDimension::D2,
+            &[0, 0, 0, 255],
+            bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+            bevy::asset::RenderAssetUsages::MAIN_WORLD,
+        );
+        app.world_mut()
+            .trigger(ScreenshotCaptured { entity, image });
+        let response = receive_response(&mut app, &mut stream);
+        assert_eq!(response["success"], false);
+        assert_eq!(response["error"]["code"], "capture_failed");
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("entirely black")
+        );
+        assert!(!path.exists() && !path.with_extension("json").exists());
+        assert_eq!(
+            app.world().resource::<Viewer>().playback,
+            crate::PlayState::Playing
+        );
+        let empty = Image {
+            data: None,
+            ..default()
+        };
+        assert!(save_workspace_capture(&empty, &path, &Value::Null).is_err());
+        assert!(!path.exists());
+    }
+    #[test]
+    fn state_exposes_focus_visibility_and_observed_occlusion_without_guessing() {
+        let (mut app, _directory, token) = app();
+        let window = app
+            .world_mut()
+            .spawn(Window {
+                focused: false,
+                visible: true,
+                ..default()
+            })
+            .id();
+        assert_eq!(window_occluded(app.world(), window), None);
+        app.world_mut().write_message(bevy::window::WindowOccluded {
+            window,
+            occluded: true,
+        });
+        let mut stream = request(&app, &token, 201, json!({"type":"state"}));
+        let state = receive_response(&mut app, &mut stream)["state"].clone();
+        assert_eq!(state["window"]["focused"], false);
+        assert_eq!(state["window"]["visible"], true);
+        assert_eq!(state["window"]["occluded"], true);
     }
 }

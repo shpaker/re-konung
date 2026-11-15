@@ -451,7 +451,7 @@ pub(crate) fn state_value(world: &mut World) -> Value {
         .get_resource::<kn_render::MapViewport>()
         .and_then(|viewport| viewport.logical_rect)
         .map(|rect| json!({"min":[rect.min.x,rect.min.y],"max":[rect.max.x,rect.max.y]}));
-    let window=world.query::<&Window>().iter(world).next().map(|window|json!({"width":window.width(),"height":window.height(),"scale_factor":window.scale_factor()}));
+    let window=world.query::<(Entity,&Window)>().iter(world).next().map(|(entity,window)|json!({"width":window.width(),"height":window.height(),"scale_factor":window.scale_factor(),"focused":window.focused,"visible":window.visible,"occluded":crate::control::window_occluded(world,entity)}));
     let tick = world.resource::<Clock>().ticks;
     let simulation_epoch = world.resource::<CreatureSim>().epoch;
     let simulation_tick_number = world
