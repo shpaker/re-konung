@@ -21,6 +21,7 @@ use k1_game::creatures::{self, Creature, Workplace};
 use k1_game::rules::{Context, CreatureType, Decision, Ground, Live, classify, is_adjacent};
 
 pub use k1_game::creature_anim::Stage as CreatureStage;
+pub use k1_game::rules::GroupState;
 
 use crate::rules;
 
@@ -82,10 +83,27 @@ pub enum WalkState {
     Walk,
 }
 
+/// Read-only facts for one stable character record, including the squad snapshot
+/// consumed by the last decision pass. At load/reset the snapshot is unevaluated.
+#[derive(Debug, Clone)]
+pub struct CreatureInspection {
+    pub id: usize,
+    pub label: String,
+    pub recorded_state: u8,
+    pub animation_state: Option<u8>,
+    pub animation_stage: Option<CreatureStage>,
+    pub walk_state: Option<WalkState>,
+    pub group: usize,
+    pub group_state: GroupState,
+    pub group_state_tick: Option<u64>,
+}
+
 /// A simulation over one map.
 pub struct Simulation {
     world: World<MapPassage, StepDurations>,
     roster: Vec<Creature>,
+    group_states: Vec<GroupState>,
+    group_state_tick: Option<u64>,
     /// Ready `#<id> <name>` label per record number, built once at load from
     /// the executable's texts (issue #84). The consumer — the viewer's label
     /// layer — reads the finished strings from here and never touches the K1
@@ -227,8 +245,22 @@ impl Simulation {
             },
         ));
 
+        let live = ids
+            .iter()
+            .map(|id| {
+                let state = world.state((*id)?)?;
+                Some(Live {
+                    cell: (state.cell.column as i16, state.cell.row as i16),
+                    direction: state.direction.map(|direction| direction.index() as u8),
+                    busy: state.moving || state.goal.is_some(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let group_states = k1_game::rules::group_states(&roster, &live);
         Simulation {
             world,
+            group_states,
+            group_state_tick: None,
             roster,
             labels,
             ids,
@@ -348,6 +380,8 @@ impl Simulation {
             order_failures,
             cooldown,
             spawn_failures,
+            group_states,
+            group_state_tick,
             ..
         } = fresh;
         self.world = world;
@@ -356,6 +390,8 @@ impl Simulation {
         self.order_failures = order_failures;
         self.cooldown = cooldown;
         self.spawn_failures = spawn_failures;
+        self.group_states = group_states;
+        self.group_state_tick = group_state_tick;
     }
 
     pub fn tick(&mut self) -> Vec<Event> {
@@ -365,12 +401,13 @@ impl Simulation {
         // frame-rate independent (issue #70).
         self.creature_anim.tick();
         let live = self.live_picture();
-        let group_states = k1_game::rules::group_states(&self.roster, &live);
+        self.group_states = k1_game::rules::group_states(&self.roster, &live);
+        self.group_state_tick = Some(self.tick);
         let mut context = Context {
             ground: &self.world,
             random: &mut self.rng,
             jobs: &self.jobs,
-            states: &group_states,
+            states: &self.group_states,
         };
         let decisions = k1_game::rules::evaluate(&self.roster, &live, &mut context);
         let commands: Vec<(usize, CreatureId, Decision)> = self
@@ -459,6 +496,38 @@ impl Simulation {
             GoalField::Workplace => reach.workplace += 1,
             GoalField::Walk => reach.walk += 1,
         }
+    }
+
+    /// Inspects by character record id, never by roster or movement-world index.
+    pub fn inspect_creature(&self, id: usize) -> Option<CreatureInspection> {
+        let index = self.roster.iter().position(|creature| creature.id == id)?;
+        Some(self.inspection_at(index))
+    }
+
+    fn inspection_at(&self, index: usize) -> CreatureInspection {
+        let creature = &self.roster[index];
+        let id = creature.id;
+        CreatureInspection {
+            id,
+            label: self
+                .labels
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| format!("#{id}")),
+            recorded_state: creature.state,
+            animation_state: self.creature_shown_state(id),
+            animation_stage: self.creature_stage(id),
+            walk_state: self.creature_state(index).map(|state| state.walk_state),
+            group: creature.group,
+            group_state: self.group_states[index],
+            group_state_tick: self.group_state_tick,
+        }
+    }
+
+    pub fn inspect_creatures(&self) -> Vec<CreatureInspection> {
+        (0..self.roster.len())
+            .map(|index| self.inspection_at(index))
+            .collect()
     }
 
     pub fn states(&self) -> Vec<CreatureState> {
@@ -808,6 +877,112 @@ mod tests {
 
     fn simulation(map: &KonungMap, state: &GameState, creatures: usize) -> Simulation {
         simulation_with(map, state, creatures, Vec::new())
+    }
+
+    #[test]
+    #[ignore = "manual synthetic workspace cost measurement"]
+    fn workspace_inspection_costs() {
+        use std::{hint::black_box, time::Instant};
+        fn measure(mut run: impl FnMut(), count: u32) -> f64 {
+            (0..5)
+                .map(|_| {
+                    let start = Instant::now();
+                    for _ in 0..count {
+                        run();
+                    }
+                    start.elapsed().as_nanos() as f64 / f64::from(count)
+                })
+                .fold(f64::INFINITY, f64::min)
+        }
+        let map = open_map(|_, _| false);
+        let cells = (0..200)
+            .map(|id| ((id % 25 + 10) as i16, (id / 25 + 10) as i16))
+            .collect::<Vec<_>>();
+        let state = squad_state(k1_game::rules::group::LONE_NPC, Rect::default(), &cells);
+        let mut sim = simulation(&map, &state, 200);
+        assert_eq!(sim.creature_count(), 200);
+        assert!(sim.inspect_creature(FIRST_RECORD + 199).is_some());
+        let one_ns = measure(
+            || {
+                black_box(sim.inspect_creature(black_box(FIRST_RECORD + 199)));
+            },
+            1000,
+        );
+        let all_ns = measure(
+            || {
+                black_box(sim.inspect_creatures());
+            },
+            1000,
+        );
+        let states_ns = measure(
+            || {
+                black_box(sim.states());
+            },
+            1000,
+        );
+        let tick_ns = measure(
+            || {
+                black_box(sim.tick());
+            },
+            1000,
+        );
+        println!(
+            "WORKSPACE_COST inspect_one_200_ns={one_ns:.0} inspect_all_200_ns={all_ns:.0} states_200_ns={states_ns:.0} tick_200_ns={tick_ns:.0}"
+        );
+    }
+
+    #[test]
+    fn inspection_keeps_the_exact_decision_snapshot_until_the_next_tick() {
+        let map = open_map(|_, _| false);
+        let state = roaming_state(
+            Rect {
+                left: 4,
+                top: 4,
+                right: 8,
+                bottom: 8,
+            },
+            1,
+        );
+        let mut sim = simulation(&map, &state, 1);
+        let id = sim.roster[0].id;
+        let initial = sim.inspect_creature(id).unwrap();
+        assert_eq!(initial.group_state, GroupState::Calm);
+        assert_eq!(initial.group_state_tick, None);
+        assert_eq!(initial.recorded_state, sim.roster[0].state);
+        assert!(sim.inspect_creature(usize::MAX).is_none());
+        let cell = (4..=8)
+            .flat_map(|row| (4..=8).map(move |column| Cell::new(column, row)))
+            .find(|cell| sim.world.holder(*cell).is_none())
+            .unwrap();
+        let player = sim.world.add(cell).unwrap();
+        let mut record = sim.roster[0];
+        record.id = 999;
+        record.group_kind = k1_game::rules::group::PLAYER;
+        record.group = 99;
+        record.roaming = false;
+        sim.roster.push(record);
+        sim.ids.push(Some(player));
+        sim.tick();
+        let used = sim.inspect_creature(id).unwrap();
+        assert_eq!(used.group_state, GroupState::PlayerInside);
+        assert_eq!(used.group_state_tick, Some(1));
+        sim.world.remove(player).unwrap();
+        assert_eq!(
+            sim.inspect_creature(id).unwrap().group_state,
+            GroupState::PlayerInside
+        );
+        sim.tick();
+        assert_eq!(
+            sim.inspect_creature(id).unwrap().group_state,
+            GroupState::Calm
+        );
+        let fresh = simulation(&map, &state, 1);
+        sim.roster.pop();
+        sim.adopt_positions_from(fresh);
+        let reset = sim.inspect_creature(id).unwrap();
+        assert_eq!(reset.group_state_tick, None);
+        assert_eq!(reset.group_state, GroupState::Calm);
+        assert_eq!(sim.tick_number(), 2);
     }
 
     fn inside(spawn: &Rect, cell: (u32, u32)) -> bool {

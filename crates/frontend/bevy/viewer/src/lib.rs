@@ -1,34 +1,30 @@
-//! Просмотрщик карт «Князя»: состояние, перестроение сцены и интерфейс.
+//! Read-only map workspace, shared actions and optional local session control.
 //!
-//! Состояние ([Viewer]) и команды интерфейса отделены от отрисовки: обработчики
-//! виджетов правят только состояние и взводят [Rebuild], а сцену перестраивает
-//! одна система. CLI parsing and the headless check live in the `kn-viewer`
-//! app crate.
+//! The application crate owns CLI parsing and headless diagnostics.
 
+pub mod action;
+mod control;
+mod input;
+mod readiness;
+mod workspace;
+
+#[cfg(test)]
+use bevy::feathers::controls::FeathersSlider;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+#[cfg(test)]
+use std::time::Duration;
+use std::time::Instant;
 
 use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     ecs::schedule::common_conditions::resource_exists,
-    feathers::{
-        controls::{
-            FeathersButton, FeathersCheckbox, FeathersSelect, FeathersSlider, OptionIndex,
-            list_rows_from_strings,
-        },
-        display::caption,
-        theme::ThemeBackgroundColor,
-        tokens,
-    },
-    input::mouse::{AccumulatedMouseMotion, MouseWheel},
-    picking::hover::Hovered,
     prelude::*,
     render::view::screenshot::{Capturing, Screenshot, save_to_disk},
     sprite_render::SpriteMaterial,
-    ui::{Checked, Pressed},
-    ui_widgets::{Activate, SliderStep, SliderValue, ValueChange},
+    ui::Pressed,
+    ui_widgets::{Activate, SliderValue, ValueChange},
     window::PresentMode,
 };
 // Re-exported: `run_viewer` hands the app's exit back and the windowed
@@ -43,17 +39,16 @@ use kn_game::{
     DayPhase, Game, MapRef, MapSource, Piece, PieceGroup, SceneOptions, TICK_MS, group_is_shown,
     simulation::{CreatureState, Simulation, WalkState},
 };
-use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
 use kn_render::{
     AnimPlugin, AnimSet, Animator, CameraApply, CameraBounds, CameraInput, CameraState, Clock,
     CreatureAnim, CreatureAnimReport, CreatureAnimationPlugin, CreatureMotion, CreatureNode,
     CreatureNodesVisible, CreatureRoot, CreatureSet, CreatureShadow, CreatureSim, CreatureSprite,
     FineLightGrid, GameResource, KonungLightMaterial, KonungLightingPlugin, LightingMaterials,
-    LightingState, MapCamera, MapCameraPlugin, PAN_SPEED, PendingFrame, PlayState, SceneGroup,
-    ScenePiece, Sequence, TextureCache, clear_scene, load_scene, ortho_scale, piece_center,
-    piece_size, reset_creature_animations, reset_creature_positions, update_lighting_uniforms,
+    LightingState, MapCamera, MapCameraPlugin, PendingFrame, PlayState, SceneGroup, ScenePiece,
+    Sequence, TextureCache, clear_scene, load_scene, piece_center, piece_size,
+    reset_creature_animations, reset_creature_positions, update_lighting_uniforms,
 };
-use kn_ui::{KonungFonts, KonungUiPlugin, pointer_over_ui, sync_checked};
+use kn_ui::{KonungFonts, KonungUiPlugin};
 
 /// Отладочный оверлей, который включает просмотрщик.
 ///
@@ -70,16 +65,16 @@ pub enum Overlay {
 
 /// Оверлеи, включённые при запуске: персонажей видно сразу.
 ///
-/// Значения должны совпадать с `Checked` у соответствующих чекбоксов в [panel]:
+/// Значения должны совпадать с `Checked` у соответствующих чекбоксов в the workspace:
 /// виджет хранит состояние сам, а не читает его из [Viewer].
 pub const DEFAULT_OVERLAYS: [bool; 4] = [false, false, false, true];
 
 /// Идёт ли симуляция при запуске. Согласовано с `Checked` чекбокса `Play` в
-/// [panel]: виджет хранит состояние сам, а не читает его из [Viewer].
+/// the workspace: виджет хранит состояние сам, а не читает его из [Viewer].
 pub const DEFAULT_PLAYBACK: PlayState = PlayState::Playing;
 
 /// The day/night cycle runs at startup (`false` — "constant day"). Agreed
-/// with the missing `Checked` on the `Constant day` checkbox in [panel]:
+/// with the missing `Checked` on the `Constant day` checkbox in the workspace:
 /// the default is the cycle, because the original's saved-options default is
 /// unconfirmed (a `.bss` global whose writers copy from the settings table;
 /// see `docs/research/k1/time.md` and the divergence note below).
@@ -176,9 +171,8 @@ pub struct ActiveRoot(pub Option<Entity>);
 
 /// Статистика последней построенной сцены — для панели диагностики.
 ///
-/// Сколько кусков видно и сколько собрано считает [`diagnostics`] по спрайтам в
-/// мире: переключение слоя не пересобирает сцену и не оставляет здесь устаревшего
-/// числа.
+/// The read projection counts live sprites; group visibility never rebuilds
+/// the scene or leaves a stale visible count in this resource.
 #[derive(Resource, Default)]
 pub struct Stats {
     pub map: Option<MapRef>,
@@ -326,6 +320,7 @@ fn lighting_state(params: lighting::LightingParams) -> LightingState {
 /// only on change: a rewritten state re-extracts the uniforms for the GPU, and
 /// the day cycle shifts a few times a minute.
 fn update_lighting_state(
+    stats: Option<Res<Stats>>,
     setup: Option<Res<LightingSetup>>,
     viewer: Res<Viewer>,
     clock: Res<Clock>,
@@ -335,7 +330,11 @@ fn update_lighting_state(
         Some(tick) => tick,
         None => clock.ticks,
     };
-    let map = viewer.maps.get(viewer.selected).map_or(0, |map| map.number);
+    let map = stats
+        .as_ref()
+        .and_then(|stats| stats.map)
+        .or_else(|| viewer.maps.get(viewer.selected).copied())
+        .map_or(0, |map| map.number);
     let next = lighting_state(lighting::params_for_map(
         tick,
         SIM_SEED,
@@ -418,11 +417,15 @@ fn scrub_position(value: f32) -> u64 {
 /// `day * CYCLE_TICKS + target`, never the day itself.
 fn change_scrub(
     change: On<ValueChange<f32>>,
+    capture: Option<Res<control::ControlServer>>,
     sliders: Query<&ScrubSlider>,
     clock: Res<Clock>,
     mut scrub: ResMut<ScrubState>,
     mut commands: Commands,
 ) {
+    if capture.as_ref().is_some_and(|capture| capture.mutating()) {
+        return;
+    }
     if sliders.get(change.source).is_err() {
         return;
     }
@@ -449,10 +452,14 @@ fn change_scrub(
 /// settled right away.
 fn jump_to_preset(
     activate: On<Activate>,
+    capture: Option<Res<control::ControlServer>>,
     presets: Query<&ScrubPreset>,
     clock: Res<Clock>,
     mut scrub: ResMut<ScrubState>,
 ) {
+    if capture.as_ref().is_some_and(|capture| capture.mutating()) {
+        return;
+    }
     let Ok(preset) = presets.get(activate.entity) else {
         return;
     };
@@ -485,11 +492,15 @@ fn jump_to_preset(
 /// `reset_creature_positions` would teleport them home instead (its tested
 /// purpose), and nothing else can satisfy `tick_number == clock.ticks`.
 fn apply_scrub(
+    capture: Option<Res<control::ControlServer>>,
     slider: Option<Single<Has<Pressed>, With<ScrubSlider>>>,
     mut scrub: ResMut<ScrubState>,
     mut clock: ResMut<Clock>,
     mut sim: ResMut<CreatureSim>,
 ) {
+    if capture.as_ref().is_some_and(|capture| capture.mutating()) {
+        return;
+    }
     let pressed = slider.is_some_and(|slider| *slider);
     if pressed && !scrub.active {
         scrub.active = true;
@@ -523,17 +534,22 @@ fn apply_scrub(
         sim.sim_ticks = 0;
         return;
     }
-    if scrub.moved
-        && let Some(ticks) = sim.sim.as_ref().map(|simulation| simulation.tick_number())
-    {
-        sim.epoch = 0;
-        sim.sim_ticks = ticks;
+    if scrub.moved {
+        align_absolute_seek(&mut sim);
     }
     *scrub = ScrubState::default();
 }
 
+/// Rebase absolute scene-clock seeks consistently for UI and session commands.
+fn align_absolute_seek(sim: &mut CreatureSim) {
+    if let Some(tick) = sim.sim.as_ref().map(Simulation::tick_number) {
+        sim.epoch = 0;
+        sim.sim_ticks = tick;
+    }
+}
+
 /// Mirrors the Clock into the slider whenever no drag is in progress — the
-/// same direction as [sync_playboxes]: while the simulation plays, the thumb
+/// same direction as the workspace controls: while the simulation plays, the thumb
 /// rides the cycle position (`clock.ticks % CYCLE_TICKS`) and the day line of
 /// the diagnostics moves with it; the widget never writes the state itself
 /// outside its own interaction.
@@ -583,7 +599,7 @@ enum CapturePhase {
 /// the screenshot.
 const SETTLE_FRAMES: u32 = 40;
 /// Camera zoom step while capturing: 1:1, a 114-px tile spans 114 screen px.
-const CAPTURE_ZOOM: usize = 3;
+const CAPTURE_ZOOM: usize = kn_render::DEFAULT_ZOOM;
 
 /// Drives the `--screenshot` capture — aims the camera at the first lit tile,
 /// settles the pipelines, saves the shot, logs the run's measurements and
@@ -929,36 +945,6 @@ struct CreatureLabel {
 #[derive(Component)]
 struct LabelRoot;
 
-/// The single switch of the simulation's movement (`Play`): [sync_playboxes]
-/// finds the checkbox by it to mirror [Viewer::playback] into.
-#[derive(Component, Clone, Copy, Default)]
-struct PlaybackToggle;
-
-/// The `Constant day` switch: [sync_daynight_boxes] finds the checkbox by it
-/// to mirror [Viewer::constant_day] into.
-#[derive(Component, Clone, Copy, Default)]
-struct DayNightToggle;
-
-/// Кнопка "Reset positions": по ней [reset_positions] отличает свой `Activate`
-/// от активаций других кнопок (у выпадющего списка карт они тоже бывают).
-#[derive(Component, Clone, Copy, Default)]
-struct ResetPositions;
-
-/// Кнопка "Reset animation" (issue #70 AC4): brings the clock and the
-/// creature state machine back to what the file records, so the next Play
-/// replays the state-4 special from frame 0. Distinct from "Reset positions",
-/// which returns creatures to their cell pixels but leaves the clock alone.
-#[derive(Component, Clone, Copy, Default)]
-struct ResetAnimation;
-
-/// Подпись элемента интерфейса, включающего оверлей.
-#[derive(Component, Clone, Copy, Default)]
-struct OverlayToggle(Overlay);
-
-/// Текст панели диагностики.
-#[derive(Component, Clone, Copy, Default)]
-struct Diagnostics;
-
 /// Названия карт для списка: номер и источник (тексты из EXE не перенесены).
 pub fn map_labels(maps: &[MapRef]) -> Vec<String> {
     maps.iter()
@@ -992,12 +978,27 @@ pub struct ViewerConfig {
     /// (`--benchmark-secs`); the frame count becomes an output. One of the
     /// two bounds, never both — the CLI rejects the pair up front.
     pub benchmark_secs: Option<u64>,
+    pub control_file: Option<PathBuf>,
+}
+
+fn install_creature_labels(app: &mut App) {
+    app.add_systems(
+        Update,
+        (
+            spawn_creature_labels.after(CreatureSet::Spawn),
+            sync_creature_labels
+                .after(CreatureSet::Swap)
+                .after(AnimSet::Sprites)
+                .after(CreatureSet::Nodes),
+        )
+            .chain(),
+    );
 }
 
 /// The viewer window: runs until the user closes it. Returns the exit the
 /// app asked for — a benchmark run's gate verdict rides on it.
 pub fn run_viewer(config: ViewerConfig) -> AppExit {
-    let labels = map_labels(&config.maps);
+    let control_file = config.control_file.clone();
     let selected = config.selected;
     let capture_request = config
         .screenshot
@@ -1064,6 +1065,10 @@ pub fn run_viewer(config: ViewerConfig) -> AppExit {
     .init_resource::<Stats>()
     .init_resource::<CreatureLabels>()
     .init_resource::<CaptureTarget>()
+    .insert_resource(kn_render::SimulationCatchUpBudget {
+        max_ticks: 64,
+        max_duration: Some(std::time::Duration::from_millis(4)),
+    })
     .init_resource::<ScrubState>()
     .insert_resource(Rebuild { map: true })
     .insert_resource(Viewer {
@@ -1073,28 +1078,16 @@ pub fn run_viewer(config: ViewerConfig) -> AppExit {
         playback: playback_start(),
         constant_day: config.constant_day,
     })
-    .add_systems(Startup, move |world: &mut World| {
-        if let Err(error) = world.spawn_scene_list(panel_list(labels.clone(), selected)) {
-            error!("не собрался интерфейс: {error}");
-        }
-    })
-    .add_systems(Update, camera_control.in_set(CameraInput))
     .add_systems(
         Update,
         (
-            playback_hotkeys,
-            day_night_hotkey,
             apply_playback,
-            sync_playboxes,
-            sync_daynight_boxes,
             apply_scrub,
             sync_scrub_slider,
             update_lighting_state,
             rebuild_scene,
             sync_groups,
             sync_creature_visibility,
-            spawn_creature_labels,
-            diagnostics,
         )
             .chain()
             // The frame's clock position must be settled — by the scrub as by
@@ -1116,16 +1109,6 @@ pub fn run_viewer(config: ViewerConfig) -> AppExit {
     // (PreUpdate) and after the frame's clock position has settled, so the
     // face never lags a drag by a frame.
     .add_systems(PostUpdate, scrub_clock_label)
-    // The viewer's diagnostics on top of the shared pipeline: the id rides the
-    // body image, so it can only be placed once the subsystem has written the
-    // node and the frame's sprite offsets.
-    .add_systems(
-        Update,
-        sync_creature_labels
-            .after(CreatureSet::Swap)
-            .after(AnimSet::Sprites)
-            .after(CreatureSet::Nodes),
-    )
     // The lighting pool at startup; the per-frame state runs in the chained
     // systems above, after the scrub has settled the clock. The capture
     // controller runs after the camera write-out so the zoom it picks reaches
@@ -1151,6 +1134,17 @@ pub fn run_viewer(config: ViewerConfig) -> AppExit {
                 .after(CreatureSet::Nodes),
         ),
     );
+    readiness::install(&mut app);
+    action::install(&mut app);
+    input::install(&mut app);
+    install_creature_labels(&mut app);
+    workspace::install(&mut app);
+    if let Some(path) = control_file
+        && let Err(error) = control::install(&mut app, &path)
+    {
+        eprintln!("control: {error}");
+        return AppExit::error();
+    }
     app.insert_resource(setup);
     if capture_request.path.is_some() {
         app.insert_resource(capture_request);
@@ -1161,320 +1155,9 @@ pub fn run_viewer(config: ViewerConfig) -> AppExit {
     app.run()
 }
 
-/// Camera-control binding: applies the kn-input mechanisms to this app's camera.
-/// All computation lives in kn-input and kn-render; only the wiring is here.
-#[allow(clippy::too_many_arguments)]
-fn camera_control(
-    keys: Res<ButtonInput<KeyCode>>,
-    buttons: Res<ButtonInput<MouseButton>>,
-    motion: Res<AccumulatedMouseMotion>,
-    mut wheel: MessageReader<MouseWheel>,
-    over_ui_nodes: Query<&Hovered, With<Node>>,
-    time: Res<Time>,
-    mut state: ResMut<CameraState>,
-    camera: Single<(&mut Transform, &Projection), With<MapCamera>>,
-    mut scroll: Local<ZoomScroll>,
-) {
-    let over_ui = pointer_over_ui(over_ui_nodes.iter().map(|hovered| hovered.0));
-    let direction = pan_direction(&keys);
-    let drag = if over_ui {
-        None
-    } else {
-        drag_delta(&buttons, &motion)
-    };
-    let steps = wheel_steps(&mut scroll, &mut wheel, over_ui);
-    let (mut transform, projection) = camera.into_inner();
-    let scale = ortho_scale(projection);
-    if direction != Vec2::ZERO {
-        transform.translation.x += direction.x * PAN_SPEED * time.delta_secs() * scale;
-        transform.translation.y += direction.y * PAN_SPEED * time.delta_secs() * scale;
-    }
-    if let Some(delta) = drag {
-        transform.translation.x -= delta.x * scale;
-        // Screen y points down, world y points up
-        transform.translation.y += delta.y * scale;
-    }
-    if steps != 0 {
-        state.step(steps);
-    }
-}
-
-/// Панель интерфейса: список карт, переключатели оверлеев, диагностика.
-fn panel_list(labels: Vec<String>, selected: usize) -> impl SceneList {
-    bsn_list! {
-        @panel(labels, selected)
-    }
-}
-
-fn panel(labels: Vec<String>, selected: usize) -> impl Scene {
-    bsn! {
-        Node {
-            position_type: PositionType::Absolute,
-            left: px(8.0),
-            top: px(8.0),
-            width: px(240.0),
-            flex_direction: FlexDirection::Column,
-            row_gap: px(6.0),
-            padding: UiRect::axes(px(10.0), px(10.0)),
-        }
-        // Панель блокирует ввод камеры целиком, а не только над виджетами:
-        // `Hovered` Bevy обновляет лишь у тех, у кого он уже есть, а Feathers
-        // кладёт его на свои контролы — пустые промежутки панели иначе остались
-        // бы «не над интерфейсом»
-        Hovered
-        ThemeBackgroundColor(tokens::WINDOW_BG)
-        Children[
-            @caption("Map")
-            --
-            @FeathersSelect {
-                @options: list_rows_from_strings(labels, Some(selected)),
-                @max_visible: 12,
-            }
-            Node {
-                width: percent(100),
-            }
-            on(select_map)
-            --
-            @caption("Overlays")
-            --
-            @FeathersCheckbox {
-                @caption: bsn! { @caption("Walkability") }
-            }
-            OverlayToggle(Overlay::Foot)
-            on(toggle_overlay)
-            --
-            @FeathersCheckbox {
-                @caption: bsn! { @caption("Lights") }
-            }
-            OverlayToggle(Overlay::Lights)
-            on(toggle_overlay)
-            --
-            @FeathersCheckbox {
-                @caption: bsn! { @caption("Waypoints") }
-            }
-            OverlayToggle(Overlay::Markers)
-            on(toggle_overlay)
-            --
-            @FeathersCheckbox {
-                @caption: bsn! { @caption("Characters") }
-            }
-            Checked
-            OverlayToggle(Overlay::Characters)
-            on(toggle_overlay)
-            --
-            @caption("Simulation")
-            --
-            @FeathersCheckbox {
-                @caption: bsn! { @caption("Play") }
-            }
-            Checked
-            PlaybackToggle
-            on(change_playback)
-            --
-            @FeathersCheckbox {
-                @caption: bsn! { @caption("Constant day") }
-            }
-            DayNightToggle
-            on(change_day_night)
-            --
-            @FeathersButton {
-                @caption: bsn! { @caption("Reset positions") }
-            }
-            ResetPositions
-            on(reset_positions)
-            --
-            @FeathersButton {
-                @caption: bsn! { @caption("Reset animation") }
-            }
-            ResetAnimation
-            on(reset_animation)
-            --
-            @caption("Time of day")
-            --
-            @FeathersSlider {
-                @min: 0.0,
-                @max: {(CYCLE_TICKS - 1) as f32},
-            }
-            // Keyboard and track steps of one displayed minute; the drag itself
-            // rounds to whole ticks (`SliderPrecision` defaults to 0)
-            SliderStep(15.0)
-            ScrubSlider
-            on(change_scrub)
-            --
-            Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: px(6.0),
-            }
-            Children[
-                @FeathersButton {
-                    @caption: bsn! { @caption("Light 07:00") }
-                }
-                ScrubPreset(900)
-                on(jump_to_preset)
-                --
-                @FeathersButton {
-                    @caption: bsn! { @caption("Warm 09:00") }
-                }
-                ScrubPreset(2700)
-                on(jump_to_preset)
-            ]
-            --
-            Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: px(6.0),
-            }
-            Children[
-                @FeathersButton {
-                    @caption: bsn! { @caption("Ground 18:13") }
-                }
-                ScrubPreset(11000)
-                on(jump_to_preset)
-                --
-                @FeathersButton {
-                    @caption: bsn! { @caption("Ramp 03:04") }
-                }
-                ScrubPreset(18960)
-                on(jump_to_preset)
-            ]
-            --
-            @caption("") Diagnostics
-        ]
-    }
-}
-
-fn select_map(
-    change: On<ValueChange<Entity>>,
-    options: Query<&OptionIndex>,
-    mut viewer: ResMut<Viewer>,
-    mut rebuild: ResMut<Rebuild>,
-) {
-    let Ok(option) = options.get(change.value) else {
-        return;
-    };
-    if viewer.selected != option.0 {
-        viewer.selected = option.0;
-        rebuild.map = true;
-    }
-}
-
-/// Переключатель оверлея правит только состояние: спрайты той же карты остаются
-/// на месте, а [`sync_groups`] прячет и показывает группу. Виджет подписывает
-/// [sync_checked] — иначе каждый клик присылал бы `true`.
-fn toggle_overlay(
-    change: On<ValueChange<bool>>,
-    toggles: Query<&OverlayToggle>,
-    mut viewer: ResMut<Viewer>,
-    mut commands: Commands,
-) {
-    let Ok(kind) = toggles.get(change.source) else {
-        return;
-    };
-    viewer.set(kind.0, change.value);
-    sync_checked(&mut commands, change.source, change.value);
-}
-
-/// Переключатель `Play` правит только состояние: сцена той же карты не
-/// перестраивается, меняются лишь часы симуляции. Галочку зеркалит
-/// [sync_playboxes] — иначе `Space` не отразился бы на панели, а пауза,
-/// поставленная шагом, оставила бы галочку отмеченной.
-fn change_playback(
-    change: On<ValueChange<bool>>,
-    toggles: Query<&PlaybackToggle>,
-    mut viewer: ResMut<Viewer>,
-) {
-    if toggles.get(change.source).is_err() {
-        return;
-    }
-    viewer.playback = playback_for(change.value);
-}
-
-/// The `Constant day` switch writes state only — like `Play`: the scene is
-/// not rebuilt (`Rebuild` stays down), the clock does not move, time runs.
-/// The checkbox is mirrored by [sync_daynight_boxes] — otherwise the `N`
-/// hotkey would not reach the panel.
-fn change_day_night(
-    change: On<ValueChange<bool>>,
-    toggles: Query<&DayNightToggle>,
-    mut viewer: ResMut<Viewer>,
-) {
-    if toggles.get(change.source).is_err() {
-        return;
-    }
-    viewer.constant_day = change.value;
-}
-
-/// Отмечен ли единственный переключатель при этом состоянии: галочка стоит,
-/// пока симуляция идёт.
+/// Whether playback is running; UI controls and read projections share this test.
 fn playback_checked(viewer: &Viewer) -> bool {
     viewer.playback == PlayState::Playing
-}
-
-/// Whether the `Constant day` switch is checked at this state: the box is
-/// checked while the cycle is held off.
-fn constant_day_checked(viewer: &Viewer) -> bool {
-    viewer.constant_day
-}
-
-/// Зеркалит ход симуляции в чекбокс `Play`.
-///
-/// `Checkbox` в Bevy сам `Checked` не пишет (см. [sync_checked]), и пишет его
-/// только обработчик клика — а состояние правят и клавиша `Space`, и шаг по
-/// кадру. Поэтому признак берётся из `Viewer`, а не из события чекбокса.
-fn sync_playboxes(
-    viewer: Res<Viewer>,
-    boxes: Query<(Entity, &PlaybackToggle, Has<Checked>)>,
-    mut commands: Commands,
-) {
-    for (entity, _, checked) in &boxes {
-        let want = playback_checked(&viewer);
-        if want != checked {
-            sync_checked(&mut commands, entity, want);
-        }
-    }
-}
-
-/// Mirrors the constant-day flag into the `Constant day` checkbox — the same
-/// pattern as [sync_playboxes]: a `Checkbox` never writes `Checked` itself,
-/// and both the click and the `N` hotkey write the state.
-fn sync_daynight_boxes(
-    viewer: Res<Viewer>,
-    boxes: Query<(Entity, &DayNightToggle, Has<Checked>)>,
-    mut commands: Commands,
-) {
-    for (entity, _, checked) in &boxes {
-        let want = constant_day_checked(&viewer);
-        if want != checked {
-            sync_checked(&mut commands, entity, want);
-        }
-    }
-}
-
-/// Клавиши: `Space` — пауза и продолжение, `.` и `,` — шаг на тик вперёд и
-/// назад. Панорамирование камеры этих клавиш не использует.
-fn playback_hotkeys(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut viewer: ResMut<Viewer>,
-    mut clock: ResMut<Clock>,
-) {
-    if keys.just_pressed(KeyCode::Space) {
-        viewer.playback = toggle_playback(viewer.playback);
-    }
-    let steps = i64::from(keys.just_pressed(KeyCode::Period))
-        - i64::from(keys.just_pressed(KeyCode::Comma));
-    if steps != 0 {
-        // Шаг при идущем воспроизведении часы тут же увели бы кадр обратно,
-        // поэтому он ставит паузу
-        viewer.playback = PlayState::Paused;
-        clock.step(steps);
-    }
-}
-
-/// Key `N` — constant day on/off. Panning (WASD and the arrows), `Space`,
-/// `.` and `,` never use it.
-fn day_night_hotkey(keys: Res<ButtonInput<KeyCode>>, mut viewer: ResMut<Viewer>) {
-    if keys.just_pressed(KeyCode::KeyN) {
-        viewer.constant_day = toggle_day_night(viewer.constant_day);
-    }
 }
 
 /// Состояние интерфейса переносится в часы анимации.
@@ -1518,7 +1201,8 @@ fn rebuild_scene(
     let scene = match game.0.scene(map_ref, &SceneOptions::ALL) {
         Ok(scene) => scene,
         Err(error) => {
-            *stats = failed(map_ref, cache.len(), error.to_string(), started.elapsed());
+            stats.error = Some(error.to_string());
+            stats.built_ms = started.elapsed().as_millis();
             return;
         }
     };
@@ -1535,7 +1219,8 @@ fn rebuild_scene(
     ) {
         Ok(loaded) => loaded,
         Err(error) => {
-            *stats = failed(map_ref, cache.len(), error.to_string(), started.elapsed());
+            stats.error = Some(error.to_string());
+            stats.built_ms = started.elapsed().as_millis();
             return;
         }
     };
@@ -1577,6 +1262,13 @@ fn rebuild_scene(
         clear_scene(&mut commands, old);
     }
     active.0 = Some(loaded.root);
+    commands.queue(|world: &mut World| {
+        if let Some(mut workspace) = world.get_resource_mut::<action::ViewerWorkspace>() {
+            workspace.selected_creature = None;
+            workspace.hovered_creature = None;
+            workspace.set_feedback("Map loaded");
+        }
+    });
     *stats = Stats {
         map: Some(map_ref),
         unique_textures: loaded.unique_textures,
@@ -1684,64 +1376,6 @@ fn sync_creature_visibility(
             *visibility = target;
         }
     }
-}
-
-fn failed(map: MapRef, cached: usize, error: String, elapsed: Duration) -> Stats {
-    Stats {
-        map: Some(map),
-        unique_textures: 0,
-        cached_textures: cached,
-        built_ms: elapsed.as_millis(),
-        animated_pieces: 0,
-        animation_frames: 0,
-        problems: Vec::new(),
-        error: Some(error),
-    }
-}
-
-/// Кнопка "Reset positions" возвращает существ в исходные позиции текущей карты.
-///
-/// Движение пересоздаётся с тем же зерном ([`SIM_SEED`]): маршруты, состояния
-/// походки и ГСЧ свежие. Машина анимации сохраняется — спец-анимация state-4,
-/// идущая в момент сброса, продолжается с текущего кадра, а не начинается
-/// заново (обзор #101, P2-#3): сброс позиций не есть сброс анимации. Карта,
-/// камера, масштаб, выбранный слой и пауза не трогаются.
-fn reset_positions(
-    activate: On<Activate>,
-    markers: Query<&ResetPositions>,
-    game: Res<GameResource>,
-    viewer: Res<Viewer>,
-    clock: Res<Clock>,
-    mut sim: ResMut<CreatureSim>,
-) {
-    if markers.get(activate.entity).is_err() {
-        return;
-    }
-    let Some(&map_ref) = viewer.maps.get(viewer.selected) else {
-        return;
-    };
-    reset_creature_positions(&game.0, map_ref, SIM_SEED, clock.ticks, &mut sim);
-}
-
-/// Кнопка "Reset animation" (обзор #101, P2-#3): заново запускает анимации с
-/// нулевого кадра, не трогая ни позиции существ, ни игровые часы. Отличается от
-/// полного сброса (`Play → Off → Play`, issue #70 AC4): тот пересобирает
-/// симуляцию и возвращает всех в клетки загрузки, а эта кнопка лишь отматывает
-/// машину анимации — спец state-4 начинается с кадра 0, а координаты и
-/// накопленное время симуляции остаются. Карта, камера, часы и пауза не
-/// трогаются.
-fn reset_animation(
-    activate: On<Activate>,
-    markers: Query<&ResetAnimation>,
-    mut sim: ResMut<CreatureSim>,
-) {
-    if markers.get(activate.entity).is_err() {
-        return;
-    }
-    // Only the machine rewinds: positions and the simulation clock are kept, and
-    // the animator re-anchors on the same clip through the special-frame
-    // regression the subsystem's `observe_specials` reports (review of #101, P2-#3).
-    reset_creature_animations(&mut sim);
 }
 
 const LABEL_OFFSET_Y: f32 = 50.0;
@@ -1997,15 +1631,6 @@ fn clip_identity(
         })
 }
 
-/// Как состояние воспроизведения подписать в диагностике.
-fn playback_label(playback: PlayState) -> &'static str {
-    match playback {
-        PlayState::Playing => "playing",
-        PlayState::Paused => "paused",
-        PlayState::Off => "off",
-    }
-}
-
 /// The game-time readout: clock face, phase, day index and progress through the cycle.
 ///
 /// Every part of it is a function of the scene clock's tick — the single time
@@ -2092,85 +1717,6 @@ fn phase_label(phase: DayPhase) -> &'static str {
         DayPhase::Dusk => "dusk",
         DayPhase::Night => "night",
         DayPhase::Dawn => "dawn",
-    }
-}
-
-/// Count inherited sprite visibility, including hidden groups/empty frames; group child counts would overcount.
-/// See docs/development/rust/rendering.md.
-fn piece_counts(pieces: &Query<&InheritedVisibility, With<ScenePiece>>) -> (usize, usize) {
-    pieces.iter().fold((0, 0), |(shown, total), visibility| {
-        (shown + usize::from(visibility.get()), total + 1)
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn diagnostics(
-    stats: Res<Stats>,
-    sim: Res<CreatureSim>,
-    creatures: Res<CreatureAnimReport>,
-    viewer: Res<Viewer>,
-    clock: Res<Clock>,
-    zoom: Res<CameraState>,
-    frames: Res<DiagnosticsStore>,
-    pieces: Query<&InheritedVisibility, With<ScenePiece>>,
-    mut text: Single<&mut Text, With<Diagnostics>>,
-) {
-    let fps = frames
-        .get(&FrameTimeDiagnosticsPlugin::FPS)
-        .and_then(|fps| fps.smoothed())
-        .map_or_else(|| "—".to_owned(), |fps| format!("{fps:.0}"));
-    let next = match (&stats.map, &stats.error) {
-        (_, Some(error)) => format!("error: {error}"),
-        (Some(map), None) => {
-            let (shown, built) = piece_counts(&pieces);
-            let pieces = if shown == built {
-                format!("{built} pieces")
-            } else {
-                format!("{shown}/{built} pieces")
-            };
-            let problems = if stats.problems.is_empty() {
-                String::new()
-            } else {
-                format!(" · {} textures missing", stats.problems.len())
-            };
-            // A simulation that failed to build shows its reason, not a silent still map.
-            let sim_error = sim
-                .error
-                .as_ref()
-                .map_or(String::new(), |error| format!(" · {error}"));
-            let creatures = creature_report(&creatures);
-            // Карта без огней и движущихся объектов — без этой строки
-            let playback = if stats.animated_pieces == 0 {
-                String::new()
-            } else {
-                format!(
-                    "\nanim {} · {} frames · tick {} · {}",
-                    stats.animated_pieces,
-                    stats.animation_frames,
-                    clock.ticks,
-                    playback_label(viewer.playback),
-                )
-            };
-            // The readout follows the Clock; the simulation's presence only
-            // gates it ([game_time_line]).
-            let time = game_time_line(sim.sim.is_some().then_some(clock.ticks));
-            format!(
-                "{} {} · {pieces} · {} textures · {} ms{problems}{sim_error}{creatures}\nzoom ×{} · {} fps{playback}{time}",
-                match map.source {
-                    MapSource::Game => "map",
-                    MapSource::Tutorial => "tutorial",
-                },
-                map.number,
-                stats.unique_textures,
-                stats.built_ms,
-                zoom.scale(),
-                fps,
-            )
-        }
-        (None, None) => String::new(),
-    };
-    if text.0 != next {
-        text.0 = next;
     }
 }
 
@@ -2819,42 +2365,15 @@ mod tests {
         // default is unconfirmed (docs/research/k1/lighting.md, "The four globals").
         let state = viewer(DEFAULT_OVERLAYS);
         assert!(!state.constant_day);
-        assert!(!constant_day_checked(&state));
         let mut on = viewer(DEFAULT_OVERLAYS);
         on.constant_day = true;
-        assert!(constant_day_checked(&on));
+        assert!(on.constant_day);
     }
 
     #[test]
     fn n_toggles_the_day_night_cycle_both_ways() {
         assert!(toggle_day_night(false));
         assert!(!toggle_day_night(true));
-    }
-
-    /// The checkbox is written by the state mirror, not by the widget or the
-    /// handler: a Bevy `Checkbox` never sets `Checked` itself, and both the
-    /// click and the `N` hotkey write the state — the `Play` checkbox's
-    /// pattern.
-    #[test]
-    fn the_constant_day_checkbox_mirrors_the_state() {
-        let mut app = App::new();
-        app.insert_resource(viewer([false; 4]));
-        let box_entity = app.world_mut().spawn(DayNightToggle).id();
-        app.add_systems(Update, sync_daynight_boxes);
-
-        app.update();
-        assert!(
-            app.world().entity(box_entity).get::<Checked>().is_none(),
-            "the default is the cycle: no check"
-        );
-
-        app.world_mut().resource_mut::<Viewer>().constant_day = true;
-        app.update();
-        assert!(app.world().entity(box_entity).get::<Checked>().is_some());
-
-        app.world_mut().resource_mut::<Viewer>().constant_day = false;
-        app.update();
-        assert!(app.world().entity(box_entity).get::<Checked>().is_none());
     }
 
     /// Узлы групп и их видимость после [`sync_groups`] при этих переключателях.
@@ -3120,9 +2639,11 @@ mod tests {
             .insert_resource(Rebuild { map: false })
             .insert_resource(clock)
             .insert_resource(sim)
-            .add_observer(reset_positions)
-            .add_systems(Update, fire_reset);
-        app.world_mut().spawn(ResetPositions);
+            .insert_resource(Stats {
+                map: Some(map_ref),
+                ..default()
+            });
+        action::apply_action(app.world_mut(), action::ViewerAction::ResetPositions {}).unwrap();
 
         app.update();
         app.update();
@@ -3492,22 +3013,17 @@ mod tests {
     fn the_day_night_click_writes_state_without_a_rebuild() {
         let mut app = scrub_app(None);
         app.world_mut().resource_mut::<Clock>().ticks = 11000;
-        let box_entity = app.world_mut().spawn(DayNightToggle).id();
         app.update();
 
-        app.world_mut().trigger(ValueChange {
-            source: box_entity,
-            value: true,
-            is_final: true,
-        });
+        action::apply_action(
+            app.world_mut(),
+            action::ViewerAction::ConstantDay { enabled: true },
+        )
+        .unwrap();
         app.update();
         assert!(
             app.world().resource::<Viewer>().constant_day,
             "the click wrote the state"
-        );
-        assert!(
-            app.world().entity(box_entity).get::<Checked>().is_some(),
-            "the checkbox mirrors the state it wrote"
         );
         assert_eq!(
             scrub_lighting(&app),
@@ -3516,34 +3032,6 @@ mod tests {
         );
         assert_eq!(scrub_clock(&app), 11000, "the clock did not move");
         assert!(!app.world().resource::<Rebuild>().map, "no rebuild asked");
-    }
-
-    /// The hotkey path: `N` flips the same state the click writes, and the
-    /// checkbox follows through the sync system, not the widget.
-    #[test]
-    fn the_n_hotkey_flips_the_switch_and_the_checkbox_follows() {
-        let mut app = scrub_app(None);
-        let box_entity = app.world_mut().spawn(DayNightToggle).id();
-        app.init_resource::<ButtonInput<KeyCode>>();
-        app.add_systems(Update, day_night_hotkey.before(sync_daynight_boxes));
-
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::KeyN);
-        app.update();
-        assert!(app.world().resource::<Viewer>().constant_day);
-        assert!(app.world().entity(box_entity).get::<Checked>().is_some());
-
-        // MinimalPlugins runs no input clearing: release the key by hand, the
-        // next frame must not toggle it again.
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .clear();
-        app.update();
-        assert!(
-            app.world().resource::<Viewer>().constant_day,
-            "a held key toggles once, not every frame"
-        );
     }
 
     #[test]
@@ -4450,8 +3938,10 @@ mod tests {
                         .after(CreatureSet::Nodes),
                 ),
             )
-            .add_observer(reset_positions);
-        let button = app.world_mut().spawn(ResetPositions).id();
+            .insert_resource(Stats {
+                map: Some(map_ref),
+                ..default()
+            });
         app.world_mut()
             .resource_mut::<Clock>()
             .goto(PlayState::Paused);
@@ -4479,7 +3969,7 @@ mod tests {
         // following frame re-reads it. The clock stands still across the press,
         // so the fresh simulation is judged at its own tick 0.
         app.world_mut().resource_mut::<Clock>().ticks = 200;
-        app.world_mut().trigger(Activate { entity: button });
+        action::apply_action(app.world_mut(), action::ViewerAction::ResetPositions {}).unwrap();
         app.update();
 
         let mut nodes = app.world_mut().query::<(&CreatureNode, &Transform)>();
@@ -5408,19 +4898,12 @@ mod tests {
             .init_resource::<Rebuild>()
             .add_observer(change_scrub)
             .add_observer(jump_to_preset)
-            .add_observer(change_day_night)
             // The window's chain runs the scrub and the switch state before
             // the lighting read; the shared catch-up lands between the settle
             // and the next frame.
             .add_systems(
                 Update,
-                (
-                    apply_scrub,
-                    sync_scrub_slider,
-                    sync_daynight_boxes,
-                    update_lighting_state,
-                )
-                    .chain(),
+                (apply_scrub, sync_scrub_slider, update_lighting_state).chain(),
             );
         if let Some((game, map_ref)) = live {
             app.insert_resource(GameResource(game))
@@ -5960,10 +5443,156 @@ mod tests {
         );
         assert_eq!(home(simulation), at_2700);
     }
-
-    fn fire_reset(mut commands: Commands, buttons: Query<Entity, With<ResetPositions>>) {
-        for button in &buttons {
-            commands.trigger(Activate { entity: button });
+    #[test]
+    fn ui_and_control_absolute_seeks_match_after_map_epoch_and_position_reset() {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../original/k1/eng/game");
+        if !path.is_dir() {
+            return;
         }
+        let map = MapRef {
+            source: MapSource::Game,
+            number: 19,
+        };
+        for reset in [false, true] {
+            let mut apps = Vec::new();
+            for _ in 0..2 {
+                let game = Game::open(&path).unwrap();
+                let mut simulation = game.simulation(map, SIM_SEED).unwrap();
+                for _ in 0..200 {
+                    simulation.tick();
+                }
+                let mut app = scrub_app(Some((game, map)));
+                app.world_mut().resource_mut::<Viewer>().maps = vec![map];
+                app.world_mut().insert_resource(Stats {
+                    map: Some(map),
+                    ..default()
+                });
+                app.world_mut().insert_resource(CreatureSim {
+                    sim: Some(simulation),
+                    epoch: 303,
+                    sim_ticks: 200,
+                    ..default()
+                });
+                app.world_mut().resource_mut::<Clock>().ticks = 503;
+                app.world_mut()
+                    .resource_mut::<Clock>()
+                    .goto(PlayState::Paused);
+                if reset {
+                    action::apply_action(app.world_mut(), action::ViewerAction::ResetPositions {})
+                        .unwrap();
+                }
+                apps.push(app);
+            }
+            let mut control = apps.pop().unwrap();
+            let mut ui = apps.pop().unwrap();
+            let slider = spawn_scrub_slider(&mut ui);
+            scrub_to(&mut ui, slider, 100.0, true);
+            action::apply_action(
+                control.world_mut(),
+                action::ViewerAction::Seek { tick: 100 },
+            )
+            .unwrap();
+            control.update();
+            let ui_sim = ui.world().resource::<CreatureSim>();
+            let control_sim = control.world().resource::<CreatureSim>();
+            assert_eq!(
+                home(ui_sim.sim.as_ref().unwrap()),
+                home(control_sim.sim.as_ref().unwrap()),
+                "reset={reset}"
+            );
+            assert_eq!(ui_sim.epoch, 0);
+            assert_eq!(control_sim.epoch, 0);
+            assert_eq!(ui_sim.sim_ticks, 100);
+            assert_eq!(control_sim.sim_ticks, 100);
+        }
+    }
+    #[test]
+    fn map_transition_labels_use_the_replaced_simulation_roster() {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../original/k1/eng/game");
+        if !path.is_dir() {
+            return;
+        }
+        let game = Game::open(&path).unwrap();
+        let maps = [
+            MapRef {
+                source: MapSource::Game,
+                number: 17,
+            },
+            MapRef {
+                source: MapSource::Game,
+                number: 19,
+            },
+        ];
+        let first = game.scene(maps[0], &SceneOptions::ALL).unwrap();
+        let second = game.scene(maps[1], &SceneOptions::ALL).unwrap();
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::asset::AssetPlugin::default(),
+            AnimPlugin::new(TICK_MS as f32),
+            CreatureAnimationPlugin,
+        ))
+        .insert_resource(GameResource(game))
+        .init_resource::<Assets<Image>>()
+        .init_asset::<Font>()
+        .init_resource::<TextureCache>()
+        .init_resource::<CreatureLabels>()
+        .insert_resource(Viewer {
+            maps: maps.to_vec(),
+            selected: 0,
+            overlays: DEFAULT_OVERLAYS,
+            playback: PlayState::Paused,
+            constant_day: false,
+        });
+        let fonts = kn_ui::konung_fonts(&mut app.world_mut().resource_mut::<Assets<Font>>());
+        app.insert_resource(fonts);
+        install_creature_labels(&mut app);
+        app.world_mut()
+            .resource_mut::<Clock>()
+            .goto(PlayState::Paused);
+        app.world_mut()
+            .resource_mut::<CreatureMotion>()
+            .request(maps[0], SIM_SEED, None, first);
+        app.update();
+        let mut labels = app.world_mut().query::<&CreatureLabel>();
+        let old_ids = labels
+            .iter(app.world())
+            .map(|label| label.creature_id)
+            .collect::<HashSet<_>>();
+        assert!(!old_ids.is_empty());
+        if let Some(root) = app
+            .world_mut()
+            .resource_mut::<CreatureLabels>()
+            .label_root
+            .take()
+        {
+            app.world_mut().entity_mut(root).despawn();
+        }
+        app.world_mut()
+            .resource_mut::<CreatureLabels>()
+            .labels_spawned = false;
+        app.world_mut().resource_mut::<Viewer>().selected = 1;
+        app.world_mut()
+            .resource_mut::<CreatureMotion>()
+            .request(maps[1], SIM_SEED, None, second);
+        app.update();
+        let label_ids = labels
+            .iter(app.world())
+            .map(|label| label.creature_id)
+            .collect::<HashSet<_>>();
+        let actual_ids = app
+            .world()
+            .resource::<CreatureSim>()
+            .sim
+            .as_ref()
+            .unwrap()
+            .states()
+            .into_iter()
+            .map(|state| state.id)
+            .collect::<HashSet<_>>();
+        assert_ne!(old_ids, actual_ids);
+        assert_eq!(label_ids, actual_ids);
     }
 }

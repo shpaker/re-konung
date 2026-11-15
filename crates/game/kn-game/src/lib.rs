@@ -68,6 +68,11 @@ impl TextureId {
     pub fn from_key(key: TextureKey) -> Self {
         Self(key)
     }
+
+    /// Whether a texture can contribute visible creature body pixels.
+    pub fn is_creature_image(self) -> bool {
+        matches!(self.0, TextureKey::SpriteImage { .. })
+    }
 }
 
 /// Кусок сцены: textured quad в пикселях карты.

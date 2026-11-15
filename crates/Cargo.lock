@@ -3446,12 +3446,16 @@ name = "kn-fe-viewer"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "getrandom 0.3.4",
  "k1-data",
  "k1-game",
  "kn-game",
  "kn-input",
  "kn-render",
  "kn-ui",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

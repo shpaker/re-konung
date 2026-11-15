@@ -11,7 +11,7 @@ use kn_game::MapSource;
 pub struct Cli {
     /// Каталог установленной игры — содержимое inst/setup.dat
     #[arg(long)]
-    pub game_dir: PathBuf,
+    pub game_dir: Option<PathBuf>,
 
     /// Номер карты, открытой при запуске
     #[arg(long)]
@@ -58,12 +58,23 @@ pub struct Cli {
     )]
     pub benchmark_secs: Option<u64>,
 
+    /// Publish an authenticated loopback session at this new path.
+    #[arg(long)]
+    pub control_file: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Send one JSON action to a running viewer session.
+    Control {
+        #[arg(long)]
+        session: PathBuf,
+        #[arg(long)]
+        request: String,
+    },
     /// Проверка без окна, GPU и рендерера: сцена строится, текстуры декодируются
     Check {
         /// Номер карты
@@ -369,5 +380,22 @@ mod tests {
             }
             other => panic!("expected simulate, got {other:?}"),
         }
+    }
+    #[test]
+    fn session_control_does_not_require_game_directory() {
+        let parsed = cli(&[
+            "control",
+            "--session",
+            "out/session.json",
+            "--request",
+            r#"{"type":"state"}"#,
+        ]);
+        assert!(parsed.game_dir.is_none());
+        assert!(matches!(parsed.command, Some(Command::Control { .. })));
+        assert!(
+            cli(&["--game-dir", "g", "--control-file", "out/session.json"])
+                .control_file
+                .is_some()
+        );
     }
 }

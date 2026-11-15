@@ -19,6 +19,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 use kn_game::simulation::{CreatureStage, CreatureState, Simulation, WalkState};
@@ -246,6 +247,14 @@ impl Default for CreatureDepth {
             map: DepthMap::build(Vec::new().into_iter()),
         }
     }
+}
+
+/// Optional per-frame scheduling budget for simulation catch-up. Frontends that
+/// omit it retain unlimited catch-up; no target tick or gameplay rule is capped.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct SimulationCatchUpBudget {
+    pub max_ticks: u64,
+    pub max_duration: Option<Duration>,
 }
 
 /// What the frontend asked the subsystem to build, and whether it is pending.
@@ -920,6 +929,7 @@ pub fn advance_creature_sim(
     request: Res<CreatureMotion>,
     game: Res<GameResource>,
     clock: Res<Clock>,
+    budget: Option<Res<SimulationCatchUpBudget>>,
 ) {
     if sim.sim.is_none() {
         sim.epoch = clock.ticks;
@@ -927,34 +937,55 @@ pub fn advance_creature_sim(
         return;
     }
     let target = clock.ticks.saturating_sub(sim.epoch);
+    let hero = sim.hero;
+    advance_to_target(&mut sim, target, budget.as_deref(), || {
+        let map_ref = request
+            .map
+            .ok_or_else(|| "cannot replay simulation without a map".to_owned())?;
+        game.0
+            .simulation_with_hero(map_ref, request.seed, hero)
+            .map_err(|error| format!("simulation replay for {map_ref:?}: {error}"))
+    });
+}
+
+fn advance_to_target(
+    sim: &mut CreatureSim,
+    target: u64,
+    budget: Option<&SimulationCatchUpBudget>,
+    rebuild: impl FnOnce() -> Result<Simulation, String>,
+) {
     if target < sim.sim_ticks {
-        // Backward: rebuild and replay forward to the epoch-relative target. This
-        // runs only when the clock actually moved behind the simulation, not every
-        // frame, so a shallow rewind after a reset (target near 0) is cheap.
-        let Some(map_ref) = request.map else {
-            return;
-        };
-        let Some(mut replayed) = game
-            .0
-            .simulation_with_hero(map_ref, request.seed, sim.hero)
-            .ok()
-        else {
-            return;
-        };
-        for _ in 0..target {
-            replayed.tick();
+        match rebuild() {
+            Ok(replayed) => {
+                sim.initial_pixels = replayed.initial_pixels();
+                sim.sim = Some(replayed);
+                sim.sim_ticks = 0;
+                sim.error = None;
+            }
+            Err(error) => {
+                sim.error = Some(error);
+                return;
+            }
         }
-        sim.initial_pixels = replayed.initial_pixels();
-        sim.sim = Some(replayed);
-        sim.sim_ticks = target;
-        return;
     }
+    let started = budget.and_then(|budget| budget.max_duration.map(|_| Instant::now()));
+    let mut advanced = 0;
     while sim.sim_ticks < target {
         let Some(simulation) = sim.sim.as_mut() else {
             break;
         };
         simulation.tick();
         sim.sim_ticks += 1;
+        advanced += 1;
+        // Even a zero budget permits one tick, so a seek can always progress.
+        if budget.is_some_and(|budget| {
+            advanced >= budget.max_ticks.max(1)
+                || started
+                    .zip(budget.max_duration)
+                    .is_some_and(|(start, duration)| start.elapsed() >= duration)
+        }) {
+            break;
+        }
     }
 }
 
@@ -1232,6 +1263,149 @@ mod tests {
 
     use super::*;
     use crate::animation::Frame;
+
+    fn synthetic_simulation() -> Simulation {
+        use k1_data::{
+            game_state::{Character, GameState, Group},
+            map::KonungMap,
+        };
+        Simulation::new(
+            &KonungMap {
+                ground: Vec::new(),
+                overlay: Vec::new(),
+                foot: Vec::new(),
+                decorations: Vec::new(),
+                objects: Vec::new(),
+            },
+            &GameState {
+                items: Vec::new(),
+                groups: vec![
+                    None,
+                    Some(Group {
+                        slot: 1,
+                        first_character: 2,
+                        size: 1,
+                        map_id: 1,
+                        kind: 0x53,
+                        ..default()
+                    }),
+                ],
+                loot: Vec::new(),
+                exits: Vec::new(),
+                characters: vec![
+                    None,
+                    None,
+                    Some(Character {
+                        slot: 2,
+                        x: 5,
+                        y: 5,
+                        group: 1,
+                        state: 4,
+                        class_id: 0x46,
+                        ..default()
+                    }),
+                ],
+                villages: Vec::new(),
+            },
+            1,
+            None,
+            vec![[2; 8]],
+            vec![12],
+            Vec::new(),
+            42,
+            None,
+        )
+    }
+
+    #[test]
+    fn catch_up_budget_advances_incrementally_and_unlimited_keeps_existing_behavior() {
+        let mut sim = CreatureSim {
+            sim: Some(synthetic_simulation()),
+            ..default()
+        };
+        let budget = SimulationCatchUpBudget {
+            max_ticks: 3,
+            max_duration: None,
+        };
+        advance_to_target(&mut sim, 10, Some(&budget), || unreachable!());
+        assert_eq!(sim.sim_ticks, 3);
+        assert_eq!(sim.sim.as_ref().unwrap().tick_number(), 3);
+        advance_to_target(&mut sim, 10, Some(&budget), || unreachable!());
+        assert_eq!(sim.sim_ticks, 6);
+        advance_to_target(&mut sim, 10, None, || unreachable!());
+        assert_eq!(sim.sim_ticks, 10);
+        assert_eq!(sim.sim.as_ref().unwrap().tick_number(), 10);
+    }
+
+    #[test]
+    fn backward_catch_up_rebuilds_once_and_continues_to_the_same_final_state() {
+        let mut sim = CreatureSim {
+            sim: Some(synthetic_simulation()),
+            ..default()
+        };
+        advance_to_target(&mut sim, 20, None, || unreachable!());
+        let budget = SimulationCatchUpBudget {
+            max_ticks: 3,
+            max_duration: None,
+        };
+        let mut builds = 0;
+        advance_to_target(&mut sim, 8, Some(&budget), || {
+            builds += 1;
+            Ok(synthetic_simulation())
+        });
+        assert_eq!(builds, 1);
+        assert_eq!(sim.sim_ticks, 3);
+        while sim.sim_ticks < 8 {
+            advance_to_target(&mut sim, 8, Some(&budget), || panic!("replayed twice"));
+        }
+        let mut direct = CreatureSim {
+            sim: Some(synthetic_simulation()),
+            ..default()
+        };
+        advance_to_target(&mut direct, 8, None, || unreachable!());
+        assert_eq!(
+            sim.sim.as_ref().unwrap().tick_number(),
+            direct.sim.as_ref().unwrap().tick_number()
+        );
+        assert_eq!(
+            sim.sim.as_ref().unwrap().game_time(),
+            direct.sim.as_ref().unwrap().game_time()
+        );
+        assert_eq!(
+            sim.sim.as_ref().unwrap().creature_stage(2),
+            direct.sim.as_ref().unwrap().creature_stage(2)
+        );
+        assert_eq!(
+            sim.sim.as_ref().unwrap().creature_stage(2),
+            Some(CreatureStage::Special { frame: 8 })
+        );
+    }
+
+    #[test]
+    fn zero_budgets_still_make_progress_and_replay_errors_are_reported() {
+        let mut sim = CreatureSim {
+            sim: Some(synthetic_simulation()),
+            ..default()
+        };
+        let budget = SimulationCatchUpBudget {
+            max_ticks: 0,
+            max_duration: Some(Duration::ZERO),
+        };
+        advance_to_target(&mut sim, 10, Some(&budget), || unreachable!());
+        assert_eq!(sim.sim_ticks, 1);
+        let time_only = SimulationCatchUpBudget {
+            max_ticks: 100,
+            max_duration: Some(Duration::ZERO),
+        };
+        advance_to_target(&mut sim, 10, Some(&time_only), || unreachable!());
+        assert_eq!(sim.sim_ticks, 2);
+        advance_to_target(&mut sim, 0, Some(&budget), || Err("bad replay data".into()));
+        assert_eq!(sim.error.as_deref(), Some("bad replay data"));
+        assert_eq!(sim.sim_ticks, 2);
+        advance_to_target(&mut sim, 0, Some(&budget), || Ok(synthetic_simulation()));
+        assert_eq!(sim.sim_ticks, 0);
+        assert!(sim.error.is_none());
+    }
 
     /// The walk cycle is opened at the tick the step started, not the tick it was
     /// first observed: `elapsed - 1` ticks after the base frame, so the shown

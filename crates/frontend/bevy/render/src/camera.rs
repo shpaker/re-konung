@@ -32,10 +32,13 @@ impl Default for CameraBounds {
     }
 }
 
-/// Ступени масштаба; 1.0 — пиксель в пиксель.
-pub const ZOOM_LEVELS: [f32; 9] = [0.125, 0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0];
-/// Индекс ступени по умолчанию — 1:1.
-pub const DEFAULT_ZOOM: usize = 3;
+/// Discrete scales; the lower steps fit large maps in a workspace viewport,
+/// while 1.0 preserves one source pixel per logical screen pixel.
+pub const ZOOM_LEVELS: [f32; 11] = [
+    0.03125, 0.0625, 0.125, 0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0,
+];
+/// Pixel-perfect 1:1, independent of the number of smaller fitting steps.
+pub const DEFAULT_ZOOM: usize = 5;
 /// Скорость панорамирования с клавиатуры, экранных пикселей в секунду.
 pub const PAN_SPEED: f32 = 900.0;
 
@@ -66,6 +69,53 @@ impl CameraState {
     }
 }
 
+/// Logical window rectangle of the map, or the full window for frontends
+/// without a workspace. Publish before [`CameraApply`] on a resize.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct MapViewport {
+    pub logical_rect: Option<Rect>,
+    pub scale_factor: f32,
+}
+
+impl Default for MapViewport {
+    fn default() -> Self {
+        Self {
+            logical_rect: None,
+            scale_factor: 1.0,
+        }
+    }
+}
+
+/// Writes a workspace viewport without changing the camera center or zoom.
+pub fn apply_map_viewport(
+    viewport: Res<MapViewport>,
+    mut cameras: Query<&mut Camera, With<MapCamera>>,
+) {
+    for mut camera in &mut cameras {
+        let next = viewport.logical_rect.map(|rect| {
+            let factor = viewport.scale_factor.max(f32::EPSILON);
+            let min = (rect.min.max(Vec2::ZERO) * factor).round().as_uvec2();
+            let max = (rect.max.max(rect.min) * factor).round().as_uvec2();
+            bevy::camera::Viewport {
+                physical_position: min,
+                physical_size: (max - min).max(UVec2::ONE),
+                ..default()
+            }
+        });
+        let changed = match (&camera.viewport, &next) {
+            (None, None) => false,
+            (Some(old), Some(new)) => {
+                old.physical_position != new.physical_position
+                    || old.physical_size != new.physical_size
+            }
+            _ => true,
+        };
+        if changed {
+            camera.viewport = next;
+        }
+    }
+}
+
 /// Set for the apps' input bindings: frontends register their camera-control
 /// systems here.
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
@@ -85,6 +135,7 @@ impl Plugin for MapCameraPlugin {
         app.init_resource::<CameraState>()
             .init_resource::<CameraBounds>()
             .init_resource::<PendingFrame>()
+            .init_resource::<MapViewport>()
             .add_systems(Startup, spawn_camera)
             .add_systems(
                 Update,
@@ -92,6 +143,7 @@ impl Plugin for MapCameraPlugin {
                     // The frame's zoom must reach the projection on the same frame:
                     // apply_pending_frame picks the fitting step into CameraState,
                     // and apply_zoom is what writes the state out to the camera
+                    apply_map_viewport,
                     apply_pending_frame,
                     apply_zoom,
                 )
@@ -173,13 +225,21 @@ fn apply_pending_frame(
     mut bounds: ResMut<CameraBounds>,
     mut state: ResMut<CameraState>,
     windows: Query<&Window>,
+    viewport: Res<MapViewport>,
     mut camera: Query<&mut Transform, With<MapCamera>>,
 ) {
     if let Some((min, max)) = pending.bounds.take() {
         bounds.min = min;
         bounds.max = max;
         if let Some(window) = windows.iter().next() {
-            state.zoom = fitting_zoom(max - min, Vec2::new(window.width(), window.height()));
+            state.zoom = fitting_zoom(
+                max - min,
+                viewport
+                    .logical_rect
+                    .map_or(Vec2::new(window.width(), window.height()), |rect| {
+                        rect.size()
+                    }),
+            );
         }
     }
     let Some(center) = pending.center.take() else {
@@ -209,6 +269,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn workspace_viewport_uses_physical_pixels_without_changing_framing() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, MapCameraPlugin));
+        app.insert_resource(MapViewport {
+            logical_rect: Some(Rect::from_corners(
+                Vec2::new(56.0, 96.0),
+                Vec2::new(744.0, 568.0),
+            )),
+            scale_factor: 2.0,
+        });
+        app.update();
+        let mut query = app
+            .world_mut()
+            .query_filtered::<(&Camera, &Transform), With<MapCamera>>();
+        let (camera, transform) = query.single(app.world()).unwrap();
+        let viewport = camera.viewport.as_ref().unwrap();
+        assert_eq!(viewport.physical_position, UVec2::new(112, 192));
+        assert_eq!(viewport.physical_size, UVec2::new(1376, 944));
+        let before = transform.translation;
+        let zoom = app.world().resource::<CameraState>().zoom;
+        app.world_mut().resource_mut::<MapViewport>().logical_rect = Some(Rect::from_corners(
+            Vec2::new(56.0, 96.0),
+            Vec2::new(900.0, 600.0),
+        ));
+        app.update();
+        let (camera, transform) = query.single(app.world()).unwrap();
+        assert_eq!(
+            camera.viewport.as_ref().unwrap().physical_size,
+            UVec2::new(1688, 1008)
+        );
+        assert_eq!(transform.translation, before);
+        assert_eq!(app.world().resource::<CameraState>().zoom, zoom);
+        app.world_mut().resource_mut::<MapViewport>().logical_rect = None;
+        app.update();
+        assert!(query.single(app.world()).unwrap().0.viewport.is_none());
+    }
+
+    #[test]
+    fn initial_fitting_uses_workspace_extent() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, MapCameraPlugin));
+        app.world_mut().spawn(Window {
+            resolution: (1280, 800).into(),
+            ..default()
+        });
+        app.insert_resource(MapViewport {
+            logical_rect: Some(Rect::from_corners(
+                Vec2::new(200.0, 100.0),
+                Vec2::new(700.0, 400.0),
+            )),
+            scale_factor: 1.0,
+        });
+        app.insert_resource(PendingFrame {
+            center: Some(Vec2::ZERO),
+            bounds: Some((Vec2::ZERO, Vec2::new(600.0, 400.0))),
+        });
+        app.update();
+        assert_eq!(
+            app.world().resource::<CameraState>().zoom,
+            fitting_zoom(Vec2::new(600.0, 400.0), Vec2::new(500.0, 300.0))
+        );
+    }
+
+    #[test]
     fn default_zoom_is_pixel_perfect() {
         let state = CameraState::default();
         assert_eq!(state.scale(), 1.0);
@@ -230,7 +354,9 @@ mod tests {
 
     #[test]
     fn scale_is_inverse_of_zoom() {
-        let mut state = CameraState { zoom: 4 };
+        let mut state = CameraState {
+            zoom: DEFAULT_ZOOM + 1,
+        };
         assert_eq!(state.scale(), 2.0);
         state.step(-1);
         assert_eq!(state.scale(), 1.0);
@@ -238,21 +364,35 @@ mod tests {
 
     #[test]
     fn fitting_zoom_shows_the_whole_map() {
-        // Карта 3: содержимое ~9300×2700 в окне 1280×800 — самая мелкая ступень
         assert_eq!(
-            fitting_zoom(Vec2::new(9338.0, 2688.0), Vec2::new(1280.0, 800.0)),
-            0
+            ZOOM_LEVELS[fitting_zoom(Vec2::new(9338.0, 2688.0), Vec2::new(1280.0, 800.0))],
+            0.125
         );
-        // Содержимое вдвое меньше окна — ступень ×2
         assert_eq!(
-            fitting_zoom(Vec2::new(600.0, 300.0), Vec2::new(1280.0, 800.0)),
-            4
+            ZOOM_LEVELS[fitting_zoom(Vec2::new(600.0, 300.0), Vec2::new(1280.0, 800.0))],
+            2.0
         );
-        // Очень мелкое содержимое — самая крупная ступень
         assert_eq!(
             fitting_zoom(Vec2::new(50.0, 50.0), Vec2::new(1280.0, 800.0)),
             ZOOM_LEVELS.len() - 1
         );
+    }
+
+    #[test]
+    fn fitting_large_content_uses_lower_steps_inside_narrow_workspaces() {
+        for (content, viewport) in [
+            (Vec2::new(5640.0, 3000.0), Vec2::new(652.0, 620.0)),
+            (Vec2::new(5640.0, 3000.0), Vec2::new(588.0, 540.0)),
+            (Vec2::new(9338.0, 2688.0), Vec2::new(588.0, 540.0)),
+            (Vec2::new(14000.0, 6000.0), Vec2::new(588.0, 540.0)),
+        ] {
+            let scale = ZOOM_LEVELS[fitting_zoom(content, viewport)];
+            assert!(
+                (content * scale).cmple(viewport).all(),
+                "{content:?} at {scale} exceeds {viewport:?}"
+            );
+            assert!(scale < 0.125);
+        }
     }
 
     #[test]

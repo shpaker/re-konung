@@ -20,6 +20,38 @@ pub struct TextureEntry {
     pub size: UVec2,
 }
 
+/// One bit per source pixel, retained without the RGBA upload buffer.
+#[derive(Debug, Clone)]
+pub struct AlphaMask {
+    size: UVec2,
+    bits: Vec<u64>,
+}
+
+impl AlphaMask {
+    pub fn from_rgba(size: UVec2, rgba: &[u8]) -> Self {
+        let pixels = size.x as usize * size.y as usize;
+        let mut bits = vec![0; pixels.div_ceil(64)];
+        for (index, pixel) in rgba.as_chunks::<4>().0.iter().take(pixels).enumerate() {
+            if pixel[3] != 0 {
+                bits[index / 64] |= 1 << (index % 64);
+            }
+        }
+        Self { size, bits }
+    }
+
+    pub fn size(&self) -> UVec2 {
+        self.size
+    }
+
+    pub fn opaque(&self, pixel: UVec2) -> bool {
+        if pixel.x >= self.size.x || pixel.y >= self.size.y {
+            return false;
+        }
+        let index = pixel.y as usize * self.size.x as usize + pixel.x as usize;
+        self.bits[index / 64] & (1 << (index % 64)) != 0
+    }
+}
+
 /// Почему ключ не дал картинку. Класс важен потребителю: пустой слот —
 /// ожидаемая лакуна исходных данных, ошибка декодирования — битые данные,
 /// из-за которых кусок не нарисуется вовсе.
@@ -44,6 +76,7 @@ impl std::fmt::Display for TextureProblem {
 #[derive(Resource, Default)]
 pub struct TextureCache {
     entries: HashMap<TextureId, TextureEntry>,
+    masks: HashMap<AssetId<Image>, AlphaMask>,
 }
 
 impl TextureCache {
@@ -74,6 +107,10 @@ impl TextureCache {
                 Ok(Some(rgba)) => {
                     let size = UVec2::new(rgba.width, rgba.height);
                     let handle = images.add(to_image(&rgba));
+                    if id.is_creature_image() {
+                        self.masks
+                            .insert(handle.id(), AlphaMask::from_rgba(size, &rgba.data));
+                    }
                     self.entries.insert(id, TextureEntry { handle, size });
                 }
                 Ok(None) => problems.push(TextureProblem::EmptySlot(id)),
@@ -81,6 +118,15 @@ impl TextureCache {
             }
         }
         Ok(problems)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_test_mask(&mut self, image: AssetId<Image>, mask: AlphaMask) {
+        self.masks.insert(image, mask);
+    }
+
+    pub fn alpha_mask(&self, image: AssetId<Image>) -> Option<&AlphaMask> {
+        self.masks.get(&image)
     }
 
     pub fn get(&self, id: &TextureId) -> Option<&TextureEntry> {
@@ -116,6 +162,19 @@ mod tests {
     use super::*;
     use crate::scene::SceneLoad;
     use kn_game::TextureKey;
+
+    #[test]
+    fn alpha_mask_crosses_word_boundaries_without_retaining_rgba() {
+        let mut rgba = vec![0; 65 * 4];
+        rgba[3] = 1;
+        rgba[64 * 4 + 3] = 255;
+        let mask = AlphaMask::from_rgba(UVec2::new(65, 1), &rgba);
+        assert_eq!(mask.bits.len(), 2);
+        assert!(mask.opaque(UVec2::ZERO));
+        assert!(mask.opaque(UVec2::new(64, 0)));
+        assert!(!mask.opaque(UVec2::new(63, 0)));
+        assert!(!mask.opaque(UVec2::new(65, 0)));
+    }
 
     #[test]
     fn image_size_matches_rgba() {

@@ -29,35 +29,53 @@ pub enum PlayState {
     Off,
 }
 
-/// Часы анимации: одни на всю сцену.
-///
-/// Одни часы — не упрощение, а семантика: в игре кадры меняются по общему тику,
-/// поэтому одинаковые объекты и персонажи должны идти в такт (как и в
-/// расширении Tiled, где часы анимации тоже одни на все тайлы).
+/// Playback speed must preserve a forward, finite scene clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("playback rate must be positive and finite")]
+pub struct InvalidPlaybackRate;
+
+/// One scene clock for simulation, object/creature frames and lighting.
+/// Playback rate scales real-time accumulation here, never individual consumers.
 #[derive(Resource, Debug)]
 pub struct Clock {
-    /// Сколько тиков прошло с обнуления.
+    /// Whole scene ticks since the clock was positioned or reset.
     pub ticks: u64,
-    /// Реального времени, не дотягивающего до следующего тика, секунд.
+    /// Earned scene-time seconds that have not yet completed a tick.
     pub sub_tick: f32,
     pub state: PlayState,
-    /// Длительность тика, миллисекунд.
+    /// Duration of a scene tick in milliseconds, independent of playback rate.
     tick_ms: f32,
+    rate: f32,
 }
 
 impl Clock {
-    /// Часы с нулевым тиком и заданной длительностью тика.
+    /// Starts at tick zero, normal speed and the supplied scene-tick duration.
     pub fn new(tick_ms: f32) -> Self {
         Self {
             ticks: 0,
             sub_tick: 0.0,
             state: PlayState::default(),
             tick_ms,
+            rate: 1.0,
         }
     }
 
-    /// Пропускает через часы кадр длиной `delta_secs`; в [`PlayState::Off`] и
-    /// на паузе время не идёт.
+    pub fn rate(&self) -> f32 {
+        self.rate
+    }
+
+    /// Changes future real-time accumulation without discarding the fraction
+    /// already earned. Pause, discrete steps and clock positioning keep it.
+    pub fn set_rate(&mut self, rate: f32) -> Result<(), InvalidPlaybackRate> {
+        if !positive(rate) {
+            return Err(InvalidPlaybackRate);
+        }
+        self.rate = rate;
+        Ok(())
+    }
+
+    /// Accumulates real frame time at the selected rate. Paused/off clocks
+    /// retain their position and earned fraction.
     pub fn advance(&mut self, delta_secs: f32) {
         if self.state != PlayState::Playing {
             return;
@@ -66,14 +84,21 @@ impl Clock {
         if !positive(tick_secs) || !positive(delta_secs) {
             return;
         }
-        let elapsed = self.sub_tick + delta_secs;
+        let elapsed = self.sub_tick + delta_secs * self.rate;
+        if !elapsed.is_finite() {
+            return;
+        }
         let passed = (elapsed / tick_secs).floor() as u64;
         if passed == 0 {
             self.sub_tick = elapsed;
             return;
         }
-        self.ticks += passed;
-        self.sub_tick = elapsed - passed as f32 * tick_secs;
+        self.ticks = self.ticks.saturating_add(passed);
+        self.sub_tick = if passed == u64::MAX {
+            elapsed % tick_secs
+        } else {
+            elapsed - passed as f32 * tick_secs
+        };
     }
 
     /// Шаг покадрового просмотра: ровно на `delta` тиков, назад не ниже нуля.
@@ -86,7 +111,7 @@ impl Clock {
         if self.state == PlayState::Off {
             return;
         }
-        self.ticks = (self.ticks as i64 + delta).max(0) as u64;
+        self.ticks = self.ticks.saturating_add_signed(delta);
         self.sub_tick = 0.0;
     }
 
@@ -387,6 +412,65 @@ mod tests {
     }
 
     #[test]
+    fn playback_rates_scale_the_same_wall_time_without_a_second_clock() {
+        for (rate, ticks) in [
+            (0.25, 2),
+            (0.5, 4),
+            (1.0, 8),
+            (2.0, 16),
+            (4.0, 32),
+            (8.0, 64),
+        ] {
+            let mut clock = Clock::new(125.0);
+            assert_eq!(clock.rate(), 1.0);
+            clock.set_rate(rate).unwrap();
+            for _ in 0..4 {
+                clock.advance(0.25);
+            }
+            assert_eq!(clock.ticks, ticks, "rate {rate}");
+            assert_eq!(clock.sub_tick, 0.0);
+        }
+    }
+
+    #[test]
+    fn playback_rate_survives_pause_and_does_not_scale_discrete_steps() {
+        for rate in [0.25, 0.5, 1.0, 2.0, 4.0, 8.0] {
+            let mut clock = Clock::new(125.0);
+            clock.set_rate(rate).unwrap();
+            clock.goto(PlayState::Paused);
+            clock.advance(1.0);
+            assert_eq!(clock.ticks, 0);
+            clock.step(1);
+            assert_eq!(clock.ticks, 1);
+            clock.step(-1);
+            assert_eq!(clock.ticks, 0);
+            clock.goto(PlayState::Playing);
+            assert_eq!(clock.rate(), rate);
+            clock.advance(0.5);
+            assert_eq!(clock.ticks, (rate * 4.0) as u64);
+        }
+    }
+
+    #[test]
+    fn changing_rate_retains_the_earned_fraction_and_rejects_invalid_values() {
+        let mut clock = Clock::new(1000.0);
+        clock.set_rate(0.5).unwrap();
+        clock.advance(0.25);
+        assert_eq!(clock.sub_tick, 0.125);
+        clock.set_rate(2.0).unwrap();
+        assert_eq!(clock.sub_tick, 0.125);
+        for invalid in [0.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(clock.set_rate(invalid), Err(InvalidPlaybackRate));
+            assert_eq!(clock.rate(), 2.0);
+            assert_eq!((clock.ticks, clock.sub_tick), (0, 0.125));
+        }
+        clock.advance(0.25);
+        assert_eq!(clock.sub_tick, 0.625);
+        clock.advance(0.1875);
+        assert_eq!((clock.ticks, clock.sub_tick), (1, 0.0));
+    }
+
+    #[test]
     fn clock_keeps_the_fraction_of_a_tick() {
         // 16.7 мс при 60-мс тике: четыре кадра — уже один тик, и остаток жив
         let mut clock = Clock::new(60.0);
@@ -456,6 +540,22 @@ mod tests {
         assert_eq!(clock.ticks, ticks + 1);
         assert_eq!(clock.sub_tick, 0.0);
         clock.step(-100);
+        assert_eq!(clock.ticks, 0);
+    }
+
+    #[test]
+    fn discrete_steps_saturate_without_narrowing_unsigned_ticks() {
+        let mut clock = Clock::new(60.0);
+        clock.ticks = 1;
+        clock.step(i64::MAX);
+        assert_eq!(clock.ticks, i64::MAX as u64 + 1);
+        clock.step(i64::MAX);
+        assert_eq!(clock.ticks, u64::MAX);
+        clock.step(10);
+        assert_eq!(clock.ticks, u64::MAX);
+        clock.step(i64::MIN);
+        assert_eq!(clock.ticks, i64::MAX as u64);
+        clock.step(i64::MIN);
         assert_eq!(clock.ticks, 0);
     }
 

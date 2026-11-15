@@ -44,7 +44,7 @@ fn editions() -> Vec<(&'static str, PathBuf)> {
 
 fn cli(game_dir: PathBuf) -> Cli {
     Cli {
-        game_dir,
+        game_dir: Some(game_dir),
         map: None,
         source: SourceArg::Game,
         light_tick: None,
@@ -52,6 +52,7 @@ fn cli(game_dir: PathBuf) -> Cli {
         screenshot: None,
         benchmark: None,
         benchmark_secs: None,
+        control_file: None,
         command: None,
     }
 }
