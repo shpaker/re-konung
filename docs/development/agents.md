@@ -6,6 +6,33 @@
 `CLAUDE.md` импортирует его через `@AGENTS.md`. Проверки работают общими
 git-хуками, а не хуками отдельного агента; исходная схема следовала практике tank8000.
 
+<a id="delegation"></a>
+
+## Delegation
+
+The primary agent plans, assigns scoped work directly and reviews the result,
+including acceptance and critical checks. The selected primary model is intended
+to be Astra; project configuration does not override it. Assign one writer per
+file set. Subagents do not delegate further and report ambiguity or conflicting
+evidence to the primary agent with concise evidence.
+
+Codex provides these project roles in `.codex/agents/`:
+
+| Role | Model and effort | Assignment |
+|---|---|---|
+| `sol_scout` | `gpt-6.1-sol`, medium | Read-only investigation |
+| `sol_worker` | `gpt-6.1-sol`, high | Complex implementation |
+| `terra_worker` | `gpt-6.1-terra`, medium | Scoped changes and visual checks |
+
+The scout's read-only scope is an instruction, not a separate enforced sandbox.
+The primary agent chooses roles as needed; small tasks do not require all three.
+The project permits up to three concurrent subagents. The configuration format is
+in the [Codex documentation](https://learn.chatgpt.com/docs/agent-configuration/subagents).
+
+Evaluate the workflow by time to completion including repairs, reviewer findings,
+and visual evidence where needed. Other clients follow the general roles in
+AGENTS.md; their separate configurations are deferred.
+
 <a id="skills-and-plugins"></a>
 
 ## Навыки и плагины

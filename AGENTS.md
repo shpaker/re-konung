@@ -19,6 +19,17 @@ Read the relevant document before working; follow the linked procedures.
 | Issues, PRs or git workflow | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Agent tools and checks | [Agent workflow](docs/development/agents.md) and [testing](docs/development/testing.md) |
 
+## Delegation
+
+- The primary agent plans, assigns scoped work directly, reviews results and owns
+  acceptance and critical checks. A scout investigates without editing; a worker
+  implements an assigned scope. Assign one writer per file set.
+- In Codex, use `sol_scout` for scouting, `sol_worker` for complex implementation,
+  and `terra_worker` for scoped changes and visual checks when available. See
+  [Agent workflow](docs/development/agents.md#delegation) for details.
+- Subagents do not delegate further. Escalate ambiguity or conflicting evidence
+  to the primary agent. Use parallel work only when it helps the task.
+
 ## Reverse engineering
 
 - Use the hypothesis → real-file check → test → documentation loop. Every format
