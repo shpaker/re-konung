@@ -622,13 +622,17 @@ mod tests {
             1,
             json!({"type":"display","layer":"lights","visible":true}),
         );
-        let mut second = request(&app, &token, 2, json!({"type":"playback","playing":false}));
         drive_until(&mut app, |world| {
             world.resource::<ControlServer>().pending.len() == 1
-                && world.resource::<ControlServer>().clients.len() == 2
+        });
+        assert_eq!(app.world().resource::<ControlServer>().pending[0].id, 1);
+        let mut second = request(&app, &token, 2, json!({"type":"playback","playing":false}));
+        drive_until(&mut app, |world| {
+            world.resource::<ControlServer>().clients.len() == 2
         });
         assert!(received(&mut first).is_none());
         assert_eq!(app.world().resource::<ControlServer>().pending.len(), 1);
+        assert_eq!(app.world().resource::<ControlServer>().pending[0].id, 1);
         assert_eq!(app.world().resource::<ControlServer>().clients.len(), 2);
         assert_eq!(
             app.world().resource::<Viewer>().playback,
