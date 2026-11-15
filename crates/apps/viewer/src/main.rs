@@ -22,6 +22,10 @@ fn exit_code_of(exit: AppExit) -> ExitCode {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
+        Some(Command::Control {
+            ref session,
+            ref request,
+        }) => kn_viewer::control::run(session, request),
         Some(Command::Check { map, all, format }) => kn_viewer::run_check(&cli, map, all, format),
         Some(Command::Simulate {
             map,

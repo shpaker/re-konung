@@ -115,6 +115,13 @@ pub fn konung_theme() -> UiTheme {
         .token_assignments
         .insert(tokens::BUTTON_TEXT, tokens::semantic::TEXT_DEFAULT.clone());
 
+    // Feathers shares these neutral controls with on-accent text as well.
+    for token in [tokens::TEXT_INPUT_TEXT, tokens::LISTROW_TEXT] {
+        props
+            .token_assignments
+            .insert(token, tokens::semantic::TEXT_DEFAULT.clone());
+    }
+
     // Accent: checked checkboxes, slider bars, primary buttons, focus ring.
     recolor(
         &mut props,
@@ -242,6 +249,20 @@ mod tests {
         assert_eq!(theme.color(&tokens::TEXT_MAIN), palette::TEXT);
         assert_eq!(theme.color(&tokens::TEXT_DIM), palette::TEXT_MUTED);
         assert_eq!(theme.color(&tokens::BUTTON_TEXT), palette::TEXT);
+        assert_eq!(theme.color(&tokens::TEXT_INPUT_TEXT), palette::TEXT);
+        assert_eq!(theme.color(&tokens::LISTROW_TEXT), palette::TEXT);
+        assert_eq!(
+            theme.color(&tokens::TEXT_INPUT_TEXT_DISABLED),
+            palette::TEXT_MUTED
+        );
+        assert_eq!(
+            theme.color(&tokens::LISTROW_TEXT_DISABLED),
+            palette::TEXT_MUTED
+        );
+        assert_ne!(
+            theme.color(&tokens::LISTROW_TEXT),
+            theme.color(&tokens::LISTROW_BG_SELECTED)
+        );
         assert_eq!(
             theme.color(&tokens::BUTTON_PRIMARY_TEXT),
             palette::TEXT_ON_ACCENT

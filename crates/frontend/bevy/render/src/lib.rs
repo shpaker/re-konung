@@ -10,23 +10,26 @@ pub mod camera;
 pub mod creature_animation;
 pub mod creatures;
 pub mod lighting;
+pub mod picking;
 pub mod scene;
 pub mod textures;
 
 pub use animation::{
-    AnimPlugin, AnimSet, Animator, Clock, Frame, PlayState, Sequence, SpriteView, frame_view,
+    AnimPlugin, AnimSet, Animator, Clock, Frame, InvalidPlaybackRate, PlayState, Sequence,
+    SpriteView, frame_view,
 };
 pub use camera::{
-    CameraApply, CameraBounds, CameraInput, CameraState, MapCamera, MapCameraPlugin, PAN_SPEED,
-    PendingFrame, ZOOM_LEVELS, fitting_zoom, frame_scene, ortho_scale,
+    CameraApply, CameraBounds, CameraInput, CameraState, DEFAULT_ZOOM, MapCamera, MapCameraPlugin,
+    MapViewport, PAN_SPEED, PendingFrame, ZOOM_LEVELS, apply_map_viewport, fitting_zoom,
+    frame_scene, ortho_scale,
 };
 pub use creature_animation::{
     Clip, CreatureAnim, CreatureAnimReport, CreatureAnimationPlugin, CreatureDepth, CreatureMotion,
     CreatureNodesVisible, CreatureSequences, CreatureSet, CreatureSim, CreatureSpawns,
-    CreatureSprite, LayerSequences, StepKey, advance_creature_sim, build_creature_anim,
-    build_creature_spawns, build_depth_map, prepare_creatures, reset_creature_animations,
-    reset_creature_positions, reset_creature_sim, select_clip, spawn_creature_nodes,
-    sync_creature_animation, sync_creature_nodes,
+    CreatureSprite, LayerSequences, SimulationCatchUpBudget, StepKey, advance_creature_sim,
+    build_creature_anim, build_creature_spawns, build_depth_map, prepare_creatures,
+    reset_creature_animations, reset_creature_positions, reset_creature_sim, select_clip,
+    spawn_creature_nodes, sync_creature_animation, sync_creature_nodes,
 };
 pub use creatures::{
     CreatureData, CreatureLayer, CreatureNode, CreatureRoot, CreatureShadow, CreatureSlot,
@@ -38,11 +41,12 @@ pub use lighting::{
     SurfaceLighting, light_mask_image, piece_surface_lighting, surface_lighting,
     update_creature_lighting, update_lighting_uniforms,
 };
+pub use picking::CreaturePicker;
 pub use scene::{
     MapRoot, SceneGroup, SceneLoad, ScenePiece, Z_STEP, clear_scene, load_scene, piece_center,
     piece_sequence, piece_size, piece_transform, scene_bounds, spawn_scene,
 };
-pub use textures::{TextureCache, TextureEntry, TextureProblem};
+pub use textures::{AlphaMask, TextureCache, TextureEntry, TextureProblem};
 
 use bevy::prelude::*;
 

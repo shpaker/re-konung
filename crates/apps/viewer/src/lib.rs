@@ -6,6 +6,7 @@
 //! Bevy transitively, which is fine).
 
 pub mod cli;
+pub mod control;
 
 use std::process::ExitCode;
 
@@ -17,6 +18,8 @@ use crate::cli::{Cli, Format};
 
 #[derive(Debug, Error)]
 pub enum ViewerError {
+    #[error("--game-dir is required unless using control")]
+    GameDirectoryRequired,
     #[error(transparent)]
     Game(#[from] kn_game::GameError),
     #[error("{dir}: нет карт источника {map_source}")]
@@ -40,11 +43,15 @@ pub enum ViewerError {
 
 /// Opens the game and resolves the startup selection; errors keep the old CLI messages.
 pub fn viewer_config(cli: &Cli) -> Result<ViewerConfig, ViewerError> {
-    let game = Game::open(&cli.game_dir)?;
+    let game_dir = cli
+        .game_dir
+        .as_ref()
+        .ok_or(ViewerError::GameDirectoryRequired)?;
+    let game = Game::open(game_dir)?;
     let maps = game.maps()?;
     if maps.is_empty() {
         return Err(ViewerError::NoMaps {
-            dir: cli.game_dir.clone(),
+            dir: game_dir.clone(),
             map_source: cli.source.into(),
         });
     }
@@ -54,14 +61,14 @@ pub fn viewer_config(cli: &Cli) -> Result<ViewerConfig, ViewerError> {
         && let Some(number) = cli.map
     {
         return Err(ViewerError::NoSuchMap {
-            dir: cli.game_dir.clone(),
+            dir: game_dir.clone(),
             map_source: cli.source.into(),
             number,
         });
     }
     Ok(ViewerConfig {
         game,
-        game_dir: cli.game_dir.clone(),
+        game_dir: game_dir.clone(),
         maps,
         selected: selected.unwrap_or(0),
         lighting_tick: cli.light_tick,
@@ -69,6 +76,7 @@ pub fn viewer_config(cli: &Cli) -> Result<ViewerConfig, ViewerError> {
         screenshot: cli.screenshot.clone(),
         benchmark: cli.benchmark,
         benchmark_secs: cli.benchmark_secs,
+        control_file: cli.control_file.clone(),
     })
 }
 
@@ -110,7 +118,11 @@ pub fn simulate_reports(
     ticks: u64,
     seed: u64,
 ) -> Result<Vec<SimReport>, ViewerError> {
-    let game = Game::open(&cli.game_dir)?;
+    let game_dir = cli
+        .game_dir
+        .as_ref()
+        .ok_or(ViewerError::GameDirectoryRequired)?;
+    let game = Game::open(game_dir)?;
     let source: MapSource = cli.source.into();
     let available = game.maps()?;
     let maps = if all {
@@ -123,7 +135,7 @@ pub fn simulate_reports(
         let map_ref = MapRef { source, number };
         if !available.contains(&map_ref) {
             return Err(ViewerError::NoSuchMap {
-                dir: cli.game_dir.clone(),
+                dir: game_dir.clone(),
                 map_source: source,
                 number,
             });
@@ -132,7 +144,7 @@ pub fn simulate_reports(
     };
     if maps.is_empty() {
         return Err(ViewerError::NoMaps {
-            dir: cli.game_dir.clone(),
+            dir: game_dir.clone(),
             map_source: source,
         });
     }
@@ -353,7 +365,11 @@ pub fn check(
     all: bool,
     format: Format,
 ) -> Result<ExitCode, ViewerError> {
-    let game = Game::open(&cli.game_dir)?;
+    let game_dir = cli
+        .game_dir
+        .as_ref()
+        .ok_or(ViewerError::GameDirectoryRequired)?;
+    let game = Game::open(game_dir)?;
     let source: MapSource = cli.source.into();
     let available = game.maps()?;
     let maps = if all {
@@ -366,7 +382,7 @@ pub fn check(
         let map_ref = MapRef { source, number };
         if !available.contains(&map_ref) {
             return Err(ViewerError::NoSuchMap {
-                dir: cli.game_dir.clone(),
+                dir: game_dir.clone(),
                 map_source: source,
                 number,
             });
@@ -375,7 +391,7 @@ pub fn check(
     };
     if maps.is_empty() {
         return Err(ViewerError::NoMaps {
-            dir: cli.game_dir.clone(),
+            dir: game_dir.clone(),
             map_source: source,
         });
     }
@@ -399,7 +415,7 @@ mod tests {
     fn viewer_opens_only_a_real_game_dir() {
         let dir = tempfile::tempdir().unwrap();
         let cli = Cli {
-            game_dir: dir.path().to_path_buf(),
+            game_dir: Some(dir.path().to_path_buf()),
             map: None,
             source: crate::cli::SourceArg::Game,
             light_tick: None,
@@ -407,6 +423,7 @@ mod tests {
             screenshot: None,
             benchmark: None,
             benchmark_secs: None,
+            control_file: None,
             command: None,
         };
         assert!(matches!(

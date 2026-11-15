@@ -172,3 +172,102 @@ just viewer-gate
 | final ramp | 18960 | 13 | Внутри перехода длиной 121 тик к нейтральному цвету, земля без света |
 
 Названия фаз отображения классифицируют интервалы таблицы; слово фазы не вводит дополнительной временной границы.
+
+## Workspace inspection costs
+
+Local synthetic measurements on an Apple M4 Pro, `dev-runtime` (workspace
+opt-level 1, dependencies opt-level 3), using `Instant` and `black_box`; each
+number is the minimum per-operation average of five batches of 1,000 operations.
+These are CPU microbenchmarks, not a frame-time budget or measurements of original
+maps. The fixtures contain 500 visible sprite layers and, separately, 200 idle
+lone NPCs on an open grid.
+
+| Operation | Time | Neighboring operation |
+|---|---:|---|
+| Build a 96×128 one-bit alpha mask | 21.57 µs | Copy the same RGBA buffer: 0.52 µs |
+| Pick among 500 sprite layers | 11.81 µs | Find one selected creature's bounds among those layers: 1.33 µs |
+| Inspect one record, worst-case scan of 200 records | 0.095 µs | Collect 200 movement states: 2.58 µs |
+| Build all 200 inspection projections, including label copies | 8.80 µs | Tick those 200 idle NPCs: 4.00 µs |
+
+Mask construction is about 41 times the upload-buffer copy, paid once per unique
+creature body/equipment image during decode. Its pixel payload is 1,536 bytes,
+versus 49,152 bytes of RGBA (32 times smaller); map/hash allocation overhead is
+excluded. Terrain and shadow images retain no mask, and the RGBA upload remains
+render-world-only. A pick is about nine times the bounds query in this fixture;
+a direct single-record lookup is substantially cheaper than allocating all live
+states. Full inspection enumeration costs about twice this deliberately simple
+idle tick. These are facade API costs: the current workspace builds the complete
+read projection each frame, including the JSON and scene scans measured below. These comparisons do not estimate route
+search or texture decode costs.
+
+Reproduce without game files:
+
+```sh
+cargo test --manifest-path crates/Cargo.toml --profile dev-runtime \
+  -p kn-game -p kn-render --lib workspace_inspection_costs -- \
+  --ignored --nocapture --test-threads=1
+```
+
+The shared picker quantizes the current displayed frame into half-open local
+sprite pixels before applying flips, excludes transparent texels and all shadow
+layers, and resolves overlapping opaque body/equipment pixels by their actual
+world z. Selection bounds use those same current quads. Read these mechanisms
+after transform and inherited-visibility propagation. The Inspector's squad
+snapshot is the exact pre-movement value consumed by the last decision pass;
+tick-zero and position-reset snapshots are computed from the initial placement
+and marked unevaluated. It never substitutes the stored, unknown `ai_state` byte.
+
+### Complete read projection
+
+Measured separately on the same Apple M4 Pro in `dev-runtime` with the dynamic
+feature: `state_value` includes inspection enumeration, JSON allocation and
+cleanup, selected-layer JSON and both complete scene-visibility scans. After
+100 warm-up calls, 2,000 calls gave:
+
+| Local simulation | Creatures | Synthetic visible ScenePiece nodes | Median | p95 |
+|---|---:|---:|---:|---:|
+| RUS map 17 | 28 | 12,501 | 86.500 µs | 103.417 µs |
+| RUS map 19 | 20 | 13,993 | 69.084 µs | 78.041 µs |
+
+The simulation is loaded from local files, while the scene components and eight
+selected static body-layer entries are synthetic. This exercises the actual
+full read-projection path without window/GPU/UI-layout cost; it is not a
+measurement of the whole Inspector, a complete frame, or animation-clip lookup.
+The map with fewer scene nodes but more creature records costs more here, so
+core inspection-only microbenchmarks cannot stand in for JSON/workspace costs.
+
+```sh
+GAME_DIR=original/k1/rus/game MAP=17 cargo test \
+  --manifest-path crates/Cargo.toml --profile dev-runtime \
+  -p kn-fe-viewer --features dynamic --lib \
+  action::tests::measure_workspace_projection_cost -- --ignored --exact --nocapture
+```
+
+## Local workspace verification
+
+Checked on macOS, Apple M4 Pro, 2026-11-15, at logical window sizes 1280×800
+and 1024×720, plus a 960×640 stress layout. `check --all --format json` reports
+were exactly equal to the preceding `main` for 43 RUS game maps, 43 ENG game
+maps and two ENG tutorial maps.
+
+A missing-map failure was reproduced in a local symlink fixture under `out/`.
+Requesting map 1 retained displayed map 17 and selection 513, showed requested
+map 1 and its load error, and left state reads available. Restoring only the
+fixture symlink and Retry loaded map 1 and cleared selection; originals were
+not changed. Selection alone preserved scene/cache facts and camera.
+
+Native ENG map 19 scrubbing to tick 5,357 changed 14 creature positions and
+reached ready state. Seeking to the same tick through control produced exactly
+the same complete creature projection. UI scrubbing preserves the previous
+play/pause preference, whereas control Seek pauses. Approximately one-second
+samples advanced 17 ticks at 1× and 134 ticks at 8×, consistent with about eight
+times the rate; this is a behavioral check, not frame-performance evidence.
+Reset at clock 600 followed by a relative step to 599 also completed ready.
+
+Workspace captures contained nonblack pixels, and paired JSON was exactly equal
+to the capture response state. Capturing while playing restored playback after
+save; write failure returned an error. Legacy batch `--screenshot` also exited
+successfully and produced a visually checked, nonblack 2560×1600 PNG at 1:1.
+Images, session tokens and response evidence stay local under
+`out/viewer-workspace-verification/` and are not committed. An earlier black
+baseline capture was not reproduced in the later check; no cause was established.
