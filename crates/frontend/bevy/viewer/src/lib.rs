@@ -4,6 +4,7 @@
 
 pub mod action;
 mod control;
+mod debug;
 mod input;
 mod readiness;
 mod workspace;
@@ -1137,6 +1138,7 @@ pub fn run_viewer(config: ViewerConfig) -> AppExit {
     readiness::install(&mut app);
     action::install(&mut app);
     input::install(&mut app);
+    debug::install(&mut app);
     install_creature_labels(&mut app);
     workspace::install(&mut app);
     if let Some(path) = control_file

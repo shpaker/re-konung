@@ -10,6 +10,7 @@
 //! display, and builds the grid, the routes and the per-tick step from data
 //! brought to it from outside.
 
+pub mod debug;
 pub mod movement;
 pub mod rules;
 pub mod simulation;
@@ -22,7 +23,7 @@ pub use k1_game::new_game::{
 
 use std::path::PathBuf;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use k1_data::{
@@ -237,7 +238,7 @@ pub struct AnimationStats {
 }
 
 /// Часть серии: первая игра или обучение ENG. Позже — K2/K2.5.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MapSource {
     Game,
@@ -262,7 +263,8 @@ impl std::fmt::Display for MapSource {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MapRef {
     pub source: MapSource,
     pub number: u32,
@@ -1008,6 +1010,47 @@ impl Game {
             seed,
             self.resources.tables.texts.as_ref(),
         ))
+    }
+
+    /// Resolves the same source/hero as a map session, but takes the actual
+    /// player leader's pace from that hero's start map, not the inspected map.
+    pub fn debug_player_profile(
+        &self,
+        map_ref: MapRef,
+        hero: Option<u32>,
+    ) -> Result<debug::DebugPlayerProfile> {
+        let files = map_ref.source.file_set();
+        let hero = self.hero_for(map_ref.source, hero)?.ok_or_else(|| {
+            GameError::Io(std::io::Error::other("no hero state for debug player"))
+        })?;
+        let bytes = self.dir.state_bytes(hero as u32, files)?;
+        let state = self.session_or_original(&bytes, map_ref.source, Some(hero))?;
+        let roster = k1_game::creatures::roster(&state, game_state::start_map(hero), Some(hero));
+        let candidates: Vec<_> = roster
+            .into_iter()
+            .filter(|creature| creature.group_kind == k1_game::rules::group::PLAYER)
+            .collect();
+        let steps = self.resources.with_graphics(|graph, objects| {
+            k1_game::creatures::step_durations(&state, &candidates, graph, objects)
+        })?;
+        candidates
+            .into_iter()
+            .zip(steps)
+            .map(|(creature, step_ticks)| debug::DebugPlayerProfile {
+                hero: hero as u32,
+                character: creature.id,
+                group: creature.group,
+                direction: creature.direction,
+                class_id: creature.class_id,
+                recorded_state: creature.state,
+                step_ticks,
+            })
+            .find(|profile| profile.validate().is_ok())
+            .ok_or_else(|| {
+                GameError::Io(std::io::Error::other(
+                    "no living player member with complete walk data",
+                ))
+            })
     }
 
     /// Idle and walk clips per creature for the first available hero's state.

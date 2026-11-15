@@ -13,6 +13,15 @@ pub enum InteractionMode {
     #[default]
     Select,
     Pan,
+    DebugPlayer,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DebugScope {
+    #[default]
+    Selected,
+    All,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +84,29 @@ pub enum ViewerAction {
     Capture {
         path: PathBuf,
     },
+    DebugClick {
+        column: u32,
+        row: u32,
+    },
+    DebugPlace {
+        column: u32,
+        row: u32,
+    },
+    DebugMove {
+        column: u32,
+        row: u32,
+    },
+    DebugRemove {},
+    DebugDisplay {
+        layer: String,
+        visible: bool,
+    },
+    DebugScope {
+        scope: DebugScope,
+    },
+    ExportCommands {
+        path: PathBuf,
+    },
     Escape {},
 }
 
@@ -100,6 +132,8 @@ pub struct ViewerWorkspace {
     pub map_search: String,
     pub creature_search: String,
     pub keyboard_captured: bool,
+    pub debug_overlays: [bool; 4],
+    pub debug_scope: DebugScope,
 }
 
 impl ViewerWorkspace {
@@ -191,8 +225,22 @@ pub(crate) fn apply_action(world: &mut World, action: ViewerAction) -> Result<()
         ViewerAction::Escape {} => "Select tool active; disclosures closed",
         _ => "Applied",
     };
+    let debug_feedback = matches!(
+        action,
+        ViewerAction::DebugClick { .. }
+            | ViewerAction::DebugPlace { .. }
+            | ViewerAction::DebugMove { .. }
+            | ViewerAction::DebugRemove {}
+    ) || (world.contains_resource::<kn_render::DebugReplay>()
+        && matches!(
+            action,
+            ViewerAction::ResetPositions {} | ViewerAction::ResetAnimation {}
+        ));
     let result = reduce_action(world, action);
-    if !read_only && let Some(mut workspace) = world.get_resource_mut::<ViewerWorkspace>() {
+    if !read_only
+        && !debug_feedback
+        && let Some(mut workspace) = world.get_resource_mut::<ViewerWorkspace>()
+    {
         workspace.set_feedback(
             result
                 .as_ref()
@@ -284,9 +332,17 @@ fn reduce_action(world: &mut World, action: ViewerAction) -> Result<(), String> 
             world.resource_mut::<Viewer>().constant_day = enabled
         }
         ViewerAction::ResetAnimation {} => {
-            reset_creature_animations(&mut world.resource_mut::<CreatureSim>())
+            if world.contains_resource::<kn_render::DebugReplay>() {
+                crate::debug::command(world, kn_game::debug::DebugCommand::ResetAnimation)?;
+            } else {
+                reset_creature_animations(&mut world.resource_mut::<CreatureSim>());
+            }
         }
         ViewerAction::ResetPositions {} => {
+            if world.contains_resource::<kn_render::DebugReplay>() {
+                crate::debug::command(world, kn_game::debug::DebugCommand::ResetPositions)?;
+                return Ok(());
+            }
             let map = world.resource::<Stats>().map.ok_or("No map displayed")?;
             let tick = world.resource::<Clock>().ticks;
             world.resource_scope(|world, mut sim: Mut<CreatureSim>| {
@@ -351,6 +407,52 @@ fn reduce_action(world: &mut World, action: ViewerAction) -> Result<(), String> 
                 }
             }
         }
+        ViewerAction::DebugClick { column, row } => {
+            let cell = (column, row);
+            let present = world
+                .resource::<CreatureSim>()
+                .sim
+                .as_ref()
+                .and_then(Simulation::debug_player)
+                .is_some();
+            crate::debug::command(
+                world,
+                if present {
+                    kn_game::debug::DebugCommand::Move { cell }
+                } else {
+                    kn_game::debug::DebugCommand::Place { cell }
+                },
+            )?;
+        }
+        ViewerAction::DebugPlace { column, row } => crate::debug::command(
+            world,
+            kn_game::debug::DebugCommand::Place {
+                cell: (column, row),
+            },
+        )?,
+        ViewerAction::DebugMove { column, row } => crate::debug::command(
+            world,
+            kn_game::debug::DebugCommand::Move {
+                cell: (column, row),
+            },
+        )?,
+        ViewerAction::DebugRemove {} => {
+            crate::debug::command(world, kn_game::debug::DebugCommand::Remove)?
+        }
+        ViewerAction::DebugDisplay { layer, visible } => {
+            let index = match layer.as_str() {
+                "routes" => 0,
+                "targets" => 1,
+                "group_states" => 2,
+                "regions" => 3,
+                _ => return Err("Unknown debug display layer".into()),
+            };
+            world.resource_mut::<ViewerWorkspace>().debug_overlays[index] = visible;
+        }
+        ViewerAction::DebugScope { scope } => {
+            world.resource_mut::<ViewerWorkspace>().debug_scope = scope
+        }
+        ViewerAction::ExportCommands { path } => crate::debug::export(world, &path)?,
         ViewerAction::Escape {} => {
             if let Some(mut scrub) = world.get_resource_mut::<ScrubState>()
                 && scrub.active
@@ -465,8 +567,11 @@ pub(crate) fn state_value(world: &mut World) -> Value {
         .as_ref()
         .map(|_| world.resource::<CreatureSim>().sim_ticks);
     let simulation_target_tick = tick.saturating_sub(simulation_epoch);
-    let simulation_caught_up =
-        simulation_local_tick.is_none_or(|local| local == simulation_target_tick);
+    let simulation_caught_up = simulation_local_tick
+        .is_none_or(|local| local == simulation_target_tick)
+        && world
+            .get_resource::<kn_render::DebugReplay>()
+            .is_none_or(|replay| replay.caught_up);
     let simulation_tick = simulation_local_tick.map(|local| {
         if local == 0 && tick < simulation_epoch {
             tick
@@ -509,7 +614,8 @@ pub(crate) fn state_value(world: &mut World) -> Value {
     } else {
         "ready"
     };
-    json!({"window":window,"viewport":viewport,"selected_render_layers":render_layers,"diagnostics":{"pieces_built":built,"pieces_visible":visible,"fps":fps,"creature_summary":creature_summary},"workspace":workspace_state,"requested_map": requested,"displayed_map":displayed,"error":error,"ready":displayed.is_some() && phase == "ready","phase":phase,"preview_tick":preview_tick,"render_frame":render_frame,"render_ready":render_ready,"render_failed":render_failed,"simulation_tick":simulation_tick,"simulation_target_tick":simulation_target_tick,"simulation_caught_up":simulation_caught_up,"simulation_tick_number":simulation_tick_number,"simulation_epoch":simulation_epoch,"simulation_local_tick":simulation_local_tick,"simulation_available":simulation_available,"simulation_error":simulation_error,"map_facts":map_facts,"tick":tick,"frame":world.get_resource::<bevy::diagnostic::FrameCount>().map_or(0,|frame|frame.0),"time":game_time_line(Some(tick)),"playing":playback,"speed":world.resource::<Clock>().rate(),"constant_day":constant_day,"overlays":overlays,"mode":mode,"selected_creature":selected,"hovered_creature":hovered,"creatures":creatures,"camera":camera,"camera_scale":world.resource::<CameraState>().scale(),"zoom":world.resource::<CameraState>().zoom})
+    let (debug_player, debug) = crate::debug::projection(world);
+    json!({"debug_player":debug_player,"debug":debug,"window":window,"viewport":viewport,"selected_render_layers":render_layers,"diagnostics":{"pieces_built":built,"pieces_visible":visible,"fps":fps,"creature_summary":creature_summary},"workspace":workspace_state,"requested_map": requested,"displayed_map":displayed,"error":error,"ready":displayed.is_some() && phase == "ready","phase":phase,"preview_tick":preview_tick,"render_frame":render_frame,"render_ready":render_ready,"render_failed":render_failed,"simulation_tick":simulation_tick,"simulation_target_tick":simulation_target_tick,"simulation_caught_up":simulation_caught_up,"simulation_tick_number":simulation_tick_number,"simulation_epoch":simulation_epoch,"simulation_local_tick":simulation_local_tick,"simulation_available":simulation_available,"simulation_error":simulation_error,"map_facts":map_facts,"tick":tick,"frame":world.get_resource::<bevy::diagnostic::FrameCount>().map_or(0,|frame|frame.0),"time":game_time_line(Some(tick)),"playing":playback,"speed":world.resource::<Clock>().rate(),"constant_day":constant_day,"overlays":overlays,"mode":mode,"selected_creature":selected,"hovered_creature":hovered,"creatures":creatures,"camera":camera,"camera_scale":world.resource::<CameraState>().scale(),"zoom":world.resource::<CameraState>().zoom})
 }
 
 #[cfg(test)]

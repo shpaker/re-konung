@@ -179,16 +179,28 @@ pub(crate) fn pick(
         None
     };
     if buttons.just_released(MouseButton::Left) {
-        if workspace.mode == InteractionMode::Select
+        if workspace.mode != InteractionMode::Pan
             && !gesture.left_blocked
             && !gesture.left_moved
             && gesture.left_origin.is_some()
             && inside
             && !over_ui
         {
-            queue.0.push_back(ViewerAction::Select {
-                id: workspace.hovered_creature,
-            });
+            if workspace.mode == InteractionMode::Select {
+                queue.0.push_back(ViewerAction::Select {
+                    id: workspace.hovered_creature,
+                });
+            } else if let Some(cell) = cursor
+                .and_then(|cursor| camera.viewport_to_world_2d(transform, cursor).ok())
+                .and_then(crate::debug::world_cell)
+            {
+                queue.0.push_back(ViewerAction::DebugClick {
+                    column: cell.column,
+                    row: cell.row,
+                });
+            } else {
+                workspace.set_feedback("Error: point is outside the fine grid");
+            }
         }
         gesture.left_origin = None;
     }

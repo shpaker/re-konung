@@ -154,6 +154,16 @@ impl Actor {
     }
 }
 
+/// Read-only movement diagnostics; requested and accepted targets can differ
+/// while an order waits for the current step to finish or uses goal fallback.
+#[derive(Debug, Clone)]
+pub struct ActorDebugState {
+    pub state: WalkState,
+    pub requested_target: Option<Cell>,
+    pub accepted_target: Option<Cell>,
+    pub route: Vec<Cell>,
+}
+
 /// The movement world: grid, walkability, occupancy and creatures on one tick.
 pub struct World<P: Passage, K: Pace> {
     grid: Grid,
@@ -220,6 +230,20 @@ impl<P: Passage, K: Pace> World<P, K> {
     /// flips a cell, and the engine repaths around it.
     pub fn passage_mut(&mut self) -> &mut P {
         &mut self.passage
+    }
+
+    pub fn pace_mut(&mut self) -> &mut K {
+        &mut self.pace
+    }
+
+    pub fn debug_state(&self, creature: CreatureId) -> Option<ActorDebugState> {
+        let actor = self.actor(self.index(creature)?);
+        Some(ActorDebugState {
+            state: actor.walker.state(),
+            requested_target: actor.goal,
+            accepted_target: actor.walker.goal(),
+            route: actor.walker.remaining_cells(),
+        })
     }
 
     pub fn pace(&self) -> &K {
@@ -714,6 +738,27 @@ mod tests {
             WorldRules::default(),
             0,
         )
+    }
+
+    #[test]
+    fn debug_route_preserves_in_flight_cell_during_retarget_and_stop() {
+        let mut world = world(20, 20);
+        let id = world.add(Cell::new(4, 4)).unwrap();
+        world.move_to(id, Cell::new(12, 4)).unwrap();
+        world.tick_step();
+        let initial = world.debug_state(id).unwrap();
+        assert_eq!(initial.route.first().copied(), initial.state.step_to);
+        assert!(initial.state.step_to.is_some());
+        world.move_to(id, Cell::new(4, 12)).unwrap();
+        let pending = world.debug_state(id).unwrap();
+        assert_eq!(pending.requested_target, Some(Cell::new(4, 12)));
+        assert_eq!(pending.accepted_target, initial.accepted_target);
+        assert_eq!(pending.route, initial.route);
+        world.stop(id).unwrap();
+        let stopped = world.debug_state(id).unwrap();
+        assert_eq!(stopped.route, vec![initial.state.step_to.unwrap()]);
+        assert_eq!(stopped.requested_target, None);
+        assert_eq!(stopped.accepted_target, None);
     }
 
     #[test]

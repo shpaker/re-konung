@@ -7,6 +7,7 @@
 
 pub mod cli;
 pub mod control;
+pub mod debug_replay;
 
 use std::process::ExitCode;
 

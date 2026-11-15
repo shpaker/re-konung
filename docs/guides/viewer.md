@@ -36,8 +36,8 @@ interface panels use a separate full-window camera.
 | Play / pause | Bottom bar or `Space` |
 | Step one tick forward / backward and pause | `+ tick` / `− tick`, or `.` / `,` |
 | Hold day lighting while the clock continues | Constant day, or `N` |
-| Explore the day cycle | Expand Seek simulation; scrub or use a preset |
-| Reset creature positions | Reset positions; clock and animation state remain |
+| Seek simulation time | Expand Seek simulation; scrub or use a preset |
+| Reset creature positions and remove the debug player | Reset positions; clock and animation state remain |
 | Restart special animations | Reset animation; ordinary walk/rest clips, positions and clock remain |
 
 A drag that starts over the interface stays owned by it until release, even
@@ -53,6 +53,67 @@ scrolls on smaller windows. A failed map switch retains the old scene and
 selection, identifies requested and displayed maps, and offers Retry.
 Only a successful map change clears selection. Constant day survives map
 changes; overlays do not rebuild the scene or reset playback.
+
+<a id="debug-player"></a>
+
+## Debug player and diagnostic geometry
+
+Choose **Player** (debug player) in the left rail. The first map click places a temporary
+world actor; later clicks request a route to the clicked fine-grid cell. Movement
+uses ordinary occupancy and pathfinding with the source hero's eight directional
+paces. A rejected click reports the actual command error; it does not teleport
+the actor or clamp an off-grid point. **Remove** unregisters the actor. Its marker
+remains visible when Characters is hidden and is excluded from creature picking.
+No original game file is changed. If source profile loading fails, placement is
+unavailable while ordinary playback, seeking and resets remain usable.
+
+Display offers routes and targets, group states, and group rectangles. Requested
+and accepted targets are separate facts; group labels distinguish the state used
+for the last evaluation from the current preview. **Spawn area** is the recovered
+role; **Second rectangle (raw data)** intentionally assigns no gameplay meaning.
+Signed raw corners remain unchanged. Selected scope shows the selected creature
+and its group; All shows the current map. The player marker is independent of
+these overlays. Visibility and scope changes reuse geometry without scene or
+texture rebuilds.
+
+Commands apply immediately while paused, after logical tick T and before T+1.
+Backward seeking retains future history. Any new command attempt after a rewind,
+including a failed attempt, discards that future branch and reports it. A successful
+map change starts a fresh journal. **Reset positions** removes the debug actor and
+returns ordinary actors home while preserving the clock and animation state;
+**Reset animation** restarts special animations while retaining the actor, its
+position, ordinary walk/rest phases and clock. Both resets remain replayable.
+
+The same operations are available through session control:
+
+| Action JSON | Purpose |
+|---|---|
+| `{"type":"debug_place","column":44,"row":48}` | Place using the resolved source profile |
+| `{"type":"debug_move","column":42,"row":46}` | Request ordinary movement |
+| `{"type":"debug_remove"}` | Unregister the runtime actor |
+| `{"type":"debug_display","layer":"routes","visible":true}` | Toggle routes, targets, group_states or regions |
+| `{"type":"debug_scope","scope":"all"}` | Use selected or all scope |
+| `{"type":"export_commands","path":"out/debug-session.json"}` | Export the journal and session metadata |
+
+State exposes `debug_player` and `debug.snapshot`, the same scoped core facts
+used by the overlays, plus profile errors, playhead, command counts, branch
+revision and actual command outcome. Export includes map/source, hero, seed,
+resolved profile, all entries including future history, and current `through_tick`.
+Each entry carries its boundary tick, sequence, command and actual success/error.
+A supplied profile must exactly match the game's resolved profile; omitting it
+resolves the source profile. Authored entries may omit predicted outcomes; replay
+records them. Existing expected outcomes are verified rather than silently replaced.
+
+```sh
+cargo run --manifest-path crates/Cargo.toml -p kn-viewer -- \
+  --game-dir original/k1/eng/game debug-replay --script out/debug-session.json
+```
+
+`debug-replay` opens no window and defaults to JSON. `--format text` gives a short
+report. Its trace includes every command boundary and the final snapshot, using
+the same journal path as the live viewer. It replays only through `through_tick`
+while retaining later entries in the returned script. Existing `simulate` output
+and behavior are unchanged.
 
 <a id="session-control"></a>
 
@@ -88,7 +149,7 @@ action, while camera input and hover remain responsive.
 | `{"type":"creatures","search":"guard"}` | List creatures; optional ID/name substring |
 | `{"type":"select","id":12}` | Select an existing creature; explicit `null` clears |
 | `{"type":"pick","x":500,"y":300}` | Select at logical window pixels using actual body alpha |
-| `{"type":"mode","mode":"pan"}` | Select `select` or `pan` tool |
+| `{"type":"mode","mode":"pan"}` | Select `select`, `pan` or `debug_player` tool |
 | `{"type":"map","source":"game","number":19}` | Request a game/tutorial map |
 | `{"type":"retry_map"}` | Retry the currently requested map |
 | `{"type":"display","layer":"foot","visible":true}` | Set characters, foot, lights or markers visibility |
@@ -115,12 +176,10 @@ layers, camera, inspector facts and actual rendered animation layers.
 The projection distinguishes wrapper elapsed `simulation_local_tick`, the
 simulation's logical `simulation_tick_number`, and `simulation_epoch`.
 `simulation_tick` maps completed catch-up progress onto the scene clock,
-normally `simulation_epoch + simulation_local_tick`. Relative steps before the
-load/reset epoch clamp local progress at zero; the reached scene-clock value can
-then be earlier than that epoch without inventing earlier creature history.
-Reset positions resets wrapper elapsed time and moves the epoch while preserving
-logical simulation time. Absolute Seek and released UI scrubs instead share the
-same rebase to epoch zero and seeded forward/backward replay.
+normally `simulation_epoch + simulation_local_tick`. Relative steps use the map-session origin. Position resets are journal events,
+so stepping backward across a reset restores the preceding actor state and
+stepping forward applies the reset again. Absolute Seek and released UI scrubs
+share epoch-zero replay of the same command history.
 `lighting_preview` identifies a held scrub; `preview_tick` names its target.
 Held scrubs preview lighting and animation frames while creature positions wait;
 release recomputes their movement. UI scrub preserves the previous play/pause

@@ -98,12 +98,21 @@ pub struct CreatureInspection {
     pub group_state_tick: Option<u64>,
 }
 
+struct DebugActor {
+    id: u64,
+    world_id: CreatureId,
+    profile: crate::debug::DebugPlayerProfile,
+}
+
 /// A simulation over one map.
 pub struct Simulation {
     world: World<MapPassage, StepDurations>,
     roster: Vec<Creature>,
     group_states: Vec<GroupState>,
     group_state_tick: Option<u64>,
+    debug_actor: Option<DebugActor>,
+    next_debug_id: u64,
+    debug_groups: Vec<crate::debug::GroupGeometry>,
     /// Ready `#<id> <name>` label per record number, built once at load from
     /// the executable's texts (issue #84). The consumer — the viewer's label
     /// layer — reads the finished strings from here and never touches the K1
@@ -257,10 +266,24 @@ impl Simulation {
             })
             .collect::<Vec<_>>();
         let group_states = k1_game::rules::group_states(&roster, &live);
+        let debug_groups = state
+            .groups
+            .iter()
+            .flatten()
+            .filter(|group| roster.iter().any(|creature| creature.group == group.slot))
+            .map(|group| crate::debug::GroupGeometry {
+                group: group.slot,
+                spawn: group.spawn.into(),
+                second_rectangle: group.leash.into(),
+            })
+            .collect();
         Simulation {
             world,
             group_states,
             group_state_tick: None,
+            debug_actor: None,
+            next_debug_id: 0,
+            debug_groups,
             roster,
             labels,
             ids,
@@ -392,6 +415,7 @@ impl Simulation {
         self.spawn_failures = spawn_failures;
         self.group_states = group_states;
         self.group_state_tick = group_state_tick;
+        self.debug_actor = None;
     }
 
     pub fn tick(&mut self) -> Vec<Event> {
@@ -401,7 +425,7 @@ impl Simulation {
         // frame-rate independent (issue #70).
         self.creature_anim.tick();
         let live = self.live_picture();
-        self.group_states = k1_game::rules::group_states(&self.roster, &live);
+        self.group_states = self.debug_group_states(&live);
         self.group_state_tick = Some(self.tick);
         let mut context = Context {
             ground: &self.world,
@@ -496,6 +520,143 @@ impl Simulation {
             GoalField::Workplace => reach.workplace += 1,
             GoalField::Walk => reach.walk += 1,
         }
+    }
+
+    pub fn apply_debug_command(
+        &mut self,
+        command: &crate::debug::DebugCommand,
+        profile: Option<&crate::debug::DebugPlayerProfile>,
+        mut fresh: impl FnMut() -> Result<Simulation, String>,
+    ) -> Result<(), String> {
+        use crate::debug::DebugCommand;
+        match command {
+            DebugCommand::Place {
+                cell: (column, row),
+            } => {
+                if self.debug_actor.is_some() {
+                    return Err("Debug player is already placed".into());
+                }
+                let profile = profile.ok_or("Debug player profile is unavailable")?;
+                profile.validate()?;
+                let next = self
+                    .next_debug_id
+                    .checked_add(1)
+                    .ok_or("Debug runtime id exhausted")?;
+                let id = self
+                    .world
+                    .add(Cell::new(*column, *row))
+                    .map_err(|error| format!("Debug placement: {error:?}"))?;
+                self.world.pace_mut().set_row(id, profile.step_ticks);
+                self.world
+                    .turn(
+                        id,
+                        crate::movement::grid::Direction::ALL[usize::from(profile.direction)],
+                    )
+                    .map_err(|error| format!("Debug direction: {error:?}"))?;
+                self.debug_actor = Some(DebugActor {
+                    id: self.next_debug_id,
+                    world_id: id,
+                    profile: profile.clone(),
+                });
+                self.next_debug_id = next;
+            }
+            DebugCommand::Move {
+                cell: (column, row),
+            } => {
+                let actor = self
+                    .debug_actor
+                    .as_ref()
+                    .ok_or("Debug player is not placed")?;
+                self.world
+                    .move_to(actor.world_id, Cell::new(*column, *row))
+                    .map_err(|error| format!("Debug movement: {error:?}"))?;
+            }
+            DebugCommand::Remove => {
+                let actor = self
+                    .debug_actor
+                    .as_ref()
+                    .ok_or("Debug player is not placed")?;
+                self.world
+                    .remove(actor.world_id)
+                    .map_err(|error| format!("Debug removal: {error:?}"))?;
+                self.debug_actor = None;
+            }
+            DebugCommand::ResetPositions => {
+                let rebuilt = fresh()?;
+                if rebuilt.tick_number() != 0 || rebuilt.roster != self.roster {
+                    return Err(
+                        "Position reset factory returned a different roster or nonzero tick".into(),
+                    );
+                }
+                self.adopt_positions_from(rebuilt);
+            }
+            DebugCommand::ResetAnimation => self.restart_all_specials(),
+        }
+        Ok(())
+    }
+
+    pub fn debug_player(&self) -> Option<crate::debug::DebugPlayerSnapshot> {
+        let actor = self.debug_actor.as_ref()?;
+        Some(crate::debug::DebugPlayerSnapshot {
+            id: actor.id,
+            source_hero: actor.profile.hero,
+            source_character: actor.profile.character,
+            movement: self.world.debug_state(actor.world_id)?.into(),
+        })
+    }
+
+    pub fn debug_snapshot(&self) -> crate::debug::DebugSnapshot {
+        let preview = self.debug_group_states(&self.live_picture());
+        crate::debug::DebugSnapshot {
+            tick: self.tick,
+            player: self.debug_player(),
+            groups: self.debug_groups.clone(),
+            creatures: self
+                .roster
+                .iter()
+                .enumerate()
+                .map(|(index, creature)| crate::debug::DebugCreatureSnapshot {
+                    record_id: creature.id,
+                    group: creature.group,
+                    used_group_state: self.group_states[index].byte(),
+                    preview_group_state: preview[index].byte(),
+                    used_group_tick: self.group_state_tick,
+                    movement: self.ids[index]
+                        .and_then(|id| self.world.debug_state(id))
+                        .map(Into::into),
+                })
+                .collect(),
+        }
+    }
+
+    fn debug_group_states(&self, live: &[Option<Live>]) -> Vec<GroupState> {
+        let Some(actor) = self.debug_actor.as_ref() else {
+            return k1_game::rules::group_states(&self.roster, live);
+        };
+        let mut roster = self.roster.clone();
+        let profile = &actor.profile;
+        roster.push(Creature {
+            id: usize::MAX,
+            cell: (0, 0),
+            direction: profile.direction,
+            state: profile.recorded_state,
+            class_id: profile.class_id,
+            group: profile.group,
+            group_kind: k1_game::rules::group::PLAYER,
+            roaming: false,
+            spawn: Default::default(),
+            workplace: None,
+            name_id: 0,
+            nick_id: 0,
+            sprite_set: 0,
+        });
+        let mut picture = live.to_vec();
+        picture.push(self.world.state(actor.world_id).map(|state| Live {
+            cell: (state.cell.column as i16, state.cell.row as i16),
+            direction: state.direction.map(|direction| direction.index() as u8),
+            busy: state.moving || state.goal.is_some(),
+        }));
+        k1_game::rules::group_states(&roster, &picture)
     }
 
     /// Inspects by character record id, never by roster or movement-world index.
