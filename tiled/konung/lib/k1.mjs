@@ -1,6 +1,5 @@
-// Разбор и запись ресурсов «Князя» (1999) без Tiled API: на входе ArrayBuffer,
-// на выходе простые объекты, и обратно для карт. Повторяет эталон konung/k1 на
-// Python; при расхождении прав Python — у него тесты. Форматы — docs/k1/formats/.
+// Byte codecs mirror the tested Python reference and preserve unknown fields.
+// See docs/research/k1/formats/.
 
 export const MAP_WIDTH = 80;
 export const MAP_HEIGHT = 160;
@@ -58,8 +57,8 @@ function argb(color) {
     return (0xff000000 | (((r << 3) | (r >> 2)) << 16) | (((g << 3) | (g >> 2)) << 8) | ((b << 3) | (b >> 2))) >>> 0;
 }
 
-// Построчное RLE (docs/k1/formats/rle.md). pixel(reader) читает один пиксель
-// и возвращает цвет ARGB; без pixel — тень: только маска.
+// RLE pixel callbacks return ARGB; omitting the callback decodes a shadow mask.
+// See docs/research/k1/formats/rle.md.
 function decodeRle(reader, pixel) {
     const width = reader.s16();
     const height = reader.s16();
@@ -404,9 +403,8 @@ export function applyFootMask(foot, column, row, flag, mask) {
     });
 }
 
-// ---------------------------------------------------------------------------
-// Свет: LIGHTS.N карты и маски LIGHTS.RES (docs/k1/formats/lights-res.md),
-// эталон — konung/k1/map_file.py (parse_lights, serialize_lights) и lights_res.py
+// Tile/fine light grids mirror Python parse_lights, serialize_lights and lights_res.
+// See docs/research/k1/formats/lights-res.md.
 
 export const LIGHTS_SIZE = MAP_WIDTH * MAP_HEIGHT + FOOT_SIZE;
 export const LIGHT_MASKS = 19;
@@ -475,12 +473,8 @@ export function serializeLights(tiles) {
     return bytes.buffer;
 }
 
-// ---------------------------------------------------------------------------
-// Game.N — начальное состояние новой игры (docs/k1/formats/game-state.md),
-// эталон — konung/k1/game_state.py и game_edit.py. Запись копирует исходный файл
-// и меняет только то, что правится в Tiled: места, направления, поля персонажей,
-// прямоугольники, клады и переходы, а также состав персонажей (state.additions,
-// state.removals). Клады и переходы пересобираются подряд с нулевого слота.
+// State writes preserve original bytes and rebuild dense loot/exit lists after edits.
+// See docs/research/k1/formats/game-state.md.
 
 const ITEM_SLOTS = 8192, ITEM_SIZE = 16;
 const GROUP_SLOTS = 200, GROUP_SIZE = 32;
@@ -1057,9 +1051,8 @@ export function rectCells(x, y, width, height) {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Анимированные спрайты: персонажи GRAPH.RES и динамические объекты OBJECTS.RES
-// (docs/k1/formats/graph-res.md, objects-res.md). Картинки — по запросу.
+// GRAPH.RES characters and OBJECTS.RES dynamic sprites decode images on demand.
+// See docs/research/k1/formats/graph-res.md.
 
 const DIRECTIONS = 8;
 export const CHARACTER_MODELS = 3;
@@ -1149,10 +1142,8 @@ export function readDynamicObject(catalog, slot) {
         DYNAMIC_ANIMATIONS, DYNAMIC_FRAMES, DYNAMIC_IMAGES, false);
 }
 
-// ---------------------------------------------------------------------------
-// Таблицы exe (docs/k1/formats/executable.md): набор снаряжения у описания
-// предмета и порядок слотов при отрисовке. Ищутся по строению, как в
-// konung/k1/executable.py.
+// Discover equipment/slot-order tables by structure, matching Python executable.py.
+// See docs/research/k1/formats/executable.md.
 
 const EQUIPMENT_INFO_SIZE = 64, EQUIPMENT_NAME_SIZE = 44, EQUIPMENT_COUNT = 70;
 const SLOTS = 6, DRAW_ORDER_ROW_SIZE = SLOTS * 4, DRAW_ORDER_ROWS = 72;
@@ -1565,8 +1556,8 @@ export function objectAnimation(simple) {
     };
 }
 
-// ---------------------------------------------------------------------------
-// Огни (docs/k1/formats/flames-res.md), эталон — konung/k1/flames_res.py.
+// Flame frame decoding mirrors Python flames_res.py.
+// See docs/research/k1/formats/flames-res.md.
 
 export const FLAME_KINDS = 7;
 export const FLAME_FRAMES = 74;

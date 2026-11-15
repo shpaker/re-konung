@@ -1,14 +1,5 @@
-//! Таблицы из исполняемого файла игры (docs/k1/formats/executable.md,
-//! эталон — `konung/k1/executable.py`).
-//!
-//! Снаряжение персонажа рисуется наборами спрайтов GRAPH.RES, а какой набор
-//! у какого предмета, игра берёт из таблицы в exe. В RUS это `konung.res`
-//! (переименованный установщиком PE), в ENG — `KONUNG.EXE`. Таблицы ищутся
-//! по строению, а не по смещению: в изданиях они лежат в разных местах.
-//!
-//! Перенесены таблицы для отрисовки (снаряжение, порядок слотов, анимации
-//! огней) и тексты — названия монстров, имена, прозвища и названия карт.
-//! Описания предметов (украшения, зелья, прочие) пока только в Python-эталоде.
+//! Embedded graphics/text tables, discovered by structure rather than edition offsets.
+//! Reference: `konung/k1/executable.py`; docs/research/k1/formats/executable.md.
 
 use std::path::{Path, PathBuf};
 
@@ -157,18 +148,8 @@ fn text(field: &[u8]) -> Option<&[u8]> {
     Some(text)
 }
 
-/// Начало текста записи снаряжения, или None, если записи не подходят.
-///
-/// Проверка слабее, чем у [text]: и эталон (`_is_equipment_table` в
-/// `konung/k1/executable.py`), и расширение Tiled (`isEquipmentTable` в
-/// `tiled/konung/lib/k1.mjs`) смотрят только первый байт имени, управляющие
-/// байты в середине не отбрасывают таблицу. Строгую [text] здесь применять
-/// нельзя: на издании с таким именем Rust отвергнул бы таблицу, которую
-/// эталон принимает, а без таблицы снаряжения не разобрались бы вовсе.
-///
-/// Имя без терминатора (все 44 байта заняты) эталон принимает — здесь тоже;
-/// расширение Tiled в этом случае запись отбрасывает, расхождение описано в
-/// docs/k1/formats/executable.md.
+/// Equipment recognition deliberately accepts interior controls and full 44-byte names, matching Python.
+/// See docs/research/k1/formats/executable.md.
 fn equipment_text_start(field: &[u8]) -> Option<usize> {
     let end = field.iter().position(|&b| b == 0).unwrap_or(field.len());
     if field.is_empty() || field[0] < 0x20 {
@@ -464,17 +445,8 @@ fn entry(table: &[String], index: i32) -> &str {
         .map_or("", String::as_str)
 }
 
-/// Имя персонажа, как его собирает игра: у монстров — название вида,
-/// у людей, женщин и детей — имя и прозвище через пробел (прозвище 0 — без него).
-///
-/// Номер вне таблицы — пустая строка. Номера имя и прозвище — байты 0xD4 и 0xD5
-/// записи персонажа (docs/k1/formats/game-state.md).
-///
-/// Отличие от эталона: пустую часть имени не склеиваем с непустой через пробел,
-/// чтобы в подписи не висел ведущий или хвостовой пробел. Эталон
-/// (`executable.character_name`) при номере вне таблицы даёт `{имя} ` или ` {прозвище}`;
-/// на наших файлах различие не видно — у всех расставленных персонажей оба
-/// номера указывают в заполненные записи, кроме одного жителя без того и другого.
+/// Name indices are bytes 0xD4/0xD5; omit empty parts rather than adding stray spaces.
+/// See docs/research/k1/formats/game-state.md.
 pub fn character_name(texts: Option<&Texts>, class_id: u8, name_id: u8, nick_id: u8) -> String {
     let Some(texts) = texts else {
         return String::new();

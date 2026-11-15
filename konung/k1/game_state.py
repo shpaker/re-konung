@@ -1,8 +1,6 @@
-"""Game.N — начальное состояние новой игры: персонажи, отряды, клады, переходы
-и деревни на всех картах (docs/k1/formats/game-state.md).
+"""Game.N records preserve raw fields; file coordinates are y,x, model coordinates x,y.
 
-Места — клетки мелкой сетки 160×320. В файле у них сначала y, потом x,
-в dataclass — как принято у нас: x, y.
+Format contract: docs/research/k1/formats/game-state.md.
 """
 
 import struct
@@ -33,9 +31,8 @@ JOBS = 5
 # Рабочие места деревни по порядку (Slavik game_locale.cpp, Locale::Jobs)
 JOB_ROLES = ("elder", "healer", "merchant", "smith", "voevoda")
 
-# Навыки (Character.skills) и характеристики (Character.attributes) по порядку
-# в записи персонажа — по Slavik (docs/k1/formats/game-state.md); в Tiled
-# свойства персонажа называются так же, в camelCase (agility_base → agilityBase)
+# Skill/attribute order follows the record; Tiled uses matching camelCase names.
+# See docs/research/k1/formats/game-state.md.
 SKILL_NAMES = (
     "fencing",
     "trading",
@@ -137,7 +134,7 @@ class Group:
     def is_roaming(self) -> bool:
         """Roaming group: the game scatters its members randomly inside spawn.
 
-        A range, not `kind < FIRST_FIXED_GROUP` — see docs/k1/formats/game-state.md.
+        A range, not `kind < FIRST_FIXED_GROUP` — see docs/research/k1/formats/game-state.md.
         """
         return FIRST_ROAMING <= self.kind <= LAST_ROAMING
 

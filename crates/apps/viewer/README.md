@@ -1,46 +1,12 @@
 # kn-viewer
 
-Приложение просмотрщика карт «Князя»: бинарь `re-konung-viewer`. Здесь — CLI,
-разрешение стартового выбора карты и headless-диагностика `check`; само окно
-(состояние, панель, оверлеи, диагностика) живёт в
-[kn-fe-viewer](../../frontend/bevy/viewer).
+CLI и отчёты re-konung-viewer без окна. Приложение с окном собирает kn-fe-viewer.
 
-## Запуск
+- Разбор CLI и выбор начальной карты; неверный выбор завершает запуск с ошибкой.
+- check строит сцены и декодирует текстуры без окна/GPU, выводит текст или JSON.
+- simulate запускает симуляцию без окна и сообщает отказы и счётчики.
+- ViewerConfig передаётся фронтенду; типы CLI остаются здесь.
 
-```bash
-re-konung-viewer --game-dir <каталог игры> [--map N] [--source game|tutorial]
-re-konung-viewer --game-dir <каталог игры> check --map 1
-re-konung-viewer --game-dir <каталог игры> check --all [--format text|json]
-```
-
-Каталог игры — содержимое `inst/setup.dat`; как его получить,
-[docs/k1/editions.md](../../../docs/k1/editions.md).
-
-Из репозитория без установки:
-
-```bash
-just viewer                            # окно (dev-runtime + dynamic, быстрая пересборка)
-just check-maps                        # то же без окна, GPU и рендерера (release)
-cargo run --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-viewer \
-    --features kn-fe-viewer/dynamic -- --game-dir original/k1/rus/game
-```
-
-## Устройство
-
-- `cli` — аргументы; `viewer_config` — открытие игры и разрешение стартовой
-  карты; `check` — подкоманда, которая не открывает окно и не требует GPU.
-- неверный `--map` — ошибка с ненулевым кодом возврата, а не переход на первую
-  карту.
-- `check` печатает отчёт по картам (текст или JSON) и возвращает ненулевой
-  код, если карта не собралась или её текстура не декодировалась — так
-  сцену проверяют CI и агенты без окна.
-- окно, панель и оверлеи — в `kn-fe-viewer`; приложение передаёт ему
-  `ViewerConfig` (открытая игра, каталог, список карт, стартовый выбор) и
-  типы CLI туда не переходят.
-
-## Проверки
-
-```bash
-just cargo-test   # разбор CLI, отчёт об ошибке
-just cargo-lint
-```
+Подробности: [тематическая документация](../../../docs/guides/viewer.md).
+Проверки: `just cargo-test`, `just cargo-lint`. Чистая логика не требует окна/GPU;
+проверки на игровых данных используют локальный original/ и пропускаются без него.

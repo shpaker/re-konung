@@ -1,8 +1,8 @@
 //! The creature roster and its step durations on real data of both editions
-//! (skipped when `original/` is absent — docs/k1/editions.md).
+//! (skipped when `original/` is absent — docs/research/k1/editions.md).
 //!
 //! Mirror of `tests/k1/test_characters.py`; the measured duration table lives in
-//! docs/k1/movement.md, "Step duration".
+//! docs/research/k1/movement.md, "Step duration".
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -32,7 +32,7 @@ fn game_dirs() -> Vec<(&'static str, GameDir)> {
             if game.root().is_dir() {
                 Some((edition, game))
             } else {
-                eprintln!("skipping: no original/k1/{edition}/game (docs/k1/editions.md)");
+                eprintln!("skipping: no original/k1/{edition}/game (docs/research/k1/editions.md)");
                 None
             }
         })
@@ -40,7 +40,7 @@ fn game_dirs() -> Vec<(&'static str, GameDir)> {
     assert!(
         !root.is_dir() || !dirs.is_empty(),
         "{} exists but holds no edition with a game/ folder: the tests on data would \
-         not have run. How to unpack one — docs/k1/editions.md",
+         not have run. How to unpack one — docs/research/k1/editions.md",
         root.display()
     );
     dirs
@@ -131,7 +131,7 @@ fn roster_names_every_creature_of_the_map_as_the_records_do() {
                         ),
                         // `character == 0` marks an empty slot, not record 0 —
                         // the hero never owns an open slot
-                        // (docs/k1/creatures.md, "The villager decision").
+                        // (docs/research/k1/creatures/behavior.md, "The villager decision").
                         None => assert!(
                             !entities.jobs.iter().any(|(_, job)| job.character > 0
                                 && job.character as usize == creature.id),
@@ -145,7 +145,7 @@ fn roster_names_every_creature_of_the_map_as_the_records_do() {
     }
 }
 
-/// The player group stands only on its own start map (docs/k1/formats/game-state.md).
+/// The player group stands only on its own start map (docs/research/k1/formats/game-state.md).
 #[test]
 fn the_player_group_arrives_on_the_start_map_only() {
     for (edition, game) in game_dirs() {

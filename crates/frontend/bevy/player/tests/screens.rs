@@ -2,7 +2,7 @@
 //! screen previews the draft live, and a failed save leaves its sentence on
 //! the screen while the draft survives for a retry.
 //!
-//! Tests on real data skip when `original/` is absent (docs/k1/editions.md).
+//! Tests on real data skip when `original/` is absent (docs/research/k1/editions.md).
 
 mod common;
 

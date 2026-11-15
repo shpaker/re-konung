@@ -1,5 +1,5 @@
 //! The state-4 special animation on real data of both editions (skipped when
-//! `original/` is absent — docs/k1/editions.md).
+//! `original/` is absent — docs/research/k1/editions.md).
 //!
 //! Issue #70 AC5 asserts the counters of the state-4 population:
 //!
@@ -10,7 +10,7 @@
 //! | Ion the werewolf | `0x55` | 22 | 3 | 12 |
 //!
 //! over `Game.0`–`Game.2` of both RUS and ENG copies (404 records total, see
-//! docs/k1/creatures.md, "Our measurement"). The same test classifies every
+//! docs/research/k1/creatures/animation.md, "Our measurement"). The same test classifies every
 //! one of them as a one-shot under the machine — Special at frame 0 on world
 //! load, Idle after `special_frames` ticks — and asserts the machine's
 //! Special → Idle edge happens exactly once per creature and not again, so no
@@ -52,7 +52,7 @@ fn game_dirs() -> Vec<(&'static str, GameDir)> {
             if game.root().is_dir() {
                 Some((edition, game))
             } else {
-                eprintln!("skipping: no original/k1/{edition}/game (docs/k1/editions.md)");
+                eprintln!("skipping: no original/k1/{edition}/game (docs/research/k1/editions.md)");
                 None
             }
         })
@@ -60,7 +60,7 @@ fn game_dirs() -> Vec<(&'static str, GameDir)> {
     assert!(
         !root.is_dir() || !dirs.is_empty(),
         "{} exists but holds no edition with a game/ folder: the tests on data would \
-         not have run. How to unpack one — docs/k1/editions.md",
+         not have run. How to unpack one — docs/research/k1/editions.md",
         root.display()
     );
     dirs
@@ -197,7 +197,7 @@ fn every_state_four_record_of_both_editions_is_a_one_shot_special() {
         assert_eq!(
             total, TOTAL_STATE4,
             "{edition}: state-4 records in Game.0-Game.2 differ from the count in \
-             docs/k1/creatures.md (Our measurement)"
+             docs/research/k1/creatures/animation.md (Our measurement)"
         );
     }
 }
@@ -296,7 +296,7 @@ impl Counters {
             }
             other => panic!(
                 "{edition}: creature {} in state 4 has an unexpected class {other:#04x} \
-                 (docs/k1/creatures.md names only 0x46, 0x4c and 0x55)",
+                 (docs/research/k1/creatures/animation.md names only 0x46, 0x4c and 0x55)",
                 creature.id
             ),
         };
@@ -308,7 +308,7 @@ impl Counters {
         assert_eq!(
             frames, expected_frames,
             "{edition}: {label} creature {} has a state-4 sequence of {frames} frames, not \
-             {expected_frames} (docs/k1/creatures.md, the appearance table)",
+             {expected_frames} (docs/research/k1/creatures/animation.md, the appearance table)",
             creature.id
         );
     }
@@ -317,7 +317,7 @@ impl Counters {
         assert_eq!(
             (self.skeleton, self.eechetik, self.ion, self.total),
             (SKELETON_COUNT, EECHETIK_COUNT, ION_COUNT, TOTAL_STATE4),
-            "{edition}: the state-4 population differs from the count in docs/k1/creatures.md \
+            "{edition}: the state-4 population differs from the count in docs/research/k1/creatures/animation.md \
              (Our measurement)"
         );
     }

@@ -6,7 +6,7 @@
 //! lets the future simulation tick of #38 drive the same seam.
 //!
 //! K1 gives a dynamic creature three recorded animation states in a new game:
-//! 0, 4 and 6 (docs/k1/creatures.md, "Our measurement"). State 4 for the three
+//! 0, 4 and 6 (docs/research/k1/creatures/animation.md, "Our measurement"). State 4 for the three
 //! classes 0x46, 0x4c and 0x55 is the creature's own appearance or
 //! transformation — a skeleton rising from the ground, an Eechetik jumping out,
 //! Ion the werewolf transforming — and per Slavik
@@ -17,7 +17,7 @@
 //! so there is no modulo over a shared clock: the machine carries a per-creature
 //! frame counter and hands the caller an explicit transition into idle.
 //!
-//! Our divergence, recorded in docs/k1/creatures.md: the original holds state-4
+//! Our divergence, recorded in docs/research/k1/creatures/animation.md: the original holds state-4
 //! frame 0 until the monster decision's state-4 branch releases it
 //! ([game_play.cpp:3226-3232](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3226-L3232)),
 //! but the AI decision slot that runs that release does not exist here yet
@@ -28,7 +28,7 @@
 use std::collections::HashMap;
 
 /// The animation state K1 gives a dynamic creature's own appearance or
-/// transformation (docs/k1/creatures.md, "State 4 — two meanings under one
+/// transformation (docs/research/k1/creatures/animation.md, "State 4 — two meanings under one
 /// number"). The only non-idle state the shipped `Game.N` files record.
 pub const SPECIAL_STATE: u8 = 4;
 
@@ -229,7 +229,7 @@ impl Machine {
     /// state while a creature plays it, and the recorded state otherwise. The
     /// record's own state is what the file says, so a state-4 creature that
     /// finished its special continues in the state its record carries next to
-    /// `state 4` (docs/k1/creatures.md — a dynamic creature's `state % 6` is
+    /// `state 4` (docs/research/k1/creatures/animation.md — a dynamic creature's `state % 6` is
     /// idle). Callers wanting the pair without the weapon-in-hands bit pass
     /// [`Machine::idle_state`].
     pub fn shown_state(&self, id: usize) -> Option<u8> {
@@ -243,7 +243,7 @@ impl Machine {
 
     /// The idle state the record's pair describes, with the special resolved.
     /// For a dynamic creature, 4 and 6 both yield the idle animation row
-    /// (`sprites_for` collapses 6–9 to 0–3, docs/k1/creatures.md); we settle
+    /// (`sprites_for` collapses 6–9 to 0–3, docs/research/k1/creatures/animation.md); we settle
     /// on 6 so a multi-sprite dynamic creature keeps the same weapon-in-hands
     /// bit it carries in the file next to state 4.
     pub fn idle_state(&self, id: usize) -> Option<u8> {
@@ -639,7 +639,7 @@ mod tests {
     #[test]
     fn a_tick_after_the_special_lands_in_the_record_pair_for_idle() {
         // A state-4 record's pair without the weapon-in-hands bit is state 6
-        // (docs/k1/creatures.md), and that is what the machine reports.
+        // (docs/research/k1/creatures/animation.md), and that is what the machine reports.
         let mut machine = Machine::new();
         machine.enter_world([seed(1, 4, 1)]);
         assert_eq!(machine.shown_state(1), Some(SPECIAL_STATE));

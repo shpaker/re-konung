@@ -7,7 +7,7 @@
 //! left out. The static render keeps the old approximation (the first member
 //! at the centre, `k1_data::characters::placed`); this is where the live
 //! starting positions come from. The facts and our differences are in
-//! docs/k1/creatures.md, «Roaming squad placement on map load».
+//! docs/research/k1/creatures/placement.md, «Roaming squad placement on map load».
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -49,7 +49,7 @@ pub struct LoadPlacement {
 /// is the *position* of the creatures that are not re-placed, not the order
 /// of the squads — one shared draw stream and sequentially taken cells make
 /// that visible, and it mirrors the original's `MapChar_ARRAY` order
-/// (`game.cpp:637`; docs/k1/creatures.md). A dead record is placed like
+/// (`game.cpp:637`; docs/research/k1/creatures/placement.md). A dead record is placed like
 /// everyone else — the original places before it asks who is alive
 /// (`game.cpp:651-664`).
 ///

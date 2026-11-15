@@ -1,10 +1,5 @@
-//! Построчное RLE-сжатие спрайтов (docs/k1/formats/rle.md, эталон — `konung/rle.py`).
-//!
-//! Заголовок: ширина s16, высота s16, длины строк s16 × высота.
-//! Строка — последовательность команд, байт n:
-//! - 0 — конец строки;
-//! - n & 0x80 — пропустить n & 0x7F прозрачных пикселей;
-//! - иначе — n пикселей следом (байт индекса палитры или u16 RGB555 — зависит от вида).
+//! Row-based sprite RLE, with transparent skips and kind-dependent pixel payloads.
+//! Reference: `konung/rle.py`; docs/research/k1/formats/rle.md.
 
 use thiserror::Error;
 

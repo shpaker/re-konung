@@ -1,7 +1,7 @@
 //! Measurement of a rules tick over the real rosters (issue #36, criterion 10).
 //!
 //! An `#[ignore]`d test: it measures in release and prints a table, so it does
-//! not get in the way of an ordinary `cargo test`. The numbers go to `docs/rust.md`.
+//! not get in the way of an ordinary `cargo test`. The numbers go to `docs/development/rust/simulation.md`.
 //!
 //! ```bash
 //! cargo test --release --manifest-path crates/Cargo.toml -p kn-game \

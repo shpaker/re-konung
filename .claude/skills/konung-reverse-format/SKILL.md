@@ -1,18 +1,32 @@
 ---
 name: konung-reverse-format
 description: >
-  Цикл разбора неизвестного формата файлов «Князя»: гипотеза, проверка на всех
-  файлах всех изданий, парсер с тестом, запись в docs. Использовать, когда
-  нужно понять структуру файла игры, уточнить поле в уже описанном формате или
-  перенести факт из Slavik в наш код.
+  Investigate a Konung file format or game rule through hypotheses, checks over
+  every available edition, a parser and tests, research documentation and Tiled
+  verification. Use to identify unknown structures, refine fields or recover
+  a fact from the read-only Slavik reference.
 ---
 
-# Разбор формата
+# Reverse a format
 
-1. **Что уже известно.** Открыть `docs/README.md` (статус форматов) и описание формата в `docs/k1/formats/`. Посмотреть, как файл читает Slavik (`E:\github\Marisa-Chan\Slavik`, `grep -n "<имя файла>"`); код оттуда не копировать.
-2. **Гипотеза на данных.** Короткий скрипт в scratchpad или `uv run python -` на файлах из `original/k1/*/game`. Первая проверка — размер: сумма блоков должна совпасть с размером файла. Потом — диапазоны значений и статистика по всем файлам (`Counter`). Сравнить RUS и ENG.
-3. **Картинка.** Если формат что-то рисует — выгрузить PNG (`uv run konung k1 tiles|map …` или временный скрипт в `out/`) и посмотреть глазами.
-4. **Парсер.** `konung/k1/<формат>.py`: `parse(data: bytes)` без файловой системы, неизвестные байты — в поле `unknown`. Команда CLI — если результат нужен человеку.
-5. **Тест.** `tests/k1/`: файл разбирается до последнего байта, ссылки между файлами сходятся. Синтетический тест — для алгоритма.
-6. **Документ.** `docs/k1/formats/<формат>.md`: таблица полей (смещение, тип, имя, смысл), уверенность (подтверждено / гипотеза / неизвестно), источник. Обновить статус в `docs/README.md`.
-7. **Расширение Tiled.** Если формат влияет на карту — повторить в `tiled/konung/lib/k1.mjs`, поставить `just tiled-install`, убедиться, что Tiled его подхватил (проверка — шаг 4 навыка `skills/konung-tiled-install`), и сверить рендер Tiled (`render_map`, `run_script` с `map.toImage()`) с PNG из Python.
+1. **Existing evidence.** Read `docs/research/k1/README.md` for format status,
+   then the topic in `docs/research/k1/formats/`. Inspect Slavik with `rg`
+   (`../../Marisa-Chan/Slavik`, Windows `E:\github\Marisa-Chan\Slavik`);
+   never copy its unlicensed code.
+2. **Hypothesis on data.** Use a short scratch script or `uv run python -`
+   over original/k1/*/game. Start with total block sizes, then ranges and
+   whole-file statistics (Counter). Compare RUS and ENG and every other available edition.
+3. **Image.** If the format draws anything, export through
+   `uv run konung k1 tiles|map …` or a temporary script into out/ and inspect it.
+4. **Parser.** Implement pure parse(data: bytes) in konung/k1, preserve unknown
+   bytes in unknown fields. Add a CLI command when a person needs the result.
+5. **Test.** In tests/k1 verify EOF consumption and cross-file references;
+   use synthetic cases for algorithms. Written formats must round-trip every file.
+6. **Documentation.** Add the field table (offset/type/name/meaning), confidence
+   and source to `docs/research/k1/formats/<format>.md`; update the K1 research
+   index. Game rules belong in the corresponding research topic, decisions/costs
+   in development, commands in guides.
+7. **Tiled.** For a map-affecting format mirror Python in tiled/konung/lib/k1.mjs,
+   run just tiled-install, verify loading through step 4 of
+   skills/konung-tiled-install, then compare render_map/map.toImage() against
+   the Python PNG. See `docs/development/tiled.md` for representation and checks.

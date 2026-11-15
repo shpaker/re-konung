@@ -1,6 +1,6 @@
 //! Day-phase ambient lighting computation — pure functions, no Bevy, no filesystem.
 //!
-//! Evidence base: `docs/k1/time-of-day.md` — our own byte-level read of the
+//! Evidence base: `docs/research/k1/lighting.md` — our own byte-level read of the
 //! original binaries (the palette-transform chain, the table builder and the
 //! ground-pass gate), with the Slavik clone (`game.cpp`, `gfx.cpp`) as a
 //! secondary source. The module reproduces the original's per-channel blend:
@@ -117,7 +117,7 @@ pub fn fade_factor(v: u32) -> f32 {
 /// with `k = fade_factor(v)` and `MAX` = 31 for the 5-bit channels, 63 for green.
 /// The intermediates are exact in the x87 80-bit registers (`c ≤ 63`, `k` a
 /// 24-bit mantissa), so they are computed in f64 here; only the final result is
-/// truncated. See docs/k1/time-of-day.md, "How the ambient value reaches the
+/// truncated. See docs/research/k1/lighting.md, "How the ambient value reaches the
 /// pixels".
 pub fn fade_table_entry(component: u32, value: i32, bits: u32) -> u32 {
     let max = (1u32 << bits) - 1;
@@ -203,7 +203,7 @@ pub fn apply_channel(
 /// (rus 0x43D971) with no per-pass state, so the ground fades at dusk exactly
 /// like the objects on it. The ground-light window gates only the tile-light
 /// mode — masks and light colour — not the fade (our own byte-level read,
-/// docs/k1/time-of-day.md, "How the ambient value reaches the pixels").
+/// docs/research/k1/lighting.md, "How the ambient value reaches the pixels").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Surface {
     /// Ground tile and its upper layer. Faded with the ambient, like everything.
@@ -281,7 +281,7 @@ pub fn params(tick: u64, seed: u64) -> LightingParams {
 /// `_bConfDayNight`) exactly where the original reads it: with it off the light
 /// routine returns the neutral triple and the ground-light flag stays cleared —
 /// the routine clears the flag at its head and the stores that set it live in
-/// the window branches the gate skips (`docs/k1/time-of-day.md`, "The order of
+/// the window branches the gate skips (`docs/research/k1/lighting.md`, "The order of
 /// the checks"). So the gate-off result is the constant day value: neutral
 /// ambient, no tile light.
 ///
@@ -683,7 +683,7 @@ mod tests {
     /// #97 AC2: with the day/night gate off the ambient snapshot at a day
     /// boundary and at a night boundary are identical — the constant day value.
     /// The boundary ticks are the interval trace of
-    /// `docs/k1/time-of-day.md`, plus the ground-lit plateau between them.
+    /// `docs/research/k1/lighting.md`, plus the ground-lit plateau between them.
     #[test]
     fn the_gate_off_ambient_is_identical_at_day_and_night_boundaries() {
         let boundaries = [0u64, 1802, 5402, 8100, 11000, 11700, 18900, 19020, 21599];

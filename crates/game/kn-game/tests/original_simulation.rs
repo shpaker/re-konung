@@ -1,5 +1,5 @@
 //! Confirmed rules over a real K1 map for hundreds of ticks, headless
-//! (skipped when `original/` is absent — docs/k1/editions.md).
+//! (skipped when `original/` is absent — docs/research/k1/editions.md).
 //!
 //! Criterion 9 of #36: dozens of creatures of the shipped data moving in one
 //! world at once. The world is fed the real foot data as walkability, the
@@ -44,7 +44,7 @@ fn game_dirs() -> Vec<(&'static str, GameDir)> {
             if game.root().is_dir() {
                 Some((edition, game))
             } else {
-                eprintln!("skipping: no original/k1/{edition}/game (docs/k1/editions.md)");
+                eprintln!("skipping: no original/k1/{edition}/game (docs/research/k1/editions.md)");
                 None
             }
         })
@@ -52,7 +52,7 @@ fn game_dirs() -> Vec<(&'static str, GameDir)> {
     assert!(
         !root.is_dir() || !dirs.is_empty(),
         "{} exists but holds no edition with a game/ folder: the tests on data would \
-         not have run. How to unpack one — docs/k1/editions.md",
+         not have run. How to unpack one — docs/research/k1/editions.md",
         root.display()
     );
     dirs

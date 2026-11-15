@@ -3,7 +3,7 @@
 //! readiness is what promotes `Loading` to `Playing` — never the request
 //! itself. A failed session tears down completely and a retry starts clean.
 //!
-//! Tests on real data skip when `original/` is absent (docs/k1/editions.md).
+//! Tests on real data skip when `original/` is absent (docs/research/k1/editions.md).
 
 mod common;
 

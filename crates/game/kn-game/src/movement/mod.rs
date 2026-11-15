@@ -2,8 +2,7 @@
 //! occupancy, route search, walking a route and the game tick.
 //!
 //! The layer knows neither Bevy nor anything specific to K1: movement mechanics
-//! in K1 and K2 are presumably nearly identical (AGENTS.md, "Priority: modern
-//! experience"), so the mechanics live here and the part's knowledge arrives
+//! in K1 and K2 are presumably nearly identical (the product principles), so the mechanics live here and the part's knowledge arrives
 //! from outside:
 //!
 //! - cell walkability — [`passage::Passage`] (map data, objects);
@@ -18,7 +17,7 @@
 //! Game rules — who goes where and why — are not here: epic #33 part 3 adds
 //! them, and the engine contains no invented ones. Anything not confirmed
 //! against the original is either handed to a data supplier or written up as a
-//! project decision with its reason in `docs/rust.md`.
+//! project decision with its reason in `docs/development/rust/movement.md`.
 //!
 //! Searching ([`route`]) and walking ([`walk`]) are deliberately split: search
 //! has no notion of a tick, walking has no idea how its route was found.
@@ -37,11 +36,11 @@ pub mod world;
 ///
 /// The number is also the order creatures are visited in on a tick, so a
 /// dispute over a cell is settled by the lower number, deterministically
-/// (docs/rust.md, "Decision: who yields a cell").
+/// (docs/development/rust/movement.md, "Decision: who yields a cell").
 ///
 /// A number names one creature for the world's whole life: [`world::World::remove`]
 /// does not hand it to a later one, so an id kept outside the engine cannot end
-/// up ordering a stranger (docs/rust.md, "Decision: taking a creature out keeps
+/// up ordering a stranger (docs/development/rust/movement.md, "Decision: taking a creature out keeps
 /// the numbers").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CreatureId(u32);

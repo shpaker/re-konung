@@ -1,8 +1,5 @@
-//! FLAMES.RES — кадры огней: факелы, костры, горны
-//! (docs/k1/formats/flames-res.md, эталон — `konung/k1/flames_res.py`).
-//!
-//! 74 блока подряд: u32 метка, s32 размер, картинка RL16. Какие кадры образуют
-//! анимацию огня какого вида, задаёт таблица в exe ([crate::executable]).
+//! FLAMES.RES frames; the executable supplies inclusive animation ranges.
+//! Reference: `konung/k1/flames_res.py`; docs/research/k1/formats/flames-res.md.
 
 use thiserror::Error;
 

@@ -36,7 +36,7 @@ fn references_between_blocks_match() {
     for (edition, game) in game_dirs() {
         for files in [GAME_FILES, TUTORIAL_FILES] {
             let numbers = game.state_numbers(files).unwrap();
-            // An edition may hold no tutorial states at all: RUS has none, see docs/k1/editions.md
+            // An edition may hold no tutorial states at all: RUS has none, see docs/research/k1/editions.md
             if numbers.is_empty() {
                 continue;
             }
@@ -156,9 +156,8 @@ const CHARACTERS_BLOCK: usize = game_state::ITEM_SLOTS * game_state::ITEM_SIZE
 
 #[test]
 fn character_field_edits_touch_only_their_bytes() {
-    // Поля, которые правятся в Tiled: класс, уровень, имя, прозвище, набор спрайтов,
-    // золото, очки, опыт, навыки, характеристики (смещения — docs/k1/formats/game-state.md).
-    // Значения читаются по смещениям из документа, а не той же структурой, что пишет.
+    // Read edited fields by documented offsets, independently of the serializer.
+    // See docs/research/k1/formats/game-state.md.
     let Some((_, game)) = game_dirs().into_iter().next() else {
         return;
     };

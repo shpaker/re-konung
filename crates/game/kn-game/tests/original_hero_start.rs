@@ -16,7 +16,7 @@
 //! contract — the squad earns no decision and changes nobody else's — lives
 //! in k1-game's `original_rules.rs`, where the ground can be held identical
 //! across the two variants; in a full world the squad's occupied cells
-//! legitimately shift the shared decision RNG (docs/rust.md, "The marked
+//! legitimately shift the shared decision RNG (docs/development/rust/simulation.md, "The marked
 //! hero's footprint"), so whole-world counter identity is not the pin.
 
 use std::collections::HashMap;
@@ -49,7 +49,7 @@ fn game_roots() -> Vec<(&'static str, PathBuf)> {
             if game.is_dir() {
                 Some((edition, game))
             } else {
-                eprintln!("skip: no original/k1/{edition}/game (docs/k1/editions.md)");
+                eprintln!("skip: no original/k1/{edition}/game (docs/research/k1/editions.md)");
                 None
             }
         })
@@ -57,7 +57,7 @@ fn game_roots() -> Vec<(&'static str, PathBuf)> {
     assert!(
         !root.is_dir() || !dirs.is_empty(),
         "{} exists but holds no edition with a game/ folder: the data-backed \
-         test could not run. How to unpack — docs/k1/editions.md",
+         test could not run. How to unpack — docs/research/k1/editions.md",
         root.display()
     );
     dirs
@@ -77,7 +77,7 @@ struct Start {
 }
 
 /// The player squad of a start state: the original's start point (the spawn
-/// rectangle's top-left corner, docs/k1/formats/game-state.md, group 0x20),
+/// rectangle's top-left corner, docs/research/k1/formats/game-state.md, group 0x20),
 /// and per-member record numbers and record cells — what a non-roaming group
 /// stands on.
 struct Squad {
@@ -173,7 +173,7 @@ fn the_hero_squad_starts_inside_the_map_on_walkable_cells() {
             let start = Start::load(&root, hero);
             let grid = start.grid();
             // The original's start point first: the spawn rectangle's corner
-            // (docs/k1/formats/game-state.md, "Confirmed" over every state
+            // (docs/research/k1/formats/game-state.md, "Confirmed" over every state
             // file of both editions).
             let (corner_x, corner_y) = start.squad.spawn_corner;
             let corner = Cell::new(corner_x.max(0) as u32, corner_y.max(0) as u32);

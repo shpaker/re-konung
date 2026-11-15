@@ -1,7 +1,6 @@
-"""FLAMES.RES — кадры огней: факелы, костры, горны (docs/k1/formats/flames-res.md).
+"""FLAMES.RES frames; the executable supplies inclusive animation ranges.
 
-74 блока подряд: u32 метка, s32 размер, картинка RL16. Какие кадры образуют
-анимацию огня какого вида, задаёт таблица в exe (konung/k1/executable.py).
+Format contract: docs/research/k1/formats/flames-res.md.
 """
 
 from dataclasses import dataclass

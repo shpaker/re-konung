@@ -31,12 +31,12 @@ cargo-lint:
     cargo fmt --manifest-path crates/Cargo.toml --all --check
     cargo clippy --manifest-path crates/Cargo.toml --all-targets -- -D warnings
 
-# Каталог установленной игры для запуска (original/k1/<издание>/game, docs/k1/editions.md);
-# переопределяется переменной окружения: GAME_DIR=original/k1/eng/game just viewer 17
+# Installed files default to original/k1/<edition>/game; override with GAME_DIR.
+# See docs/guides/game-files.md.
 game_dir := env_var_or_default("GAME_DIR", "original/k1/rus/game")
 
-# Просмотрщик карт: just viewer [N] [source] — карта N (без N — первая), источник game|tutorial
-# dev-runtime + dynamic: Bevy in bevy_dylib.dll, binary link ~1 s (docs/rust.md, "Build profiles")
+# Viewer recipes use dev-runtime/dynamic for the local edit/rebuild loop.
+# See docs/development/building.md.
 viewer map="" source="game":
     cargo run --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-viewer --features kn-fe-viewer/dynamic -- --game-dir "{{game_dir}}" --source "{{source}}" {{ if map == "" { "" } else { "--map " + map } }}
 
@@ -48,7 +48,7 @@ viewer-release map="" source="game":
 # 19, both editions, playback playing, day/night lighting on. One BENCH and
 # one GATE line per run; the gate reads avg_ms and p95_ms against 33.3 ms.
 # The editions' paths are the protocol's, not {{game_dir}}: the gate always
-# compares both, see docs/rust.md, "Frame time gate"
+# compares both, see docs/development/rust/viewer.md, "Frame time gate"
 viewer-gate:
     cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- --game-dir original/k1/rus/game --map 17 --benchmark-secs 60
     cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- --game-dir original/k1/rus/game --map 19 --benchmark-secs 60

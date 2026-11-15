@@ -96,7 +96,7 @@ fn game_dirs() -> Vec<(&'static str, GameDir)> {
             if game.root().is_dir() {
                 Some((edition, game))
             } else {
-                eprintln!("skip: no original/k1/{edition}/game (docs/k1/editions.md)");
+                eprintln!("skip: no original/k1/{edition}/game (docs/research/k1/editions.md)");
                 None
             }
         })
@@ -104,7 +104,7 @@ fn game_dirs() -> Vec<(&'static str, GameDir)> {
     assert!(
         !root.is_dir() || !dirs.is_empty(),
         "{} exists but no edition has game/ inside: data-backed tests would skip. \
-         See docs/k1/editions.md",
+         See docs/research/k1/editions.md",
         root.display()
     );
     dirs

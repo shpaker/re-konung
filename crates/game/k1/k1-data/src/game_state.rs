@@ -1,9 +1,5 @@
-//! `Game.N` — начальное состояние новой игры: персонажи, отряды, клады, переходы
-//! и деревни на всех картах (docs/k1/formats/game-state.md,
-//! эталон — `konung/k1/game_state.py`).
-//!
-//! Места — клетки мелкой сетки 160×320. В файле у них сначала y, потом x,
-//! в структурах — как принято у нас: x, y.
+//! Game.N records preserve raw fields; file coordinates are y,x, model coordinates x,y.
+//! Reference: `konung/k1/game_state.py`; docs/research/k1/formats/game-state.md.
 
 use thiserror::Error;
 
@@ -18,7 +14,8 @@ pub const EXIT_SLOTS: usize = 250;
 pub const CHARACTER_SLOTS: usize = 2000;
 pub const VILLAGE_SLOTS: usize = 20;
 
-/// Размеры записей — как struct-форматы Python (docs/k1/formats/game-state.md)
+/// Record sizes match the Python struct formats.
+/// See docs/research/k1/formats/game-state.md.
 pub const ITEM_SIZE: usize = 16; // <bbbb4sfhBB
 pub const GROUP_SIZE: usize = 32; // <hih8hBBBBBBBB
 pub const LOOT_SIZE: usize = 64; // <8shhhhhh22h
@@ -49,9 +46,8 @@ const _: () = assert!(
 /// Рабочие места деревни по порядку (Slavik game_locale.cpp, Locale::Jobs)
 pub const JOB_ROLES: [&str; JOBS] = ["elder", "healer", "merchant", "smith", "voevoda"];
 
-/// Навыки (Character::skills) и характеристики (Character::attributes) по порядку
-/// в записи персонажа — по Slavik (docs/k1/formats/game-state.md); в Tiled
-/// свойства персонажа называются так же, в camelCase (agility_base → agilityBase)
+/// Skill/attribute order follows the record; Tiled uses matching camelCase names.
+/// See docs/research/k1/formats/game-state.md.
 pub const SKILL_NAMES: [&str; 9] = [
     "fencing",
     "trading",
@@ -173,7 +169,7 @@ impl Group {
     /// A range, not `kind < FIRST_FIXED_GROUP`: Slavik's low bound at
     /// `game.cpp:651` never sees the player group (that loop skips
     /// `_mainMapChar`, `game.cpp:638`), while the respawn path with no such skip
-    /// uses the range (`game.cpp:708`). See `docs/k1/formats/game-state.md`.
+    /// uses the range (`game.cpp:708`). See `docs/research/k1/formats/game-state.md`.
     pub fn is_roaming(&self) -> bool {
         (FIRST_ROAMING..=LAST_ROAMING).contains(&self.kind)
     }
@@ -210,7 +206,8 @@ pub struct Exit {
     pub unknown: [u8; 2],
 }
 
-// Имена полей unknown_* — как в Python-этлоне и docs/k1/formats/game-state.md
+// Unknown field names match the Python reference and the format contract.
+// See docs/research/k1/formats/game-state.md.
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Character {

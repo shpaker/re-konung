@@ -68,8 +68,8 @@ def test_serialize_checks_grid_geometry():
 
 
 def test_foot_has_only_four_values(k1_game):
-    # Правило Slavik «младшие 4 бита = 0xF» и его версия с ошибкой приоритета
-    # («младший бит», docs/k1/formats/map.md) на этих значениях совпадают
+    # Slavik's low-bit precedence bug matches the intended low-nibble rule on these values.
+    # See docs/research/k1/formats/map.md.
     for number in map_file.map_numbers(k1_game):
         values = {v for row in map_file.load(k1_game, number).foot for v in row}
         assert values <= {0x00, 0x0F, 0x40, 0x4F}, number

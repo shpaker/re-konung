@@ -1,89 +1,96 @@
-# Rules for AI agents
+# Rules for agents
 
-re-konung is the study and recreation of the engine behind the «Князь» game series (1C/Snowball): first «Князь: Легенды Лесной страны» (1999), then «Князь 2» and «Князь 2.5» if a shared engine is confirmed (see [docs/games.md](docs/games.md)). Agents do the work, so anything learned about the formats goes into [docs/](docs/README.md) instead of staying in the chat.
+re-konung studies and recreates the «Князь» engine: K1 first; K2 and K2.5 only
+if their shared engine is confirmed. Python and Tiled are reference tools; Rust
+is the game engine. Current capabilities and boundaries: [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## Stage
+## Required reading
 
-Stage 1 — the maps of the first part in Tiled. There is a reference Python parser (`konung/`), a Tiled extension (`tiled/konung/`) that opens the original `Konung.N` together with the game objects from `Game.N` and saves them back, and format descriptions in `docs/k1/formats/`. Only maps (`Konung.N`) and the starting state of a new game (`Game.N`: characters, groups, caches, transitions) are written; sprites, `GRAPH.RES` and `Objects.res` are only read.
+Read the relevant document before working; follow the linked procedures.
 
-- Any change to map writing or to `Game.N` is verified the same way: every file of both editions must match the original byte for byte after «read → write» (tests `tests/k1/test_maps.py` and `tests/k1/test_game_state.py` for Python; for the extension — save from Tiled and compare).
-
-- `konung/` — a Python package, CLI `konung` (`uv run konung --help`). What is shared between the parts lives at the package root (`binary`, `rle`, `palette`, `disc`), what belongs to one part lives in `konung/k1/`, later `konung/k2/`.
-- `tiled/konung/` — the Tiled extension: `lib/k1.mjs` parses without the Tiled API, `konung.mjs` builds the Tiled map. The logic mirrors Python, and where they disagree Python wins: it has the tests.
-- `crates/` — a Rust workspace: the `k1-data` crate holds K1 game data (repository `repo`, the `map` and `game_state` formats, roster editing `game_edit`, graphics `graph_res`, `objects_res`, `lights_res`, `flames_res`, `rle` and the tables from the EXE); `k1-game` holds the K1 specifics (resources, textures, the map render list, creature data and rules); `kn-game` is the shared facade, the Bevy-independent scene model and the shared movement engine (grid, routes, passability, movement, game tick): movement mechanics in K1 and K2 are presumably nearly identical, the noticeable difference in K2 is running, so what is shared lives here rather than in a part's layer. Rust mirrors Python and replaces nothing yet; where they disagree Python wins. A trait abstraction is declared by the consumer, when a mock is needed. Details — [docs/rust.md](docs/rust.md). The overall architecture — components, layer boundaries and the target state — lives in [ARCHITECTURE.md](ARCHITECTURE.md) and is the single source of truth for it; other documents link to it instead of duplicating the scheme.
-- `tests/` — pytest. Tests on data take files from `original/` and skip when those are absent.
-- `original/` — files of one's own copy of the game (disc images and unpacked content), never committed. How to prepare them — [docs/k1/editions.md](docs/k1/editions.md).
-- `out/` — everything generated (PNG, dumps), never committed.
+| Task | Read |
+|---|---|
+| Find a topic or place new documentation | [Documentation](docs/README.md) |
+| Components, dependencies, shared versus game-specific code | [Architecture](ARCHITECTURE.md) |
+| UX, UI, camera or controls | [Product principles](docs/development/design.md) |
+| Formats or original game rules | [Research](docs/research/README.md), the K1 topic, and [reverse-engineering skill](.claude/skills/konung-reverse-format/SKILL.md) |
+| Rust implementation or performance | [Rust topics](docs/development/rust/README.md) and [builds](docs/development/building.md) |
+| Tiled editing or extension changes | [Editing guide](docs/guides/tiled.md) and [extension internals](docs/development/tiled.md) |
+| Issues, PRs or git workflow | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| Agent tools and checks | [Agent workflow](docs/development/agents.md) and [testing](docs/development/testing.md) |
 
 ## Reverse engineering
 
-The loop is the `konung-reverse-format` skill (`.claude/skills/konung-reverse-format/SKILL.md`): hypothesis → check with a script over real files → test → write it up in `docs/`.
-
-- Every field in a format description carries a confidence marker: **confirmed** (a test or a check over every file exists), **hypothesis**, **unknown**. Unknown bytes are never dropped: the parser keeps them in an `unknown` field.
-- Game rules — character states, movement, the behavior of villagers and monsters — are recovered with the same loop and marked with the same confidence. What is not confirmed is not invented: the rule is marked unknown in `docs/` and not implemented. Replacing an unknown rule with an invented one — random wandering instead of unverified patrolling, say — is not allowed.
-- The source of a fact is always named: our own experiment, or an external source from [docs/sources.md](docs/sources.md).
-- [Marisa-Chan/Slavik](https://github.com/Marisa-Chan/Slavik) is a C++ reimplementation of the engine; the clone sits in `../../Marisa-Chan/Slavik` (`E:\github\Marisa-Chan\Slavik`). It is a **read-only** reference: it carries no license, so its code is never copied. Formats are described in our own words with a link to file and line, and the implementation is written from scratch.
-- Editions differ (RUS, ENG, later GOG and the collector's edition): before generalizing, check the fact against every edition in `original/`.
-
-## Priority: modern experience
-
-The goal is a live and responsive game, not a byte-for-byte copy of a 1999 engine.
-
-- Any task that touches UX, UI, the camera or the controls starts from [docs/design.md](docs/design.md): the product principles are stated there once — the original is the source of the game (rules, content, atmosphere, visual identity), the modern CRPGs of Larian Studios (above all Baldur's Gate 3 and Divinity: Original Sin 2) are the reference for how the game is controlled, presented and interacted with. The reference is not a specification: no copying of interfaces, assets, the 3D presentation, D&D or another game's turn-based combat.
-- The formats, gameplay and atmosphere of the original are preserved: data is read and written byte-exactly, behavior rules come from the original rather than from our heads.
-- Outdated mechanics and technical limits are improved. The original's internal algorithms and artificial caps are not reproduced: they were the price of the hardware of the day. Examples — a route no longer than 32 steps, turning by one direction per tick, no more than three "expensive" behavior decisions per tick.
-- Slavik is a reference for facts (formats, field meanings, rules), not a model for decisions: how exactly it computes something is not our constraint.
-- Where we do things differently, write it into `docs/` next to the fact about the original — otherwise a divergence gets found but not understood as intentional.
-- The cost of decisions is measured, not eyeballed: the number and its comparison with neighboring operations go into `docs/rust.md`.
+- Use the hypothesis → real-file check → test → documentation loop. Every format
+  field and recovered rule carries its source and confidence: **confirmed**,
+  **hypothesis** or **unknown**. A reference-only claim is identified as such.
+- Do not invent unknown rules or implement guesses as gameplay. Record what is
+  missing and leave it unimplemented. Check every available edition before generalizing.
+- Python is authoritative when implementations disagree. Unknown bytes are
+  preserved, never discarded. Parsers are pure `parse(data)` functions; loading is separate.
+- [Slavik](https://github.com/Marisa-Chan/Slavik) is read-only and has no license:
+  never copy its code. Describe facts in our own words with file/line citations,
+  then implement independently. Local clone: `../../Marisa-Chan/Slavik`
+  (`E:\github\Marisa-Chan\Slavik` on Windows).
+- Keep original rules, content and atmosphere; improve obsolete algorithms and
+  artificial hardware limits. Slavik supplies facts, not implementation constraints.
+- Document intentional differences beside the original fact. Measure decision
+  costs and compare neighboring operations; record the conditions and numbers.
 
 ## Copyrighted content
 
-The games belong to someone else. The project studies the formats and writes its own code, but distributes no game.
+- Never change `original/`. It holds the owner's game files; generated content
+  goes to `out/`. Neither directory is committed.
+- No game files or derivatives in git, PRs, issues, comments or releases: sprites,
+  renders, sound, music, texts, videos and dumps all stay local. Releases contain
+  only our own code (`just tiled-package`). Fixtures are synthetic; game-data tests
+  read local originals. Describe formats with offsets, sizes and short headers,
+  without resource excerpts.
+- Never link to game downloads, disc-image hosts or archives. The only routes
+  are the user's own disc or a store purchase.
 
-- No game files or anything derived from them — sprites, map renders and PNGs, sound, music, texts, videos, resource dumps — in git, in PRs, in issues, in comments or in releases. All of it lives in `original/` and `out/`, which are not committed.
-- Never say where to download the game or its disc images: no links to pirated distributions, no sites archiving old games, no file hosts. Only two routes: your own disc, or a store purchase.
-- Test fixtures are synthetic only. Tests on game data run locally, over `original/`.
-- In `docs/` formats are described in our own words: offsets, sizes, file names, short header fragments. No resource excerpts.
-- Releases contain only our own code (`just tiled-package`).
-- The prek hook `no-game-files` keeps game files out of a commit, `no-download-links` keeps distribution links out. When a hook fires, fix the text or the file — do not work around the hook.
+## Implementation and checks
 
-## Agents
-
-Claude Code and other agents work on the project; the rules for all of them are this file. Details — [docs/agents.md](docs/agents.md).
-
-- Development skills live in `.claude/skills/`. Skills for people live in `skills/`: the repository ships them as a plugin for Claude Code, Codex and Qwen Code ([docs/agents.md](docs/agents.md)).
-- An agent views and edits maps in Tiled through the [tiled-mcp](https://github.com/shpaker/tiled-mcp) plugin (skill `tiled`). Original maps open directly, through the `tiled/konung/` extension (`just tiled-install` or the `konung-tiled-install` skill).
-- Found a bug or missing functionality in someone else's tool or library (Tiled, uv, Pillow, 7-Zip, Slavik and others) — tell the user in the chat explicitly: what is wrong, how to reproduce it, the repository link and the place in the code if it is known. Do not offer a fix and do not silently work around it: what to do about it is the user's call.
-- Same for `shpaker/*` repositories (for example [tiled-mcp](https://github.com/shpaker/tiled-mcp)) — a PR with the fix may be opened in that repository right away, but in a **separate session** and after asking the user. In the current work, do not work around it; report it exactly as an external bug.
-- Checks run through [prek](https://prek.j178.dev) (`prek.toml`): git calls it on commit and before push. Shims are installed by `just setup`.
-
-## Coding style
-
-- Python 3.14, ruff. English is used for everything GitHub-facing: `.github/**` with the checks and the tests that cover them, this file, [CONTRIBUTING.md](CONTRIBUTING.md), and the text of issues and pull requests. New code and new documentation are English as well: comments, doc-comments, assertion and test names, and the `docs/` pages a change adds. Text that already exists keeps its language until a change touches it, and what is touched is rewritten in English — even when that leaves one English row in a Russian table. Identifiers are English and unabbreviated.
-- **Comments are English — always**, whatever language the file around them is in, and they exist only where the decision is not self-evident: a hidden constraint, an invariant, a workaround, a deliberate divergence from the original. Never a restatement of what the code does. One or two lines, exact wording; a comment whose removal loses no information should not be there.
-- A format parser is a pure function `parse(data: bytes)`; the filesystem lives separately (`load`).
-- Tests are simple: synthetic ones for algorithms (RLE), on real files for formats.
-
-## Required
-
-- After edits: `just check` (ruff, tests, file checks).
-- Never bypass prek checks: no `--no-verify`, no `SKIP=`, no `prek uninstall`.
-- A format change shows up in the picture — verify with a picture: `uv run konung k1 map …` and a render in Tiled.
-- Decisions and anything found about the formats go into `docs/`.
+- Write project documentation in Russian, including `docs/`, root guides and crate
+  READMEs. Keep code, identifiers, comments, doc-comments, tests, agent/skill instructions
+  and GitHub-facing files in English. Preserve commands, paths and API names in translation.
+  Comments explain a hidden constraint or decision in one or two lines, never
+  restate the code. Identifiers are unabbreviated. Python: 3.14 and ruff.
+- Shared code belongs above the game-specific packages only when commonality is
+  established; shared movement is the documented exception. Consumers declare
+  traits when a mock is needed. Follow the architecture's dependency boundaries.
+- Map and `Game.N` writing must round-trip every file of both editions byte for
+  byte: Python tests `tests/k1/test_maps.py`, `tests/k1/test_game_state.py`; Rust
+  uses the same contract; the extension is saved from Tiled and compared.
+- After edits run `just check`. Never bypass prek: no `--no-verify`, `SKIP=` or
+  `prek uninstall`. Fix rejected files or text instead of evading a hook.
+- A visible format change requires Python rendering (`uv run konung k1 map …`)
+  and comparison in Tiled. Agents use the tiled-mcp plugin to view and edit maps.
+- Report external tool/library bugs explicitly: what fails, reproduction, the
+  repository link and code location if known. Do not offer a fix or work around
+  them silently. For `shpaker/*`, a fix PR requires the user's agreement and a
+  separate session; do not work around the bug in this one.
 
 ## Git
 
-- All changes go through a PR. One PR closes one area: scaffolding, disc unpacking, graphics, maps, the Tiled extension, documentation of one topic. Unrelated work goes to separate branches and PRs.
-- Any write git operation (commit, push, merge, rebase, reset, tag and so on) only with the user's explicit confirmation.
-- Never push to or merge into `main` (including `gh pr merge`) without the user's consent for exactly that push or merge.
-- Merges into `main` are squash commits only (merge and rebase are disabled in the repository and `main` requires a linear history). GitHub takes the squash subject from the PR title with its number (`squash_merge_commit_title=PR_TITLE`, `squash_merge_commit_message=COMMIT_MESSAGES`), so do not pass `-t` or `-b` to `gh pr merge`: your own text overrides the repository setting and the history ends up with a subject the PR never had. Each PR therefore lands as exactly one commit whose subject ends in `(#N)` — `cliff.toml` counts releases from that marker.
-- Dependent (stacked) PRs — a PR whose base is another PR's branch: once the lower PR is squash-merged, its branch is deleted and its commits collapse into a single `main` commit, so rebase the dependent branch onto the updated `main` (or onto the next surviving base), repoint the dependent PR's base there, and force-push the rebased branch.
-- Commits are made in the user's name only, in Conventional Commits, in English.
-- Pull request titles carry a mandatory subsystem scope on top of Conventional Commits: `type(scope): subject`, the scope exactly one of `game` (the engine and code shared across the series), `konung1`, `konung2`, `konung2.5` (a specific game of the series), `ui` (the display layer and its interface: pieces to sprites, textures, animation, camera, widgets), `tiled` (the Tiled extension), `arch` (the crate and layer structure: new crates, moves between layers, dependency direction), `docs`, `ci`, `deps`, `repo` (repository infrastructure and rules: justfile, prek, templates, contribution docs). No job validates scopes — the rule is enforced by agents and in review. Issue titles keep their own optional scope.
-- Nowhere — commits and their metadata, branches, PRs, issues, comments, tags and releases — no mentions of AI or neural networks (`Co-Authored-By`, `Generated with ...`, `claude/`, `ai/` and the like).
-- When creating a PR, read [CONTRIBUTING.md](CONTRIBUTING.md) and fill in every one of its sections.
-- Issue and PR titles and bodies are English, the full translation goes last as one collapsed block `<details><summary>Русский перевод</summary>` at the end of the description. The English text is the source of truth; code, commands, identifiers and paths stay untranslated. Descriptions are concise: one or two sentences per section, no retelling of the diff and no copies of `docs/` — a fact is cited. No empty sections; what does not apply is written as `None`. The form is checked by `.github/scripts/contrib_form.py` — in CI and in `tests/test_contrib_form.py`.
-- One ticket — one self-contained task: the problem and the expected result, not the implementation — type and module names belong to the coding stage. Tell confirmed original behavior apart from a hypothesis ("Reverse engineering"), describe an intentional difference from the original as the expected modern behavior ("Priority: modern experience"), and never invent reproduction steps. Templates — `.github/ISSUE_TEMPLATE/`, sections — [CONTRIBUTING.md](CONTRIBUTING.md).
-- An issue title — issues only: it starts with a type prefix (`bug:`, `feat:`, `task:` or `research:`) and names the expected result, not the action; a scope like `(kn-render)` is optional, the layers are listed in `## Scope`. Pull request titles stay in Conventional Commits as before — git-cliff reads those, issue types affect no release.
-- Ticket links use GitHub keywords: a PR closes its ticket with `Closes #NN` in the `Related` section (without it the ticket survives the merge), and a ticket it only partly covers is referenced by number without the keyword. Dependencies between tickets are set in the "Relationships" panel or with `gh issue edit --add-blocked-by` — text alone creates no link. Details — [CONTRIBUTING.md](CONTRIBUTING.md).
-- The version is computed automatically (git-cliff); tags and releases are made by hand only, through the **version** workflow ([docs/releases.md](docs/releases.md)). An agent does not run it and does not tag. Release notes are built from PR titles (git-cliff skips the commits inside a branch), so the type has to be chosen honestly in the PR title itself: `feat` is a new capability, `fix` is a repair, anything else gives no release entry.
+- All changes go through a PR, one area per PR. Any write git operation requires
+  explicit user confirmation. Never push to or merge into `main` without consent
+  for that exact push or merge. Preserve unrelated edits and their staging.
+- Read and follow CONTRIBUTING before creating issues or PRs. Descriptions are concise.
+  It defines titles/scopes, required sections, the final Russian translation,
+  truthful issue descriptions, closing keywords and dependency relationships.
+- Commits are English Conventional Commits in the user's name. No mentions of
+  AI or neural networks in commits/metadata, branches, PRs, issues, comments,
+  tags or releases; no generated-attribution trailers.
+- Squash merges only. Do not pass `-t` or `-b` to `gh pr merge`: the repository
+  derives the subject from the PR title and number. Rebase stacked PRs after a
+  base is squash-merged, retarget them and force-push as CONTRIBUTING describes.
+- Agents never run the version workflow or create release tags. Releases are
+  manual; [release procedures](docs/development/releases.md) explain the version rules.
+
+## Documentation ownership
+
+Original facts, sources and confidence go in `docs/research/`; implementation
+choices and measurements in the relevant `docs/development/` topic; usage in
+`docs/guides/`. Keep indexes short, link canonical pages, and record discoveries
+in the repository rather than leaving them only in chat.

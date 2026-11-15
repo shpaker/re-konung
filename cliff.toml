@@ -1,5 +1,5 @@
-# Версия и текст релиза по Conventional Commits (docs/releases.md).
-# Запуск: `uvx git-cliff`, отдельная установка не нужна.
+# Version and release notes derive from Conventional Commits through uvx git-cliff.
+# See docs/development/releases.md.
 
 [changelog]
 body = """

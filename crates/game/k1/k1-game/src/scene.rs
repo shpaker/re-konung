@@ -436,7 +436,7 @@ impl PoseKind {
 
     /// The first frame of a new animation, for a creature that starts to walk or
     /// turns around. Where the original begins a fresh animation is not confirmed
-    /// (docs/k1/creatures.md), so this is our decision, spelled out rather than
+    /// (docs/research/k1/creatures/behavior.md), so this is our decision, spelled out rather than
     /// left to whatever the record happened to hold.
     pub fn start(state: u8, direction: u8) -> PoseKind {
         PoseKind {

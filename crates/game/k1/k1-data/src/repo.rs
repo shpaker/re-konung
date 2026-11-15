@@ -58,7 +58,8 @@ pub fn file_set(map_name: &str) -> FileSet {
     }
 }
 
-/// Папка установленной игры — содержимое `inst/setup.dat` (docs/k1/editions.md).
+/// Installed game directory contains the unpacked inst/setup.dat files.
+/// See docs/guides/game-files.md.
 #[derive(Debug, Clone)]
 pub struct GameDir {
     root: PathBuf,

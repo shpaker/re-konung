@@ -1,22 +1,12 @@
 # kn-fe-viewer
 
-Bevy frontend of the «Князь» map viewer: viewer state (`Viewer`), the Feathers
-panel, overlay and playback toggles, diagnostics, the camera binding and the
-App assembly. The app hands over a `ViewerConfig` (an opened game, its
-directory, the map list and the startup selection); this crate knows no CLI.
+Приложение просмотрщика Bevy: состояние Viewer, элементы Feathers, слои, воспроизведение и диагностика.
 
-Not here:
+- Получает ViewerConfig; разбор CLI остаётся в kn-viewer.
+- Строит карту со всеми слоями; меняет видимость без пересборки.
+- Добавляет метки существ и измерения к общему конвейеру рендеринга/существ.
+- Только читает: не записывает карты или состояние игры.
 
-- CLI parsing, startup resolution and the headless `check` — the app crate
-  [crates/apps/viewer](../../../apps/viewer) (`kn-viewer`, bin
-  `re-konung-viewer`);
-- rendering, input and UI mechanics — `kn-render`, `kn-input`, `kn-ui`.
-
-Details of the display layer: [docs/rust.md](../../../../docs/rust.md).
-
-## Checks
-
-```bash
-just cargo-test
-just cargo-lint
-```
+Подробности: [тематическая документация](../../../../docs/development/rust/viewer.md).
+Проверки: `just cargo-test`, `just cargo-lint`. Чистая логика не требует окна/GPU;
+проверки на игровых данных используют локальный original/ и пропускаются без него.

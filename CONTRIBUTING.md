@@ -1,5 +1,13 @@
 # How to contribute
 
+## Documentation language
+
+Project documentation is Russian: `docs/`, root guides and crate READMEs.
+New pages and substantive edits follow that language. Keep commands, paths,
+API names and source citations unchanged when translating. Code, identifiers,
+comments, doc-comments, tests, agent/skill instructions and GitHub-facing files
+remain English; issue and PR descriptions retain the translation rule below.
+
 ## Language of Issues and PRs
 
 Titles and the whole body are English, in both issues and pull requests. The description ends with
@@ -21,7 +29,7 @@ one collapsed block holding the complete translation:
   the tests, the description carries the why, how to check it and what it risks. A ticket does not
   copy `docs/`: a confirmed fact is cited.
 - Code, commands, identifiers and paths are not translated.
-- No empty sections, no placeholders: what does not apply is written as `None` or `N/A`.
+- No empty sections, no placeholders: what does not apply is written as `None`.
 - What is not confirmed is marked as such — a hypothesis or unknown ([AGENTS.md](AGENTS.md),
   "Reverse engineering").
 - The collapsed block is the only one and it is last: the check reads the English part before it, so
@@ -63,7 +71,7 @@ An issue title starts with one of four prefixes, which say what kind of work it 
   crates, moves between layers, dependency direction), `docs`, `ci`, `deps`, `repo` (repository
   infrastructure and rules: justfile, prek, templates, contribution docs). No job validates the
   scope — review enforces it. git-cliff reads those, and they decide the release and the version
-  ([docs/releases.md](docs/releases.md)). Issue prefixes affect no release.
+  ([docs/development/releases.md](docs/development/releases.md)). Issue prefixes affect no release.
 
 ## Branches and PRs
 
@@ -78,8 +86,16 @@ Branch names are short and meaningful: `feat/k1-maps`, `fix/rle-shadow`, `docs/s
 
 Merges into `main` are squash commits only: merge and rebase are disabled in the repository and
 `main` requires a linear history. GitHub writes the squash subject from the PR title with its number —
-`feat: parse k1 map files (#29)` — and the branch's commits do not reach the `main` history at all, so
-the type a release is computed from has to be set in the PR title ([docs/releases.md](docs/releases.md)).
+`feat(konung1): parse K1 map files (#29)` — and the branch's commits do not reach the `main` history at all, so
+the type a release is computed from has to be set in the PR title ([docs/development/releases.md](docs/development/releases.md)).
+
+Do not override the squash title/body with `gh pr merge -t` or `-b`:
+the repository uses `squash_merge_commit_title=PR_TITLE` and
+`squash_merge_commit_message=COMMIT_MESSAGES`. The subject ends in `(#N)`,
+which git-cliff uses to recognize the PR. Choose the PR type truthfully:
+feat introduces a capability, fix repairs one; the
+[release table](docs/development/releases.md#how-the-version-is-computed)
+defines which other types produce notes or a version change.
 
 ## Commits
 
@@ -88,7 +104,8 @@ the type a release is computed from has to be set in the PR title ([docs/release
 
 ## Pull request description
 
-The title is English, in Conventional Commits: `feat: parse k1 map files`. It becomes the squash
+The title is English, in Conventional Commits with a mandatory subsystem scope:
+`feat(konung1): parse K1 map files`. It becomes the squash
 commit subject in `main` and a release note entry.
 
 The description has seven English sections, all mandatory, in this order. An empty section is a
@@ -149,7 +166,9 @@ checkable line by line: the command and what its output must show. Confirmed fac
 and open questions go into `Implementation Notes`, so that a hypothesis does not read as a fact.
 
 Performance problems are described with measured numbers and the conditions of the measurement, not
-with an eyeball estimate (the cost of operations — [docs/rust.md](docs/rust.md)).
+with an eyeball estimate. Record costs with their subsystem in the
+[Rust topics](docs/development/rust/README.md), or in
+[builds](docs/development/building.md) for compilation.
 
 ## Linking tickets and PRs
 
@@ -188,8 +207,9 @@ just setup
 ```
 
 After that git runs prek itself: on commit — formatting and file checks, on the commit message —
-Conventional Commits and the ban on AI mentions, before push — ruff and the tests. All of it by hand:
-`just check`.
+Conventional Commits and the ban on AI mentions, before push — file/lint checks and Python/Rust tests. All of it by hand:
+`just check`. [Testing](docs/development/testing.md) owns the coverage; prek.toml
+is the executable source of truth.
 
 ## Copyrighted content
 
@@ -199,4 +219,4 @@ game either: only your own disc or a store purchase. Details — the "Copyrighte
 [AGENTS.md](AGENTS.md).
 
 Files of your own copy live in `original/`, derived ones in `out/` (both in `.gitignore`). Tests on
-data skip without them; how to prepare the files — [docs/k1/editions.md](docs/k1/editions.md).
+data skip without them; [prepare your game files](docs/guides/game-files.md).

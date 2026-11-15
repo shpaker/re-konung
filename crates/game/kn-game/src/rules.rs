@@ -8,7 +8,7 @@
 //! [`Ground`] over a [`World`] tells where a creature may stand right now, and
 //! [`live`] hands the rules the live picture of the tick.
 //!
-//! See docs/rust.md, "Decision: separate evaluate from apply".
+//! See docs/development/rust/movement.md, "Decision: separate evaluate from apply".
 
 use super::movement::CreatureId;
 use super::movement::grid::{Cell, Direction};
@@ -23,7 +23,7 @@ use k1_game::rules::{Decision, Ground, Live, Random};
 ///
 /// A cell only reserved by a running step is not stood in and stays free:
 /// the dispute over it is settled when the step lands, by the engine
-/// (docs/rust.md, "Decision: who yields a cell"). Negative coordinates are
+/// (docs/development/rust/movement.md, "Decision: who yields a cell"). Negative coordinates are
 /// outside the fine-grid space and never free.
 impl<P: Passage, K: Pace> Ground for World<P, K> {
     fn is_free(&self, cell: (i16, i16)) -> bool {

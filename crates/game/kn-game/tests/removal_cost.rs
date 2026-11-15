@@ -2,7 +2,7 @@
 //!
 //! An `#[ignore]`d test: it measures in release and prints a table, so it does
 //! not get in the way of an ordinary `cargo test`. The numbers go to
-//! `docs/rust.md`.
+//! `docs/development/rust/movement.md`.
 //!
 //! ```bash
 //! cargo test --release --manifest-path crates/Cargo.toml -p kn-game \

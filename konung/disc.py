@@ -1,7 +1,4 @@
-"""Образы дисков Alcohol 120% (MDS + MDF): дата-трек в ISO, аудиодорожки в WAV.
-
-Формат MDS описан в docs/disc-images.md.
-"""
+"""MDS/MDF track extraction; format evidence: docs/research/disc-images.md."""
 
 import struct
 import wave
