@@ -8,7 +8,7 @@
 //! leaving the static source list untouched.
 //!
 //! The subject is map 17: six calm roaming squads, twenty-eight monsters, in
-//! both shipped editions (docs/research/k1/creatures/README.md), the same set
+//! both shipped editions (docs/research/k1/creatures/placement.md), the same set
 //! `original_simulation.rs` counts through the roster. Tests skip when
 //! `original/` is absent (docs/research/k1/editions.md).
 

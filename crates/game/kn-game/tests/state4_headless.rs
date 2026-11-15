@@ -18,7 +18,7 @@ use k1_game::{
 use kn_game::{Game, MapRef, MapSource};
 
 /// Ion the werewolf stands on map 37 in the shipped files, one record per
-/// `Game.N` (docs/research/k1/creatures/README.md, "Our measurement").
+/// `Game.N` (docs/research/k1/creatures/animation.md, "Our measurement").
 const ION_MAP: u32 = 37;
 
 /// The shipped ENG game data, or `None` when `original/` is absent. The three
@@ -121,7 +121,7 @@ fn a_state_four_record_and_its_state_six_pair_compose_the_same_layers() {
             };
             // Compose again from state 0 — the pair with the weapon bit — to
             // prove the collapse in `sprites_for` makes them equal for a
-            // dynamic sprite (docs/research/k1/creatures/README.md, "Our measurement").
+            // dynamic sprite (docs/research/k1/creatures/animation.md, "Our measurement").
             let alt = PoseKind {
                 state: 0,
                 direction: record.direction,
@@ -197,7 +197,7 @@ fn two_state_four_creatures_are_independent_and_a_new_event_replays_one() {
 /// Idle boundary and asserts the derivation matches the machine's forward run.
 #[test]
 fn shown_state_on_rewind_equals_shown_state_of_that_tick_in_a_forward_run() {
-    const FRAMES: u32 = 13; // Eechetik, docs/research/k1/creatures/README.md
+    const FRAMES: u32 = 13; // Eechetik, docs/research/k1/creatures/animation.md
     let mut forward = Machine::new();
     forward.enter_world([Seed {
         id: 1,

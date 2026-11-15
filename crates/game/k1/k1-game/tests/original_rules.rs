@@ -270,7 +270,7 @@ fn rules_hold_their_invariants_on_every_map_of_both_editions() {
 
                 // Job holders that start on their place are turned or left
                 // alone, never sent away: the starting data stands every
-                // holder exactly on its cell (docs/research/k1/creatures/README.md).
+                // holder exactly on its cell (docs/research/k1/creatures/placement.md).
                 for job in &jobs {
                     if job.character <= 0 {
                         continue;

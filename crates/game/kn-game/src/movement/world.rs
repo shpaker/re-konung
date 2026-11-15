@@ -166,7 +166,7 @@ pub struct World<P: Passage, K: Pace> {
     /// creature's number, so a removal shifts nobody.
     actors: Vec<Option<Actor>>,
     /// Number for the next creature: it only ever grows, so a removed
-    /// creature's number is never handed to another (docs/development/rust/README.md, "Decision:
+    /// creature's number is never handed to another (docs/development/rust/movement.md, "Decision:
     /// taking a creature out keeps the numbers").
     next_creature: u32,
     /// The taken slots in ascending order: the tick walks the creatures that

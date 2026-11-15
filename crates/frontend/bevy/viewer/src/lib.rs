@@ -4596,7 +4596,7 @@ mod tests {
     /// so a 30-minute session's rewind must stay sub-second in the shipped
     /// (release) build — measured 306 ms, 10 µs/tick, on an Apple M-series;
     /// the same test build runs ~4.3 s, hence the debug-sized bound (review
-    /// #68; numbers also in docs/development/rust/README.md, "Decision: no reverse tick — replay").
+    /// #68; numbers also in docs/development/rust/rendering.md, "Creature nodes").
     #[test]
     fn replaying_a_long_session_stays_a_bargain() {
         let Some((dir, map_ref)) = game_and_first_map() else {

@@ -322,7 +322,7 @@ fn villager_decision<G: Ground, R: Random>(
     // creature to join it. An empty slot falls through to the dynamic
     // workplace; the original also clears the bits in memory (`ClassID &=
     // ~(7 << 3)`), which we do not — the branch is deterministic, so the
-    // next tick takes the same path (docs/research/k1/creatures/README.md).
+    // next tick takes the same path (docs/research/k1/creatures/behavior.md).
     let job = usize::from((creature.class_id >> 3) & 7);
     if job != 0 {
         // Bits 5..7 read past the five slots in the original
@@ -540,7 +540,7 @@ pub fn is_adjacent(from: (i16, i16), to: (i16, i16)) -> bool {
 
 /// The first free neighbour of `cell` in direction order 0..7 — the original
 /// tests terrain only (`FUN_00410ffc`); with us nobody may stand there
-/// either (docs/research/k1/creatures/README.md).
+/// either (docs/research/k1/creatures/behavior.md).
 fn first_free_neighbour<G: Ground>(cell: (i16, i16), ground: &G) -> Option<(i16, i16)> {
     (0..8)
         .filter_map(|index| neighbour(cell, index))

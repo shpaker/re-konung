@@ -540,7 +540,7 @@ mod tests {
         // The goal is walkable and free, but all eight neighbours are wall: it
         // cannot be entered, and a neighbouring cell in its place is not the
         // answer to "go to the goal" — it is a substituted goal. The rings
-        // apply only to a taken or impassable goal (docs/development/rust/README.md, "Decision: an
+        // apply only to a taken or impassable goal (docs/development/rust/movement.md, "Decision: an
         // occupied goal takes the nearest ring"); here there is no answer.
         let grid = Grid::new(24, 24);
         let mut map = Map::default();

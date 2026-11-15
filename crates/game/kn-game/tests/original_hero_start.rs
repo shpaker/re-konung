@@ -16,7 +16,7 @@
 //! contract — the squad earns no decision and changes nobody else's — lives
 //! in k1-game's `original_rules.rs`, where the ground can be held identical
 //! across the two variants; in a full world the squad's occupied cells
-//! legitimately shift the shared decision RNG (docs/development/rust/README.md, "The marked
+//! legitimately shift the shared decision RNG (docs/development/rust/simulation.md, "The marked
 //! hero's footprint"), so whole-world counter identity is not the pin.
 
 use std::collections::HashMap;

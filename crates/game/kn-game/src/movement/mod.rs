@@ -17,7 +17,7 @@
 //! Game rules — who goes where and why — are not here: epic #33 part 3 adds
 //! them, and the engine contains no invented ones. Anything not confirmed
 //! against the original is either handed to a data supplier or written up as a
-//! project decision with its reason in `docs/development/rust/README.md`.
+//! project decision with its reason in `docs/development/rust/movement.md`.
 //!
 //! Searching ([`route`]) and walking ([`walk`]) are deliberately split: search
 //! has no notion of a tick, walking has no idea how its route was found.

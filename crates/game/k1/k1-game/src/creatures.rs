@@ -105,7 +105,7 @@ fn creature(character: &Character, group: &Group, places: &HashMap<usize, Workpl
 /// The village job slots of `map_number` in file order: index = slot, five per
 /// village (docs/research/k1/formats/game-state.md, the `Job` block).
 ///
-/// Our data has at most one village per map (docs/research/k1/creatures/README.md, our
+/// Our data has at most one village per map (docs/research/k1/creatures/behavior.md, our
 /// measurement over `Game.0`–`Game.2`); were there more, the first is taken.
 /// No village on the map — an empty list, and the rules find no work anywhere.
 pub fn job_slots(state: &GameState, map_number: usize) -> Vec<Workplace> {

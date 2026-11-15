@@ -1070,7 +1070,7 @@ impl Game {
                     .collect();
                 // Only a state-4 record can have a special; a human's state 4 is
                 // the shot, which is out of #70's scope and must not be routed
-                // through the appearance clip (docs/research/k1/creatures/README.md).
+                // through the appearance clip (docs/research/k1/creatures/animation.md).
                 let special = is_special
                     .then(|| {
                         k1_game::scene::pose_in(
@@ -1498,7 +1498,7 @@ fn creature_geometry(
 }
 
 /// The animation state a walking creature draws: the walk row of its sprite
-/// table (docs/research/k1/creatures/README.md), shared with [`k1_data::characters::walk_frame_counts`].
+/// table (docs/research/k1/movement.md), shared with [`k1_data::characters::walk_frame_counts`].
 const WALK_STATE: u8 = WALK_ANIMATION as u8;
 
 /// Итог headless-проверки одной карты.

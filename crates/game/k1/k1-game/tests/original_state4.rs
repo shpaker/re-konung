@@ -10,7 +10,7 @@
 //! | Ion the werewolf | `0x55` | 22 | 3 | 12 |
 //!
 //! over `Game.0`–`Game.2` of both RUS and ENG copies (404 records total, see
-//! docs/research/k1/creatures/README.md, "Our measurement"). The same test classifies every
+//! docs/research/k1/creatures/animation.md, "Our measurement"). The same test classifies every
 //! one of them as a one-shot under the machine — Special at frame 0 on world
 //! load, Idle after `special_frames` ticks — and asserts the machine's
 //! Special → Idle edge happens exactly once per creature and not again, so no
