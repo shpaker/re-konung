@@ -335,7 +335,14 @@ fn update_lighting_state(
         Some(tick) => tick,
         None => clock.ticks,
     };
-    let next = lighting_state(lighting::params_gated(tick, SIM_SEED, !viewer.constant_day));
+    let map = viewer.maps.get(viewer.selected).map_or(0, |map| map.number);
+    let next = lighting_state(lighting::params_for_map(
+        tick,
+        SIM_SEED,
+        map,
+        !viewer.constant_day,
+        true,
+    ));
     if *state != next {
         *state = next;
     }
@@ -3537,6 +3544,37 @@ mod tests {
             app.world().resource::<Viewer>().constant_day,
             "a held key toggles once, not every frame"
         );
+    }
+
+    #[test]
+    fn constant_map_color_survives_the_day_switch_and_changes_with_the_map() {
+        let mut app = scrub_app(None);
+        app.world_mut().resource_mut::<Viewer>().maps = vec![
+            MapRef {
+                source: MapSource::Game,
+                number: 44,
+            },
+            MapRef {
+                source: MapSource::Game,
+                number: 17,
+            },
+        ];
+        app.world_mut().resource_mut::<Clock>().ticks = 12000;
+        app.update();
+        let fixed = scrub_lighting(&app);
+        assert_eq!(
+            fixed,
+            lighting_state(lighting::params_for_map(12000, SIM_SEED, 44, true, true))
+        );
+        assert_ne!(fixed.ambient_blend, Vec3::ZERO);
+        assert_eq!(fixed.light_gain, 0.0);
+        app.world_mut().resource_mut::<Viewer>().constant_day = true;
+        app.update();
+        assert_eq!(scrub_lighting(&app), fixed);
+        assert_eq!(scrub_clock(&app), 12000);
+        app.world_mut().resource_mut::<Viewer>().selected = 1;
+        app.update();
+        assert_eq!(scrub_lighting(&app), LightingState::default());
     }
 
     /// #97 AC2 headless: with the switch on the ambient snapshot at a night

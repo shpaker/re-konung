@@ -19,23 +19,13 @@
 //!   advances once every 16 ticks — an approximation we chose, NOT a period observed
 //!   in the original. See docs/ if you need the exact citation.
 //!
-//! - **Float fade against integer tables**: the original fades in 5/6-bit integer
-//!   lookup tables ([`fade_table_entry`]); our shader computes the same formulas in
-//!   8-bit floats. The difference is bounded by the original's own output
-//!   quantization (its display was 16-bit colour) and is not reproduced.
+//! - **Float fade against integer tables**: the GPU uses display-encoded floats
+//!   instead of 5/6-bit tables. Quantization and mask filtering remain intentional
+//!   differences; no universal one-step error bound is claimed (see the audit).
 //!
-//! ## Not yet implemented
-//!
-//! - The light-effects user option switch (`[0x81D604]`, the clone's
-//!   `_bConfLightEffects`): it gates the ground's tile light, not the ambient,
-//!   and its switch is nobody's ticket scope yet. The day/night switch is
-//!   implemented — [`params_gated`] (#97).
-//!
-//! - Per-map constant light maps (42, 44, 45): their deciding flag `[0x81D5DC]`
-//!   is unlocated at the binary level. We leave those out until it is confirmed.
-//!
-//! - The `0.33` vs `1/3` coefficients of window 7's red: the research page
-//!   leaves them unresolved (#96 does not invent them).
+//! The light-effects option is available through [`params_for_map`]; frontends
+//! currently keep it enabled and expose no additional menu control. Constant-map
+//! flags and colors are confirmed in all three binaries (see the audit).
 
 use crate::time_of_day::{self, NightPalette};
 
@@ -82,13 +72,17 @@ pub fn light_color(tick: u64, seed: u64) -> [f32; 3] {
     ]
 }
 
-/// Tile-light colour for the ground pass (`/200`).
+/// Tile-light table factors after integer halving in the ground pass.
 ///
-/// In the original the ground path receives half the draw pass value
-/// (game.cpp:981: `SetLightColor(_lightColor / 200.0)`).
+/// Confirmed at rus `0x4254E6..0x42553C`: divide the integer levels by two,
+/// then index the positive fade tables (not a floating division by 200).
 pub fn ground_light_color(tick: u64, seed: u64) -> [f32; 3] {
     let c = light_color(tick, seed);
-    [c[0] / 2.0, c[1] / 2.0, c[2]]
+    [
+        fade_factor((c[0] * 100.0).round() as u32 / 2),
+        fade_factor((c[1] * 100.0).round() as u32 / 2),
+        0.0,
+    ]
 }
 
 /// The fade factor for a channel value, exactly as the original's table builder
@@ -97,10 +91,8 @@ pub fn ground_light_color(tick: u64, seed: u64) -> [f32; 3] {
 /// the f32 accumulation, not `v / 100` (at v = 12 it is 0.1199999898…, not the
 /// f32 nearest to 0.12).
 pub fn fade_factor(v: u32) -> f32 {
-    // Each step adds in the x87 80-bit registers and stores to f32: an f64 sum
-    // of two exact f32 values, rounded once on the store. A native f32 add
-    // rounds once too, but from a narrower sum — at v = 6 it already disagrees
-    // in the last bit, so the two-step form is the faithful one.
+    // Each x87 addition is stored back to f32; the wider sum preserves the
+    // exact intermediate before that store rounds it.
     let mut k = 0.0f32;
     for _ in 0..v {
         k = (f64::from(k) + f64::from(0.01f32)) as f32;
@@ -148,28 +140,13 @@ pub fn channels(cycle_tick: u64, night: NightPalette) -> [f32; 3] {
     [factor(r), factor(g), factor(b)]
 }
 
-/// Per-channel composition reproduced from the original's fragment shader.
+/// Display-encoded channel composition of the original palette and lit blit.
 ///
-/// Source: Slavik `gfx.cpp:56-84` described in our own words. Each channel behaves
-/// independently:
-///
-/// - `lightning` is the mask brightness sampled from the light mask texture
-///   (`texture2D(tex3, ...).r`), in `0..1`.
-/// - `light_color` is the RGB tile-light colour (`cLight` in the original) that
-///   adds toward white when the mask is bright.
-/// - `blend` is the ambient blend (`cBlend`), negative for darken, positive for
-///   lighten toward white.
-///
-/// Negative blend: the multiply always carries lightning —
-/// `base *= 1.0 + clamp(blend + lightning, -1.0, 0.0)` (gfx.cpp:66) — while the
-/// additive step toward white runs only when `lightning >= 0.01`
-/// (`base += (1.0 - base) * light_color`, gfx.cpp:64-65); below the threshold the
-/// multiplier still shifts by `lightning`.
-/// Non-negative blend: blend toward white — `base += (1.0 - base) * blend`.
-/// Blue channel never gets the light term, and its negative multiply is unclamped:
-/// `base *= 1.0 + blend` (gfx.cpp:81).
-///
-/// Alpha is never touched here; the caller sets alpha on the sprite itself.
+/// With a nonzero mask the red/green path brightens first, then applies only
+/// negative ambient after adding the mask level (rus `0x43E7FA`, `0x43CC49`).
+/// Positive ambient is ignored on that path. Blue and zero-mask pixels use the
+/// plain palette transform. GPU filtering uses a one-percent mask threshold.
+/// Alpha is untouched; the renderer converts sRGB around this operation.
 pub fn apply_channel(
     base: f32,
     blend: f32,
@@ -177,20 +154,11 @@ pub fn apply_channel(
     light_color: f32,
     is_blue: bool,
 ) -> f32 {
-    if is_blue {
-        // Blue never gets the light term, and the reference multiplies it raw.
-        if blend < 0.0 {
-            base * (1.0 + blend)
-        } else {
-            base + (1.0 - base) * blend
-        }
-    } else if blend < 0.0 {
-        let lit = if lightning >= 0.01 {
-            base + (1.0 - base) * light_color
-        } else {
-            base
-        };
+    if !is_blue && lightning >= 0.01 {
+        let lit = base + (1.0 - base) * light_color;
         lit * (1.0 + (blend + lightning).clamp(-1.0, 0.0))
+    } else if blend < 0.0 {
+        base * (1.0 + blend)
     } else {
         base + (1.0 - base) * blend
     }
@@ -242,16 +210,14 @@ pub fn fades(surface: Surface, fine_light_value: u8) -> bool {
 
 /// Flat parameters the render layer is handed once per frame.
 ///
-/// The only option switch applied here is the day/night gate — a parameter of
-/// [`params_gated`], not a stored field: the phase computation itself stays a
-/// pure function of the tick and the seed. The light-effects switch and the
-/// per-map constant light (unconfirmed flag `[0x81D5DC]`) are not applied.
+/// The day/night and light-effects gates and the constant-map override are
+/// applied by [`params_for_map`] before the render layer receives these values.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LightingParams {
     /// The fade factors for every surface — ground, decorations, objects and
     /// characters alike: the fade follows the phase, window or not.
     pub ambient: [f32; 3],
-    /// Tile-light colour / 200, added where mask brightness >= 0.01.
+    /// Positive table factors for integer-halved light levels, added on lit pixels.
     pub ground_light: [f32; 3],
     /// The phase's ground-light window (ticks 8100..18900): gates only the
     /// tile light — masks and light colour — never the fade.
@@ -273,6 +239,46 @@ pub fn params(tick: u64, seed: u64) -> LightingParams {
         ground_light,
         ground_window: time_of_day::ground_window(cycle_tick),
     }
+}
+
+/// A map's fixed signed-byte color, before either user-option gate.
+///
+/// Confirmed table lookup: rus `0x43ADFC` reads the flag at `0x45AE2F + map`.
+/// Slots 42..55 are flagged, including sentinel-colored slots. The color table
+/// is indexed by map number, not map number minus one; see the lighting audit.
+pub fn constant_map_color(map: u32) -> Option<[i32; 3]> {
+    match map {
+        42 => Some([-70, 0, 0]),
+        44 => Some([-20, -1, -70]),
+        45 => Some([0, -50, -50]),
+        43 | 46..=55 => Some([-1; 3]),
+        _ => None,
+    }
+}
+
+/// Lighting with K1 map rules and the two independent original options.
+/// Constant-map lighting takes precedence over day/night and never lights tiles.
+/// Disabling light effects closes the tile-light gate without changing ambient.
+pub fn params_for_map(
+    tick: u64,
+    seed: u64,
+    map: u32,
+    day_night: bool,
+    light_effects: bool,
+) -> LightingParams {
+    if let Some(color) = constant_map_color(map) {
+        return LightingParams {
+            ambient: color.map(|v| v.signum() as f32 * fade_factor(v.unsigned_abs())),
+            ground_light: [0.0; 3],
+            ground_window: false,
+        };
+    }
+    let mut result = params_gated(tick, seed, day_night);
+    if !light_effects {
+        result.ground_window = false;
+        result.ground_light = [0.0; 3];
+    }
+    result
 }
 
 /// [`params`] with the original's day/night option gate applied (`#97`).
@@ -307,6 +313,40 @@ pub fn params_gated(tick: u64, seed: u64, day_night: bool) -> LightingParams {
 mod tests {
     use super::*;
     use crate::time_of_day;
+
+    #[test]
+    fn constant_maps_precede_both_option_gates() {
+        for map in 0..=56 {
+            for tick in [0, 8100, 12000, 18900, 21600] {
+                for day_night in [false, true] {
+                    let on = params_for_map(tick, 42, map, day_night, true);
+                    let off = params_for_map(tick, 42, map, day_night, false);
+                    assert_eq!(on.ambient, off.ambient);
+                    assert!(!off.ground_window);
+                    assert_eq!(off.ground_light, [0.0; 3]);
+                    if (42..=55).contains(&map) {
+                        assert_eq!(on, params_for_map(0, 42, map, !day_night, false));
+                        assert!(!on.ground_window);
+                    } else {
+                        assert_eq!(on, params_gated(tick, 42, day_night));
+                    }
+                }
+            }
+        }
+        assert_eq!(constant_map_color(42), Some([-70, 0, 0]));
+        assert_eq!(constant_map_color(44), Some([-20, -1, -70]));
+        assert_eq!(constant_map_color(45), Some([0, -50, -50]));
+        assert_eq!(constant_map_color(43), Some([-1; 3]));
+        assert_eq!(constant_map_color(56), None);
+    }
+
+    #[test]
+    fn masked_pixels_use_light_even_when_ambient_is_neutral_or_positive() {
+        for ambient in [0.0, 0.1] {
+            assert!((apply_channel(0.5, ambient, 0.2, 0.08, false) - 0.54).abs() < 1e-6);
+        }
+        assert_eq!(apply_channel(0.5, 0.1, 0.2, 0.08, true), 0.55);
+    }
 
     #[test]
     fn ambient_factors_are_the_original_accumulation() {
@@ -492,11 +532,9 @@ mod tests {
         let expected = 0.62 * 0.8;
         assert!((result - expected).abs() < 1e-6, "{result} ~= {expected}");
 
-        // Low lightning with high light_color → no white-add because lightning < 0.01,
-        // but lightning still shifts the multiply:
-        //   result = 0.6 * (1 + clamp(-0.7 + 0.005, -1, 0)) = 0.6 * 0.305 = 0.183
+        // A filtered sample below one percent takes the plain-palette path.
         let result2 = apply_channel(0.6, -0.7, 0.005, 0.5, false);
-        let expected2 = 0.183;
+        let expected2 = 0.18;
         assert!(
             (result2 - expected2).abs() < 1e-6,
             "{result2} ~= {expected2}"
@@ -504,12 +542,9 @@ mod tests {
     }
 
     #[test]
-    fn apply_channel_light_below_threshold_has_no_add_but_multiplies() {
-        // lightning = 0.009 is below the 0.01 gate: no additive step toward white,
-        // yet lightning still enters the multiply (gfx.cpp:66 is unconditional).
-        // 0.6 * (1 + clamp(-0.7 + 0.009, -1, 0)) = 0.6 * (1 - 0.691) = 0.1854
+    fn filtered_mask_below_one_percent_uses_the_plain_palette() {
         let result = apply_channel(0.6, -0.7, 0.009, 0.5, false);
-        let expected = 0.1854;
+        let expected = 0.18;
         assert!((result - expected).abs() < 1e-6, "{result} ~= {expected}");
     }
 
@@ -541,7 +576,7 @@ mod tests {
         // Positive blend: both channels do the same thing (blend toward white).
         assert_eq!(
             apply_channel(0.5, 0.3, 0.2, 0.2, true),
-            apply_channel(0.5, 0.3, 0.2, 0.2, false)
+            apply_channel(0.5, 0.3, 0.0, 0.2, false)
         );
     }
 
@@ -641,12 +676,12 @@ mod tests {
     }
 
     #[test]
-    fn ground_light_color_is_half_of_draw_color() {
+    fn ground_light_uses_integer_halves_before_the_table_factor() {
         for tick in 0..500 {
             let dc = light_color(tick, 42);
             let gc = ground_light_color(tick, 42);
-            assert!((gc[0] - dc[0] / 2.0).abs() < 1e-9);
-            assert!((gc[1] - dc[1] / 2.0).abs() < 1e-9);
+            assert_eq!(gc[0], fade_factor((dc[0] * 100.0).round() as u32 / 2));
+            assert_eq!(gc[1], fade_factor((dc[1] * 100.0).round() as u32 / 2));
             assert_eq!(gc[2], dc[2]);
         }
     }
