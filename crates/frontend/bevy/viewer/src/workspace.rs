@@ -246,7 +246,7 @@ fn setup(mut commands: Commands, viewer: Res<Viewer>, fonts: Res<kn_ui::KonungFo
                         @FeathersButton { @caption: bsn! { @caption("Reset animation") } } ButtonAction::ResetAnimation on(press)
                     ]
                     --
-                    @caption("Reset positions: return home. Reset animation: restart clips. Clock is preserved.")
+                    @caption("Reset positions: return home. Reset animation: restart special animations; walk/rest, positions and clock stay unchanged.")
                     TextFont { font: bevy::text::FontSourceTemplate::Handle({fonts.regular.clone()}), font_size: kn_ui::typo::BODY }
                 ]
             ]
@@ -1063,7 +1063,7 @@ mod layout_tests {
                 "Ramp 03:04",
                 "Reset positions",
                 "Reset animation",
-                "Reset positions: return home. Reset animation: restart clips. Clock is preserved.",
+                "Reset positions: return home. Reset animation: restart special animations; walk/rest, positions and clock stay unchanged.",
             ] {
                 let entity = text_entity(&mut app, label);
                 let rect = bounds(app.world(), entity);

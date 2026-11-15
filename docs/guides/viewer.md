@@ -38,7 +38,7 @@ interface panels use a separate full-window camera.
 | Hold day lighting while the clock continues | Constant day, or `N` |
 | Explore the day cycle | Expand Seek simulation; scrub or use a preset |
 | Reset creature positions | Reset positions; clock and animation state remain |
-| Restart creature animation | Reset animation; positions and clock remain |
+| Restart special animations | Reset animation; ordinary walk/rest clips, positions and clock remain |
 
 A drag that starts over the interface stays owned by it until release, even
 when the pointer enters the map. Focused interface controls own keyboard

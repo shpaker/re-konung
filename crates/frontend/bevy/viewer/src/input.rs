@@ -235,16 +235,12 @@ fn spawn_highlights(mut commands: Commands) {
 }
 
 fn highlight(
-    capture: Option<Res<crate::control::ControlServer>>,
     picker: CreaturePicker,
     workspace: Res<ViewerWorkspace>,
     mut lines: HighlightLines,
     camera: Single<&Projection, With<MapCamera>>,
     mut last: Local<Option<HighlightFrame>>,
 ) {
-    if capture.as_ref().is_some_and(|capture| capture.capturing()) {
-        return;
-    }
     let frame = HighlightFrame {
         selected: workspace
             .selected_creature
@@ -616,5 +612,62 @@ mod tests {
             .selected = None;
         app.update();
         assert!(!query.get(app.world(), original.0).unwrap().5.get());
+    }
+    #[test]
+    fn capture_still_synchronizes_selection_feedback_to_current_bounds() {
+        use std::io::Write;
+        let (mut app, _, _, _) = app();
+        let map = kn_game::MapRef {
+            source: kn_game::MapSource::Game,
+            number: 1,
+        };
+        app.world_mut().resource_mut::<Viewer>().maps = vec![map];
+        app.insert_resource(crate::Stats {
+            map: Some(map),
+            ..default()
+        })
+        .add_systems(Startup, spawn_highlights);
+        let directory = tempfile::tempdir().unwrap();
+        let session = directory.path().join("session.json");
+        crate::control::install(&mut app, &session).unwrap();
+        app.update();
+        let ids = app
+            .world_mut()
+            .query_filtered::<Entity, With<Highlight>>()
+            .iter(app.world())
+            .collect::<Vec<_>>();
+        for &entity in &ids {
+            app.world_mut()
+                .entity_mut(entity)
+                .insert((Visibility::Visible, InheritedVisibility::VISIBLE));
+        }
+        app.add_systems(PostUpdate, highlight.after(crate::control::finish));
+        let session: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(session).unwrap()).unwrap();
+        let mut stream =
+            std::net::TcpStream::connect(session["address"].as_str().unwrap()).unwrap();
+        writeln!(stream,"{}",serde_json::json!({"id":1,"token":session["token"],"action":{"type":"capture","path":directory.path().join("capture.png")}})).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            app.update();
+            if app
+                .world()
+                .resource::<crate::control::ControlServer>()
+                .capturing()
+            {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        for entity in ids {
+            assert!(
+                !app.world()
+                    .entity(entity)
+                    .get::<InheritedVisibility>()
+                    .unwrap()
+                    .get()
+            );
+        }
     }
 }
