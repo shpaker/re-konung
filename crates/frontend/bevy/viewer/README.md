@@ -1,12 +1,12 @@
 # kn-fe-viewer
 
-The viewer Bevy app: Viewer state, Feathers controls, overlays, playback and diagnostics.
+Приложение просмотрщика Bevy: состояние Viewer, элементы Feathers, слои, воспроизведение и диагностика.
 
-- Receives ViewerConfig; CLI parsing stays in kn-viewer.
-- Builds maps with all layers; toggles visibility rather than rebuilding.
-- Adds creature labels and measurements around the shared render/creature pipeline.
-- Remains read-only: no map/state file writing.
+- Получает ViewerConfig; разбор CLI остаётся в kn-viewer.
+- Строит карту со всеми слоями; меняет видимость без пересборки.
+- Добавляет метки существ и измерения к общему конвейеру рендеринга/существ.
+- Только читает: не записывает карты или состояние игры.
 
-Details: [topic documentation](../../../../docs/development/rust/viewer.md).
-Checks: `just cargo-test`, `just cargo-lint`. Pure logic tests need no window/GPU;
-real-data cases use local original/ and skip when absent.
+Подробности: [тематическая документация](../../../../docs/development/rust/viewer.md).
+Проверки: `just cargo-test`, `just cargo-lint`. Чистая логика не требует окна/GPU;
+проверки на игровых данных используют локальный original/ и пропускаются без него.

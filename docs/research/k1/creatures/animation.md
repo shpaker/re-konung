@@ -1,149 +1,128 @@
-# Creature animation states
+<a id="creature-animation-states"></a>
 
-[Research and confidence](README.md). Character byte 0x00's low four bits are
-the animation state; class byte 0x04 bit 0x80 marks a dead record.
+# Состояния анимации существ
 
-## States 0–9
+[Исследования и уверенность](README.md). Состояние — младшие четыре бита байта
+0x00 персонажа; бит 0x80 класса (0x04) обозначает мёртвую запись.
 
-| Action | Weapons in hands | Weapons put away | Meaning |
+<a id="states-09"></a>
+
+## Состояния 0–9
+
+| Действие | Оружие в руках | Оружие убрано | Смысл |
 |---|---|---|---|
-| Idle | 0 | 6 | Standing |
-| Walk | 1 | 7 | Following a route |
-| Hit reaction | 2 | 8 | Stagger |
-| Death | 3 | 9 | Dying/dead sequence |
-| Human shot / dynamic special | 4 | 4 | Two distinct uses, described below |
-| Melee | 5 | 5 | Attack sequence |
+| Покой | 0 | 6 | Стоит |
+| Ходьба | 1 | 7 | Следует маршруту |
+| Реакция на удар | 2 | 8 | Пошатывание |
+| Смерть | 3 | 9 | Умирание/труп |
+| Выстрел человека / особая динамическая анимация | 4 | 4 | Два разных применения ниже |
+| Ближний бой | 5 | 5 | Последовательность атаки |
 
-Byte 0x03 bit 0x04 selects the paired variants. GRAPH.RES holds all ten
-sequences; dynamic OBJECTS.RES sprites hold six and map 6–9 to 0–3
-(Slavik game_character.cpp:144-150). State names CHSTATE_0–9 are game.h:327-336.
+Пару выбирает бит 0x04 байта 0x03. GRAPH.RES содержит десять последовательностей,
+динамический OBJECTS.RES — шесть, состояния 6–9 переводятся в 0–3
+(Slavik game_character.cpp:144-150). Имена CHSTATE_0–9 — game.h:327-336.
 
-Sources for selection: idle game_play.cpp:305-308 and 2465-2468; walk 1964-1967
-and 3944-3947; death/hit 492-495, 504-507 and 1659-1662. Shooting needs equipment
-slot 1 plus arrows (2421-2429). Melee enters when a step reaches an enemy cell
-(game.cpp:2898-2913), a neighboring enemy attacks (game_play.cpp:4210-4243), or
-ambush classes 0x44/0x57 decide (3200-3220). Lines 914-930 handle the state,
-not entry. Exact hit/death/melee paths: [combat](combat.md).
+Выбор: покой game_play.cpp:305-308 и 2465-2468; ходьба 1964-1967 и 3944-3947;
+смерть/удар 492-495, 504-507, 1659-1662. Стрельба требует слота снаряжения 1
+и стрел (2421-2429). В ближний бой входят при шаге в клетку врага
+(game.cpp:2898-2913), атаке соседнего врага (game_play.cpp:4210-4243)
+или решении засадных классов 0x44/0x57 (3200-3220). Строки 914-930
+обрабатывают состояние, не вход. Точные пути — в [исследовании боя](combat.md).
 
-**Our measurement on both editions:** per Game.0–2 triple, states are only
-0 (2143), 4 (404), 6 (632). Combat states 2/8,3/9,5 never occur. All 404 state-4
-records are dynamic classes 0x46/0x4C/0x55, Frame=0, no equipment/quiver;
-none is a human shot. The weapon-in-hands bit is set in exactly states 0/4
-(2547), clear in state 6 (632). All state-6 records are humans of kinds
-1,2,3,5 without dynamic-class bit 0x40; every dynamic record holds the bit.
+**Наш замер обоих изданий:** на тройку Game.0–2 есть только состояния
+0 (2143), 4 (404), 6 (632); 2/8, 3/9, 5 отсутствуют. Все 404 записи
+состояния 4 — динамические классы 0x46/0x4C/0x55, Frame=0,
+без снаряжения/колчана; ни одного человеческого выстрела. Бит оружия
+есть ровно в 0/4 (2547), отсутствует в 6 (632). Все записи 6 — люди
+видов 1,2,3,5 без динамического бита 0x40; у каждой динамической записи
+бит оружия установлен.
 
-## Walk skip mask — byte 0x11
+<a id="walk-skip-mask--byte-0x11"></a>
 
-**By Slavik:** states 1/7 advance only if
-`mask == 0 || (counter & mask) == mask` (game_play.cpp:3503; game.h:460,
-game_state.cpp:24). **Our measurement:** zero for every filled starting record,
-so they advance every tick. Preserve the field when writing; its separate
-mask-based scheduling is not reproduced as an engine limit.
+## Маска пропуска ходьбы — байт 0x11
 
-## Frame engine
+**По Slavik:** состояния 1/7 продвигаются только при
+`mask == 0 || (counter & mask) == mask` (game_play.cpp:3503;
+game.h:460, game_state.cpp:24). **Наш замер:** во всех заполненных
+стартовых записях ноль, поэтому обработка каждый тик. При записи поле
+сохраняется; отдельное масочное расписание не воспроизводится как предел движка.
 
-**Where the machine runs.** The animation state is byte 0x00 of a character
-record. Once per game tick — 60 ms, [`game.h:30`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.h#L30)
-— the game walks the squads of the current map in the group order of the file and
-runs one of three copies of the same ten-state switch: `FUN_004123bc` for roaming
-squads
-([`game_play.cpp:3468-3726`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3468-L3726)),
-`FUN_00416058` for villager squads
-([`game_play.cpp:2824-3029`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L2824-L3029))
-and `FUN_00421da4` for everyone else — the player's squads and lone NPCs
-([`game_play.cpp:737-990`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L737-L990)).
-The copies differ in what a state ends in, which is why the table below names the
-pass. The speed option runs extra passes per frame
-([`game_play.cpp:122-135`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L122-L135)),
-so a combat state is measured in ticks, not in screen frames.
+<a id="frame-engine"></a>
 
-**The frame engine.** Every state change goes through one setter, `FUN_004143dc`
-([`game.cpp:2766-2915`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L2766-L2915)):
-it loads the sequence of the pair (state, direction), puts `Frame = 0` and plays
-the state's sound (states 2/8 and 3/9 have their own, a human shot plays a bow
-sound, and a dynamic-object creature gets none for state 4 — by Slavik). One tick
-advances exactly one frame: `FUN_00413de4`
-([`game_play.cpp:3727-3786`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3727-L3786))
-raises `Frame`, and when the frame would pass the end it steps back and returns
-false — that false is the only signal a caller gets that the sequence is over.
-Nothing loops on its own: idle and walk restart the same state, the hit reaction
-and the shot hand the creature to the idle chooser, death holds its last frame
-forever. A sequence of `N` frames shows frames `0 … N-1` over `N` ticks and the
-caller leaves the state on the next tick.
+## Механизм кадров
 
-| State | Entry | Play mode | Length, our measurement | Exit | The beat that matters |
+**Где работает автомат.** Состояние — байт 0x00 записи. Раз за тик
+(60 мс, [`game.h:30`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.h#L30)) игра обходит отряды текущей карты в порядке файла
+и выполняет одну из трёх копий переключателя десяти состояний:
+`FUN_004123bc` для бродячих ([`game_play.cpp:3468-3726`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3468-L3726)), `FUN_00416058` для жителей ([`game_play.cpp:2824-3029`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L2824-L3029)),
+`FUN_00421da4` для остальных — игрока и одиночных NPC ([`game_play.cpp:737-990`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L737-L990)).
+Различаются выходы состояний, поэтому ниже указан проход.
+Настройка скорости добавляет проходы на кадр ([`game_play.cpp:122-135`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L122-L135)): длительность
+боя измеряется тиками, не экранными кадрами.
+
+**Счёт кадров.** Любая смена состояния проходит `FUN_004143dc` ([`game.cpp:2766-2915`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L2766-L2915)):
+загружается пара состояние/направление, `Frame = 0`, проигрывается звук
+(свой у 2/8 и 3/9, лук у человека, нет у динамического состояния 4 — по Slavik).
+`FUN_00413de4` ([`game_play.cpp:3727-3786`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3727-L3786)) увеличивает Frame на один за тик; при выходе за конец
+отступает назад и возвращает false — единственный сигнал завершения.
+Само ничего не зацикливается: покой/ходьба повторно входят в то же состояние,
+удар/выстрел идут в выбор покоя, смерть навсегда удерживает последний кадр.
+Последовательность N показывает 0…N−1 за N тиков; выход — на следующем.
+
+| Состояние | Вход | Проигрывание | Длина по нашему замеру | Выход | Существенный момент |
 |---|---|---|---|---|---|
-| 2/8 reaction to a hit | a blow that lands and does not kill: an arrow result 0, a melee result 0 (confirmed) | one-shot (confirmed) | human 7 frames = 420 ms; monsters 4–17, three sprites have none | idle chooser; a hit monster first puts its whole squad into combat mode | a second hit re-enters and restarts frame 0 (by Slavik) |
-| 3/9 death | the result code 1 of a hit, or poison draining health to zero (confirmed) | hold (confirmed) | human 12 = 720 ms; monsters 7–16, one sprite has none | none — the last frame is held | the corpse is committed at the second-to-last frame, not at the last |
-| 4 — the shot of a human | the shoot loop: a bow in equipment slot 1 and a quiver (confirmed) | one-shot; the loop re-enters it while its flag stands (confirmed) | human models 12 = 720 ms; no record of a new game reaches it — nobody carries arrows | idle chooser, or the shoot loop re-enters | the arrow is created at frame `FrameCount − 6`, and the state turns to face while `Frame == 0` |
-| 4 — a dynamic creature's own animation | the creature's appearance or transformation: a skeleton rising instead of dying (confirmed); the 404 records of classes 0x46, 0x4c, 0x55 (confirmed) | one-shot (confirmed) | the five dynamic objects that carry the sequence: 5 → 13, 11 → 17, 17, 21, 22 → 12 | idle chooser | it is not a shot: those records hold no bow and no quiver, and the clone's monster branch creates no projectile there (unknown) |
-| 5 melee | a walk step into the cell of an enemy, a counter-attack against an adjacent attacker, the ambush classes 0x44/0x57 (confirmed) | loops while the enemy stands (confirmed) | human 12; monsters 10–16, three sprites have none | the enemy died or became unreachable | health is written when the swing has fully played; the victim's squad is marked at frame 2 |
+| 2/8, удар | Несмертельный удар, код 0 стрелы/ближней атаки (подтверждено) | Один раз (подтверждено) | Человек 7 = 420 мс; монстры 4–17, у трёх спрайтов нет | Выбор покоя; монстр сначала переводит отряд в бой | Новый удар начинает кадр 0 заново (по Slavik) |
+| 3/9, смерть | Код 1 удара или яд до нуля здоровья (подтверждено) | Удержание (подтверждено) | Человек 12 = 720 мс; монстры 7–16, у одного нет | Нет, удерживается последний кадр | Труп фиксируется на предпоследнем кадре |
+| 4, выстрел человека | Цикл стрельбы, лук в слоте 1 и колчан (подтверждено) | Один раз, повторный вход при флаге стрельбы (подтверждено) | Человек 12 = 720 мс; стартовые записи не достигают: стрел нет | Покой или повтор стрельбы | Стрела создаётся на `FrameCount − 6`, поворот при `Frame == 0` |
+| 4, собственная анимация динамического существа | Появление/превращение; подъём скелета вместо смерти и 404 записи классов 0x46,0x4c,0x55 (подтверждено) | Один раз (подтверждено) | Объект 5 → 13 кадров, 11 → 17, 17/21/22 → 12 | Выбор покоя | У записей нет лука/колчана, клон не создаёт снаряд; поведение оригинала здесь неизвестно |
+| 5, ближний бой | Шаг во врага, ответ соседнему атакующему, засада 0x44/0x57 (подтверждено) | Повтор, пока враг стоит (подтверждено) | Человек 12; монстры 10–16, у трёх нет | Враг погиб/недостижим | Здоровье меняется после взмаха, отряд жертвы помечается на кадре 2 |
 
-## State 4 — two meanings under one number
+<a id="state-4--two-meanings-under-one-number"></a>
 
-One state value carries two things
-that share nothing but the number, and the data never lets one be read as the
-other: the shot of a human who shoots a bow, and the appearance or transformation
-animation a dynamic creature plays for itself. Which of the two a creature uses
-follows from what it is, not from a decision, which is why the table above gives
-them two rows and the text below keeps their two paths apart.
+## Состояние 4 — два смысла одного номера
 
-*The shot of a human.* The state is only reachable by a creature that holds a
-weapon in hands: the human shooting branch requires a bow in equipment slot 1 and
-a quiver
-([`game_play.cpp:2421-2431`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L2421-L2431),
-[`game_play.cpp:3808-3824`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3808-L3824)),
-and it is what byte 0x02 bit 0x04 gates — `FUN_0041ed8c` runs the shoot loop while
-that bit is set, re-targets, and re-enters the state as long as the bow, the
-arrows and the target hold, clearing the bit the moment one of them is gone
-([`game_play.cpp:3952-4016`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3952-L4016)).
-The *name* of this bit the clone never gives, but its use is exactly the shooting
-flag, so we treat it as **confirmed behavior** ([order flag 0x04](behavior.md#order-and-presentation-flags)).
-While `Frame == 0` the shooter turns toward the target one
-direction per tick and does not advance the animation; at `Frame == FrameCount − 6`
-the arrow is created and the quiver count drops
-([`game_play.cpp:3622-3648`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3622-L3648),
-and the same shape in the player and villager passes at
-[`game_play.cpp:885-912`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L885-L912),
-[`game_play.cpp:2927-2957`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L2927-L2957)).
-`FUN_0041bff8` is the only place a projectile is created — at most 100 in the air,
-and it carries the bow's damage and the quiver's poison
-([`game_play.cpp:2568-2623`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L2568-L2623)).
-An arrow is a trace, not a homing shot: each tick it steps eight times, dies on
-impassable terrain (and, if it was aimed at a village building, sets it alight with
-one roll of 21%), and damages whoever's cell it passes over **except the shooter
-himself** — the shot has no friendly-fire filter
-([`game_play.cpp:394-526`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L394-L526)).
-The state ends into the idle chooser; the shoot loop may immediately re-enter it.
-This is the human-shot path; it must remain distinct from a dynamic special.
+Выстрел человека и появление/превращение динамического существа имеют общий
+номер, но разные пути. Выбор следует из типа существа, не из решения;
+таблица намеренно разделяет их.
 
-*The appearance or transformation animation of a dynamic creature.* A dynamic
-sprite enters the same numeric state 4 for something that has nothing to do with
-shooting: a sequence its class plays to come onto the board or to change shape. The
-skeleton (class 0x4c) is the confirmed case — instead of finishing its death it
-restores health, steps its weapon slot down and re-enters state 4 to rise again
-([`game_play.cpp:3586-3594`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3586-L3594))
-— and it is what the shipped files hold: the only 404 state-4 records of a new game
-belong to the three dynamic classes 0x46 (152 records, dynamic object 5), 0x4c
-(249, object 11) and 0x55 (3, object 22); none of them is human, every one carries
-`Frame = 0`, a weapon slot above 0, no equipment and an empty quiver ([combat measurements](combat.md#our-measurements)). The two uses are disjoint by data, not by convention: the human
-branch above needs a bow in slot 1 and a quiver, and these records hold neither, so
-not one of them can be a shot. What each sequence shows — rising from the ground,
-jumping out of a burrow, a human↔beast change — is the content of the
-dynamic-object sequences: **only the human path launches a confirmed shot;
-a dynamic state-4 sequence must never be routed through that shoot loop.** Whether the monster branch that plays
-state 4 for these classes also releases an arrow is **unknown** («What stays
-unknown» in [combat](combat.md#what-stays-unknown)), so that branch remains unimplemented.
+*Выстрел человека.* Нужны оружие в руках, лук в слоте 1 и колчан
+([`game_play.cpp:2421-2431`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L2421-L2431), [`game_play.cpp:3808-3824`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3808-L3824)). Цикл `FUN_0041ed8c` выполняется при бите 0x04 байта 0x02,
+переназначает цель и повторно входит в состояние, пока есть лук, стрелы,
+цель; иначе очищает бит ([`game_play.cpp:3952-4016`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3952-L4016)). Имени бита клон не даёт, но назначение
+стрельбы **подтверждено** его использованием ([флаг приказа 0x04](behavior.md#order-and-presentation-flags)).
+При `Frame == 0` стрелок поворачивается на одно направление за тик,
+не продвигая кадр. На `Frame == FrameCount − 6` создаётся стрела
+и уменьшается колчан ([`game_play.cpp:3622-3648`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3622-L3648); тот же рисунок у игрока/жителей: [`game_play.cpp:885-912`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L885-L912), [`game_play.cpp:2927-2957`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L2927-L2957)).
 
-## Deliberate play-mode difference
+`FUN_0041bff8` — единственное создание снаряда: максимум 100 в воздухе,
+с уроном лука и ядом колчана ([`game_play.cpp:2568-2623`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L2568-L2623)). Стрела не наводится: восемь шагов
+за тик, исчезает на непроходимой земле, при прицеливании в здание деревни
+поджигает его одним броском 21%. Поражает пройденную клетку любого,
+**кроме стрелка**; фильтра союзников нет ([`game_play.cpp:394-526`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L394-L526)). Выход в покой,
+после чего цикл может сразу повторить выстрел. Этот путь нельзя
+применять к динамической особой анимации.
 
-Slavik holds a dynamic special at Frame=0 until its monster decision releases it
-([game_play.cpp:3226-3232](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3226-L3232),
-[3312-3317](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3312-L3317)).
-Our map-load event starts it explicitly so an unrecovered decision cannot hold
-a creature forever. The original restarts the special on map entry
-([game.cpp:692](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L692));
-its frame counter clamps rather than loops
-([game_play.cpp:3727-3735](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3727-L3735)).
-Both our windows play once on load; the viewer can replay. Implementation:
-[one-shot state machine](../../../development/rust/simulation.md#one-shot-specials).
+*Появление/превращение.* Динамический спрайт использует 4 для своей
+последовательности появления или смены формы. Подтверждённый случай —
+скелет 0x4c: вместо завершения смерти восстанавливает здоровье,
+уменьшает слот оружия и входит в 4 для подъёма ([`game_play.cpp:3586-3594`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3586-L3594)).
+В стартовых файлах 404 такие записи: класс 0x46 — 152, объект 5;
+0x4c — 249, объект 11; 0x55 — 3, объект 22. Все не люди,
+Frame=0, слот оружия >0, снаряжение и колчан пусты ([замеры боя](combat.md#our-measurements)).
+Это различие данных: человеческая ветка требует лук/колчан, здесь их нет.
+Подъём из земли, прыжок из норы, превращение человека/зверя — содержимое
+динамических последовательностей. **Подтверждённый выстрел есть только
+у человеческого пути.** Выпускает ли оригинальная монстр-ветка состояния 4
+стрелу, **неизвестно** ([неизвестное в бое](combat.md#what-stays-unknown)); эта ветка не реализована.
+
+<a id="deliberate-play-mode-difference"></a>
+
+## Намеренное отличие воспроизведения
+
+Slavik держит особую анимацию на Frame=0, пока решение монстра не отпустит её
+([game_play.cpp:3226-3232](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3226-L3232), [3312-3317](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3312-L3317)). Наше событие загрузки запускает её явно, чтобы
+невосстановленное решение не удерживало существо навсегда.
+Исходный путь перезапускает её при входе на карту ([game.cpp:692](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L692)), счётчик кадров
+ограничивается концом, не зацикливается ([game_play.cpp:3727-3735](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L3727-L3735)). Оба наших окна проигрывают
+её один раз при загрузке, просмотрщик позволяет повторить.
+Реализация — [автомат однократного воспроизведения](../../../development/rust/simulation.md#one-shot-specials).

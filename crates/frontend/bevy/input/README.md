@@ -1,11 +1,11 @@
 # kn-input
 
-Shared Bevy input mechanisms; camera bindings belong to frontends.
+Общие механизмы ввода Bevy; привязка камеры принадлежит фронтендам.
 
-- pan_direction reads keyboard direction; drag_delta supplies mouse movement.
-- ZoomScroll/wheel_steps accumulate wheel/trackpad input into bounded zoom steps.
-- No camera types, UI state or game rules; pointer capture belongs to kn-ui.
+- pan_direction читает направление клавиатуры; drag_delta — перемещение мыши.
+- ZoomScroll/wheel_steps накапливают ввод колеса/трекпада в ограниченные ступени масштаба.
+- Типов камеры, состояния интерфейса и игровых правил здесь нет; захват указателя принадлежит kn-ui.
 
-Details: [topic documentation](../../../../docs/development/rust/rendering.md#camera-and-input-seam).
-Checks: `just cargo-test`, `just cargo-lint`. Pure logic tests need no window/GPU;
-real-data cases use local original/ and skip when absent.
+Подробности: [тематическая документация](../../../../docs/development/rust/rendering.md#camera-and-input-seam).
+Проверки: `just cargo-test`, `just cargo-lint`. Чистая логика не требует окна/GPU;
+проверки на игровых данных используют локальный original/ и пропускаются без него.

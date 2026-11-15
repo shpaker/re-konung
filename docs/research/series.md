@@ -1,54 +1,63 @@
-# Games and editions
+<a id="games-and-editions"></a>
 
-The project targets the 2D family, beginning with K1. A shared engine between
-K1, K2 and K2.5 is a **hypothesis** until their files are compared. K3 is 3D
-and outside the project. Gameplay similarities alone do not establish binary
-compatibility; see the [mechanic comparison](comparison.md).
+# Серия и издания
 
-| Game | Year | Developer | Publishers | Engine / project status |
+Проект занимается 2D-веткой, начиная с K1. Общность движка K1, K2 и K2.5 —
+**гипотеза** до сравнения файлов. K3 трёхмерный и вне проекта. Сходства
+механик недостаточно для вывода о совместимости форматов; см.
+[сравнение механик](comparison.md).
+
+| Игра | Год | Разработчик | Издатели | Движок и состояние исследования |
 |---|---|---|---|---|
-| «Князь: Легенды Лесной страны» / Konung: Legends of the North | 1999 RU, 2000 EN | Snowball Interactive, 1C | 1C; Strategy First EN | Custom 2D isometric; 640×480 and 800×600. RUS and ENG available locally. |
-| «Князь 2: Кровь Титанов» / Konung 2: Blood of Titans | 2003 RU, 2004 EN | Snowball Interactive, 1C | 1C; Got Game Entertainment US | **Hypothesis:** evolution of K1's engine. No copy examined. |
-| «Князь 2.5: Продолжение легенды» | 2004–2005 | Fan team building on K2 | 1C | **Hypothesis:** K2 engine. No copy examined. |
-| «Князь 3: Новая династия» | 2009 | Different team | 1C | 3D; outside scope. |
+| «Князь: Легенды Лесной страны» / Konung: Legends of the North | 1999 RU, 2000 EN | Snowball Interactive, 1C | 1C; Strategy First EN | Собственный 2D изометрический; 640×480 и 800×600. RUS и ENG доступны локально. |
+| «Князь 2: Кровь Титанов» / Konung 2: Blood of Titans | 2003 RU, 2004 EN | Snowball Interactive, 1C | 1C; Got Game Entertainment US | **Гипотеза:** развитие движка K1. Копия не исследована. |
+| «Князь 2.5: Продолжение легенды» | 2004–2005 | Фанатская команда на основе K2 | 1C | **Гипотеза:** движок K2. Копия не исследована. |
+| «Князь 3: Новая династия» | 2009 | Другая команда | 1C | 3D, вне проекта. |
 
-Dates and teams came from [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz),
+Даты и команды взяты из [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz),
 [Cyclowiki](https://www.cyclowiki.org/wiki/%D0%9A%D0%BD%D1%8F%D0%B7%D1%8C_2:_%D0%9A%D1%80%D0%BE%D0%B2%D1%8C_%D0%A2%D0%B8%D1%82%D0%B0%D0%BD%D0%BE%D0%B2),
-[StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy) and
+[StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy) и
 [Wikipedia](https://en.wikipedia.org/wiki/Konung:_Legend_of_the_North).
-Sources disagree: an Infinity Engine attribution found on Wikidata was
-unsupported and is not adopted here. This is a record of research, not a fresh
-verification of external catalogues.
+Источники расходятся: найденное в Wikidata указание на Infinity Engine
+не имело подтверждения и здесь не принимается. Это запись исследования,
+а не новая проверка внешних каталогов.
 
-## K1 engine evidence
+<a id="k1-engine-evidence"></a>
 
-- [Maps](k1/formats/map.md): staggered isometric grid, tile rhombus 114×64,
-  placement pitch 116×32.
-- [Graphics](k1/formats/rle.md): 8-bit row-compressed sprites and an RGB555 color bank.
-- **By external source:** SOUNDS.RES uses 22050 Hz PCM; disc music is CD audio.
-  The collector's edition reportedly uses MUSICS.RES OGG
-  ([unpacker](https://github.com/dopedealer/rtsk_konung_mus_unpacker)).
-- Video `*.flm` is handled by `playavi.dll`.
-- Interface files vary by resolution and language: MENU800R.RES is the Russian
-  800×600 menu; E is English, T an **unknown** third language in ENG.
+## Что известно о движке K1
 
-## K1 editions
+- [Карты](k1/formats/map.md): шахматная изометрическая сетка,
+  ромб тайла 114×64, шаг размещения 116×32.
+- [Графика](k1/formats/rle.md): 8-битные спрайты с построчным сжатием,
+  банк цветов RGB555.
+- **По внешнему источнику:** SOUNDS.RES — PCM 22050 Гц, музыка диска — CD audio.
+  В коллекционном издании сообщается об OGG в MUSICS.RES
+  ([распаковщик](https://github.com/dopedealer/rtsk_konung_mus_unpacker)).
+- Видео `*.flm` воспроизводит `playavi.dll`.
+- Файлы интерфейса зависят от разрешения и языка: MENU800R.RES — русское
+  меню 800×600; E — английский, T — **неизвестный** третий язык в ENG.
 
-| Edition | Local status | Evidence |
+<a id="k1-editions"></a>
+
+## Издания K1
+
+| Издание | Локальное состояние | Сведения |
 |---|---|---|
-| RUS CD 1999 | `original/k1/rus` | CD plus 10 audio tracks; Allods 3 and WAR demos |
-| ENG CD 2000, Strategy First | `original/k1/eng` | Tutorial, network play and a third interface language |
-| 1C collector's reissue | Not examined | Reported OGG music in MUSICS.RES |
-| GOG | Not examined | HD/widescreen patch references in PCGamingWiki |
+| RUS CD 1999 | `original/k1/rus` | CD и 10 аудиодорожек; демоверсии «Аллодов 3» и WAR |
+| ENG CD 2000, Strategy First | `original/k1/eng` | Обучение, сетевая игра, третий язык интерфейса |
+| Коллекционное переиздание 1C | Не исследовано | Сообщается об OGG в MUSICS.RES |
+| GOG | Не исследовано | PCGamingWiki ссылается на HD/широкоформатные патчи |
 
-Exact observed differences are in [editions](k1/editions.md); extraction steps
-are in [game-file preparation](../guides/game-files.md).
+Наблюдаемые различия — в [сравнении изданий](k1/editions.md), извлечение —
+в [подготовке файлов](../guides/game-files.md).
 
-## Verify the shared-engine hypothesis
+<a id="verify-the-shared-engine-hypothesis"></a>
 
-1. Prepare the owner's copies of K2 and K2.5.
-2. Compare file names and sizes: GRAPH.RES, OBJECTS.RES, KONUNG.N and others.
-3. Try the K1 parsers and investigate every mismatch.
-4. Record results here. Extract shared code only after commonality is demonstrated;
-   keep differences in the relevant game package. Movement's existing shared
-   implementation is the explicit exception described in the architecture.
+## Проверка гипотезы общего движка
+
+1. Подготовить собственные копии K2 и K2.5.
+2. Сравнить имена и размеры GRAPH.RES, OBJECTS.RES, KONUNG.N и других файлов.
+3. Попробовать парсеры K1 и исследовать каждое несовпадение.
+4. Записать результаты здесь. Выделять общий код только после подтверждения
+   общности; различия оставлять в пакете игры. Уже общий движок перемещения —
+   явное исключение, описанное в архитектуре.

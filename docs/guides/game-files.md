@@ -1,48 +1,58 @@
-# Prepare your own game files
+<a id="prepare-your-own-game-files"></a>
 
-Use your own disc or installed licensed copy. No game files are distributed.
-The checked editions are [RUS and ENG](../research/k1/editions.md); digital and
-collector's editions have not been verified. Keep originals in `original/`
-and all generated output in `out/`, both excluded from git.
+# Подготовка своей копии игры
 
-## Installed copy
+Используйте свой диск или установленную лицензионную копию. Проект не
+распространяет игровые файлы. Проверены издания [RUS и ENG](../research/k1/editions.md);
+цифровое и коллекционное издания не проверены. Исходные файлы хранятся в
+`original/`, производные — в `out/`; оба каталога исключены из git.
 
-Copy the installed game directory to `original/k1/<edition>/game/`, for example
-`original/k1/rus/game/`. The parsers, tests, player, viewer and Tiled extension
-use this directory. Resource lookup is case-insensitive.
+<a id="installed-copy"></a>
 
-## Your own disc image
+## Установленная копия
 
-Use an MDS/MDF image of your disc, for example made with Alcohol 120%, in
-`original/k1/<edition>/image/`. Install uv and 7-Zip, then run from the checkout:
+Скопируйте установленную игру в `original/k1/<edition>/game/`, например
+`original/k1/rus/game/`. Этим каталогом пользуются парсеры, тесты, игра,
+просмотрщик и расширение Tiled. Регистр имён ресурсов не имеет значения.
 
-```sh
+<a id="your-own-disc-image"></a>
+
+## Образ собственного диска
+
+Поместите MDS/MDF-образ своего диска, например созданный Alcohol 120%,
+в `original/k1/<edition>/image/`. Установите uv и 7-Zip.
+Рецепт `k1-unpack` определён **только для Windows**; из корня репозитория:
+
+```powershell
 just k1-unpack rus
 just k1-unpack eng
 ```
 
-Run only the recipe for the edition you own. It produces:
+Выполняйте только команду для своего издания. Получится такая структура:
 
-| Directory | Content |
+| Каталог | Содержимое |
 |---|---|
-| `image/` | The input MDS/MDF |
-| `disc/` | `track01.iso` and CD-audio `track02…11.wav` |
-| `files/` | Extracted disc files |
-| `game/` | Installed game, extracted from `inst/setup.dat` |
+| `image/` | Исходные MDS/MDF |
+| `disc/` | `track01.iso` и аудиодорожки `track02…11.wav` |
+| `files/` | Файлы, извлечённые с диска |
+| `game/` | Установленная игра, извлечённая из `inst/setup.dat` |
 
-7-Zip may report 18 trailing bytes in setup.dat; our checked copies' extracted
-files are intact. MDS/MDF track structure is in the
-[disc-image reference](../research/disc-images.md).
-
-For individual extraction steps, `just k1-unpack` in the justfile is the
-canonical recipe. The first step can also be run directly:
+На macOS и Linux те же шаги выполняются вручную; замените имя MDS и издание
+на свои. Здесь `7zz` — команда установленного 7-Zip; если она называется
+`7z`, используйте это имя:
 
 ```sh
 uv run konung disc original/k1/rus/image/konung.mds original/k1/rus/disc
+7zz x -ooriginal/k1/rus/files original/k1/rus/disc/track01.iso
+7zz x -ooriginal/k1/rus/game original/k1/rus/files/inst/setup.dat
 ```
 
-It writes a 7-Zip-readable ISO and WAV tracks (44100 Hz, 16-bit stereo).
-[Setup](setup.md) lists the tools; the [Tiled guide](tiled.md) explains editing.
-Use a separate copy of the game folder when saving edits: Game.N is shared
-across maps. Development agents keep `original/` unchanged and write edited
-copies under `out/`.
+Первая команда создаёт читаемый 7-Zip ISO и WAV-дорожки
+(44100 Гц, 16 бит, стерео). 7-Zip может сообщить о 18 лишних байтах в конце
+setup.dat; в проверенных копиях извлечённые файлы целы. Устройство дорожек
+описано в [исследовании образов](../research/disc-images.md).
+
+Список инструментов — в [подготовке окружения](setup.md), редактирование —
+в [руководстве Tiled](tiled.md). Для сохранения правок сделайте отдельную копию
+всего каталога игры: Game.N используется несколькими картами.
+Агенты не меняют `original/`; редактируемая копия размещается в `out/`.

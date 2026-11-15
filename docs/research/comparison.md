@@ -1,312 +1,224 @@
-# Gameplay comparison across the series
+<a id="gameplay-comparison-across-the-series"></a>
 
-The tables below compare gameplay mechanics across the three 2D parts. They describe
-**game mechanics and content**, not engine internals: nothing here says anything about
-whether the parts share an engine, which stays a hypothesis; see
-[the verification plan](series.md#verify-the-shared-engine-hypothesis).
+# Сравнение механик серии
 
-External-source availability is the recorded 2026-11-04 census below; K1 cells
-also incorporate the later local executable and format research they cite.
+Таблицы сравнивают **механики и содержимое** трёх двумерных частей, не устройство движка. Общий движок остаётся гипотезой; см. [план проверки](series.md#verify-the-shared-engine-hypothesis). Доступность внешних источников зафиксирована 2026-11-04; ячейки K1 также учитывают более поздние локальные исследования форматов и исполняемых файлов по указанным ссылкам.
 
-Every row is graded, and the grade is part of the claim:
+Оценка уверенности — часть каждого утверждения:
 
-| Mark | Meaning |
+| Метка | Значение |
 |---|---|
-| **Yes** | A cited source states it directly. |
-| **≈** | Tentative: an inference, or continuity assumed because K2.5 builds on K2. Cited, but not stated for this part. |
-| **?** | Needs confirmation: no usable source found, see [Requires verification](#requires-verification). |
-| **—** | Not applicable to this part. |
+| **Да** | Указанный источник прямо сообщает факт. |
+| **≈** | Предварительно: вывод либо предполагаемая преемственность K2.5 от K2. Источник указан, но не утверждает это для данной части. |
+| **?** | Нужна проверка, подходящий источник не найден; см. [открытые вопросы](#requires-verification). |
+| **—** | К этой части неприменимо. |
 
-`≈ none` means: no source describes the mechanic for this part. Absence itself is *not*
-confirmed — a mechanic nobody bothered to mention reads the same as one that does not
-exist. Rows that measure content rather than presence (new monsters, new locations,
-separate campaigns) carry a description instead of a mark. Where a cell rests on our own
-files, it says so; those facts come from
-`original/k1/` (never committed), from our parsers, and from the read-only reference
-[Marisa-Chan/Slavik](https://github.com/Marisa-Chan/Slavik) (cited by file and line as of
-the pinned commit [`cf5a332`](https://github.com/Marisa-Chan/Slavik/tree/cf5a3320dc93859e3dc51f37ee823fed30f399b6),
-its code is not copied). Sources are attached per table; the same list with reachability
-status is at the bottom.
+`≈ нет` означает отсутствие описания в найденных источниках, **не подтверждённое отсутствие механики**. Количественные строки о монстрах, локациях и кампаниях содержат описание вместо метки. Собственные факты помечены: они получены из original/k1/ (не коммитится), наших парсеров и доступного только для чтения [Marisa-Chan/Slavik](https://github.com/Marisa-Chan/Slavik) со ссылками на строки коммита [cf5a332](https://github.com/Marisa-Chan/Slavik/tree/cf5a3320dc93859e3dc51f37ee823fed30f399b6). Код источника не копируется. Источники указаны у таблиц и сведены со статусом доступности в конце.
 
-### 1. Characters and progression
+<a id="1-characters-and-progression"></a>
 
-| Mechanic | K1 | K2 | K2.5 |
+### 1. Персонажи и развитие
+
+| Механика | K1 | K2 | K2.5 |
 |---|---|---|---|
-| Selectable heroes | Yes — 3: Wolf, Dragomir, Mikhail ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)); our own data: one starting-state file per hero, `Game.0`/`Game.1`/`Game.2` ([game-state.md](k1/formats/game-state.md)) | Yes — 6, two per people ([SoftClub](https://www.softclub.ru/games/pc/19815-knyaz-2), [Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | Yes — 4: the usual three plus an eastern nomad ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz), [gospitaliers series page](https://gospitaliers.narod.ru/knyaz_opisanie.htm)) |
-| Female heroes | Yes — none: the three named protagonists are male ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | Yes — 3 (Velislavna, Helga, Anastasia): [Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm) names the same three, [PandoraKvest](https://pandorakvest.ru/text/49) counts "three valkyries" | ? — 4 heroes, the gender split of the added one is not reported |
-| Starting classes | Yes — 4: leader, warrior, hunter, merchant, each with a primary attribute ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz); our own observation of the readme shipped with the ENG edition) | Yes — classes removed, every attribute and skill is open to every hero, only the starting values differ ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | ≈ — built on 2; 2.5 ships a changed character-development system without saying how ([StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy)) |
-| Primary attributes | Yes — four allocation attributes: agility (dexterity), charisma, strength and endurance (stamina), confirmed from both original executables and the upgrade routine; health is a separate record field ([new-game rules](k1/new-game.md#attribute-allocation), [record layout](k1/formats/game-state.md#character--256-bytes)) | Yes — 6: strength, stamina, dexterity, intelligence, learnability, charisma ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ — as in 2, plus reputation as an added hero characteristic ([SoftClub 2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy)) |
-| Progression model | Yes — classes plus experience; the record carries level, experience and unspent points ([game-state.md](k1/formats/game-state.md)) | Yes — free skills plus ranks; one skill per weapon type plus social skills ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | ≈ — based on 2 ([StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy)) |
-| Skills rise from use | ? | Yes — points at level-up **and** automatic growth through use, e.g. brewing raises the mixing skill, fighting with a one-handed sword raises that weapon skill ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm) on healing and mixing). The 2003 review describes point allocation only ([PandoraKvest](https://pandorakvest.ru/text/49)) — the conflict is unresolved | ≈ |
-| Maximum character level | ? | ? — the attribute cap of 150 is reported, no level cap is | ? |
-| Ranks derived from attributes | — (the class system plays that role) | Yes — the rank is composed from the two highest attributes, tiers at 1–30 / 31–60 / 61–90 / 91–120 / 121–150, and is descriptive only ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ — differs, unconfirmed |
-| Reputation as a separate mechanic | ≈ none | ≈ none — the 2 guide never mentions it ([gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | Yes — a new hero characteristic that moves with the deeds committed ([SoftClub 2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy), [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) |
-| Reputation changes dialogue and quests | ≈ none | ≈ none | Yes — it changes dialogues, the way some quest tasks can be solved, and how other characters treat the hero ([SoftClub 2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy)) |
+| Выбираемые герои | Да — 3: Волк, Драгомир, Михаил ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)); собственные данные: Game.0/Game.1/Game.2, по файлу начального состояния на героя ([формат состояния](k1/formats/game-state.md)) | Да — 6, по два на народ ([SoftClub](https://www.softclub.ru/games/pc/19815-knyaz-2), [руководство Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | Да — 4: обычные три и восточный кочевник ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz), [обзор серии gospitaliers](https://gospitaliers.narod.ru/knyaz_opisanie.htm)) |
+| Героини | Да — нет: все три названных героя мужчины ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | Да — 3: Велиславна, Хельга, Анастасия ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), те же имена у [gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm); [PandoraKvest](https://pandorakvest.ru/text/49) считает трёх валькирий) | ? — героев четыре, пол добавленного не указан |
+| Начальные классы | Да — 4: вождь, воин, охотник, купец, у каждого основной параметр ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz) и собственное чтение readme ENG) | Да — классы убраны, все параметры и навыки доступны всем, различаются начальные значения ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | ≈ — основана на K2; заявлено изменение развития без подробностей ([StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy)) |
+| Основные характеристики | Да — четыре распределяемых: ловкость, харизма, сила, выносливость; подтверждены обоими EXE и процедурой улучшения. Здоровье — отдельное поле ([правила новой игры](k1/new-game.md#attribute-allocation), [запись персонажа](k1/formats/game-state.md#character--256-bytes)) | Да — 6: сила, выносливость, ловкость, интеллект, обучаемость, харизма ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ — как K2, плюс репутация как новая характеристика ([SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy)) |
+| Модель развития | Да — классы и опыт; запись хранит уровень, опыт и свободные очки ([формат состояния](k1/formats/game-state.md)) | Да — свободные навыки и ранги; навык на каждый вид оружия и социальные навыки ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | ≈ — на основе K2 ([StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy)) |
+| Рост навыков от использования | ? | Да — очки на уровне и рост от практики: смешивание повышает алхимию, одноручный меч — соответствующий навык ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm) о лечении и смешивании). Рецензия 2003 года описывает только распределение очков ([PandoraKvest](https://pandorakvest.ru/text/49)); противоречие не разрешено | ≈ |
+| Максимальный уровень | ? | ? — сообщается предел характеристики 150, не уровня | ? |
+| Ранги по характеристикам | —, эту роль играет система классов | Да — по двум максимальным характеристикам, ступени 1–30 / 31–60 / 61–90 / 91–120 / 121–150; только описание ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ — отличается, не подтверждено |
+| Репутация как отдельная механика | ≈ нет | ≈ нет — руководство K2 её не упоминает ([gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | Да — новая характеристика, меняется от поступков ([SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy), [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) |
+| Репутация влияет на диалоги и задания | ≈ нет | ≈ нет | Да — диалоги, способы решения отдельных заданий и отношение персонажей ([SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy)) |
 
-Sources for this group: [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz),
-[SoftClub K2](https://www.softclub.ru/games/pc/19815-knyaz-2),
-[SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy),
-[Steam guide to K2](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179),
-[gospitaliers guide to K2](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm),
-[PandoraKvest on K2](https://pandorakvest.ru/text/49),
-[StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy),
-our own data ([game-state.md](k1/formats/game-state.md)).
+Источники: [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz), [SoftClub K2](https://www.softclub.ru/games/pc/19815-knyaz-2), [SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy), [руководство Steam по K2](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [руководство gospitaliers по K2](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm), [PandoraKvest о K2](https://pandorakvest.ru/text/49), [StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy), [собственные данные](k1/formats/game-state.md).
 
-### 2. Party and companion AI
+<a id="2-party-and-companion-ai"></a>
 
-| Mechanic | K1 | K2 | K2.5 |
+### 2. Отряд и поведение спутников
+
+| Механика | K1 | K2 | K2.5 |
 |---|---|---|---|
-| Largest reported party, hero included | ≈ 10 — the leader class, whose primary attribute is charisma, reaches the largest retinue, "up to ten" ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)); whether the hero is one of the ten is unconfirmed | ≈ 7 — the documented rows end at 6 companions at charisma 100 on top of the hero; the guide leaves the higher rows "still being determined" ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ? — no maximum is reported |
-| Charisma sets the party size | Yes ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | Yes ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | Yes — same mechanism, lower thresholds ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) |
-| Charisma threshold per companion | ? | ≈ 16 → 1, 25–35 → 2, 50 → 3, 65 → 4, 80 → 5, 100 → 6 (incomplete table, [Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ 14 → 1, ~28 → 2, 30–40 → 3 ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) |
-| Hiring gated per hero and per quest | Yes — the three starting states differ in parties, caches and exits, while maps, transitions and villages match ([game-state.md](k1/formats/game-state.md)); quest NPCs cannot be recruited ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | Yes — companions are recruited from volunteers in a village ([PandoraKvest](https://pandorakvest.ru/text/49)); some joins need a high level and charisma ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
-| Orders to companions | Yes — party-wide attack and follow, group and single selection (our own observation of the readme shipped with the ENG edition; command bits in the record, [creatures.md](k1/creatures/README.md)) | Yes — three companion settings: automatic weapon swap, guarding the hero, drinking a healing flask when badly hurt ([PandoraKvest](https://pandorakvest.ru/text/49)); "all to me" on the world map | ≈ |
-| Autonomous companion behaviour | ≈ — roaming groups with an AI state recomputed every 16 ticks, and village workers, are in the data; what the states mean is only partly recovered ([game-state.md](k1/formats/game-state.md), [creatures.md](k1/creatures/README.md)) | Yes — companions act on the settings above; civilians withdraw at night ([gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
-| AI differences between the parts | ? | ? | ? |
+| Наибольший описанный отряд вместе с героем | ≈ 10 — вождь с основной харизмой набирает дружину до десяти ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)); входит ли герой, не подтверждено | ≈ 7 — таблица заканчивается на 6 спутниках сверх героя при харизме 100; следующие строки автор ещё уточняет ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ? — максимум не указан |
+| Размер отряда зависит от харизмы | Да ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | Да ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | Да — тот же механизм, ниже пороги ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) |
+| Порог харизмы на спутника | ? | ≈ 16 → 1, 25–35 → 2, 50 → 3, 65 → 4, 80 → 5, 100 → 6; неполная таблица ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ 14 → 1, около 28 → 2, 30–40 → 3 ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) |
+| Ограничения найма по герою и заданиям | Да — начальные состояния различаются отрядами, тайниками и выходами, при одинаковых картах, переходах и деревнях ([формат состояния](k1/formats/game-state.md)); квестовые NPC не нанимаются ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | Да — добровольцы в деревне ([PandoraKvest](https://pandorakvest.ru/text/49)); отдельным нужны высокий уровень и харизма ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
+| Приказы спутникам | Да — общие атака/следование, выбор группы и одного персонажа (readme ENG, собственное чтение; биты команд в [исследовании существ](k1/creatures/README.md)) | Да — автоматическая смена оружия, защита героя, лечебная склянка при сильном ранении ([PandoraKvest](https://pandorakvest.ru/text/49)); общий сбор на мировой карте | ≈ |
+| Самостоятельное поведение | ≈ — данные содержат бродячие группы с пересчётом состояния каждые 16 тиков и работников деревень; значения состояний восстановлены частично ([состояние](k1/formats/game-state.md), [существа](k1/creatures/README.md)) | Да — спутники следуют настройкам, мирные жители уходят ночью ([gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
+| Различия алгоритмов между частями | ? | ? | ? |
 
-**On the caps.** A clean set of party caps — 10, 9 and 7, one per part, hero included —
-is **not** confirmed by the sources. What they give is: 10 for 1 (a press description,
-hero inclusion unstated), and for 2 a table that excludes the hero explicitly
-("retinue size, not counting the main hero", [Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179))
-and stops at 6 companions. For 2.5 no maximum is stated at all. Guides also describe NPCs
-who join for one task and then leave; no source says whether such a temporary companion
-occupies a slot — the only exclusion stated explicitly is the hero's. See
-[Requires verification](#requires-verification).
+**Пределы отряда.** Набор максимумов 10, 9 и 7 с включённым героем **не подтверждён**. Для K1 есть журналистское описание десяти без уточнения героя; для K2 — таблица, явно исключающая героя и заканчивающаяся шестью спутниками ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)). Для K2.5 максимум не указан. Источники описывают временных спутников на одно задание, но не говорят, занимают ли они слот; явно исключён только герой. См. [открытые вопросы](#requires-verification).
 
-Sources for this group: [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz),
-[Steam guide to K2](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179),
-[gospitaliers guide to K2](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm),
-[PandoraKvest on K2](https://pandorakvest.ru/text/49),
-our own data ([game-state.md](k1/formats/game-state.md), [creatures.md](k1/creatures/README.md)).
+Источники: [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz), [Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm), [PandoraKvest](https://pandorakvest.ru/text/49), собственные [данные](k1/formats/game-state.md) и [исследование существ](k1/creatures/README.md).
 
-### 3. World and movement
+<a id="3-world-and-movement"></a>
 
-| Mechanic | K1 | K2 | K2.5 |
+### 3. Мир и перемещение
+
+| Механика | K1 | K2 | K2.5 |
 |---|---|---|---|
-| Isometric 2D world | Yes ([gospitaliers series page](https://gospitaliers.narod.ru/knyaz_opisanie.htm), [StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy) lists top-down/isometric) | Yes | Yes |
-| Walking | Yes | Yes | ≈ |
-| Running | ≈ none — the first part gave no running and substituted a changeable game speed ([PandoraKvest](https://pandorakvest.ru/text/49)); the readme shipped with the ENG edition binds movement to a left click only, with no run key | Yes — double click switches to a run ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)); "running was finally added in the second part" ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | ≈ |
-| Player-controlled world map | ? — 2-era sources present it as new in part 2; nothing first-hand says 1 had none | Yes — travel moves an icon over the world map, opened with `M`, compared to the early *Fallout* ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm), [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | ≈ |
-| Transitions between locations | Yes — a transitions block in the starting state, portals confirmed on the picture ([game-state.md](k1/formats/game-state.md)) | Yes | ≈ |
-| Random encounters on the world map | ? | Yes — monsters on the world map interrupt the march; a high tracking skill means fewer encounters ([gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm), [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | ≈ |
-| Ships | ≈ none — published as an addition of part 2 ([SoftClub](https://www.softclub.ru/games/pc/19815-knyaz-2): travel on water by ship, new islands) | Yes — buy a ship, sail, look for other islands ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
-| Naval battles | ≈ none | Yes — battles at sea appeared in the second part ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)); random sea skirmishes with raiders and the Lord's warriors ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
-| Building interiors | ? | ≈ — guides describe going inside buildings (a storekeeper's premises, barracks with duel places, the forge) ([gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
-| Caves and underground locations | ? | ? | ? |
-| Hidden items and caches | Yes — a cache record exists, and a cache with a negative gold value is hidden from view; chests are the same records ([game-state.md](k1/formats/game-state.md)) | ≈ — guides describe buried and planted items that stay where left | ≈ |
-| Dropped items survive leaving the location | ≈ — the readme shipped with the ENG edition lists item persistence after the party leaves a location as a difference of the network mode, which implies the single-player default removes them | Yes — plant roots, leave the location, come back later to find the plant grown, permanently ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
-| Game speed control | Yes — numpad `+`/`-` change a speed multiplier that runs extra update passes per frame (our own observation of the shipped readme; [Slavik `game_input.cpp:183-190`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_input.cpp#L183-L190), [`game_play.cpp:122-135`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L122-L135)) | ≈ none — "the speed is always the same" ([PandoraKvest](https://pandorakvest.ru/text/49)) | ? |
+| Изометрический двумерный мир | Да ([gospitaliers](https://gospitaliers.narod.ru/knyaz_opisanie.htm), [StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy) указывает вид сверху/изометрию) | Да | Да |
+| Ходьба | Да | Да | ≈ |
+| Бег | ≈ нет — вместо бега менялась скорость игры ([PandoraKvest](https://pandorakvest.ru/text/49)); readme ENG знает только движение левым щелчком, без клавиши бега | Да — двойной щелчок ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)); добавление во второй части отмечает [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz) | ≈ |
+| Управляемая игроком мировая карта | ? — источники эпохи K2 называют её новой, прямого свидетельства отсутствия в K1 нет | Да — значок перемещается по карте, открываемой M, сравнение с ранней Fallout ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm), [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | ≈ |
+| Переходы между локациями | Да — блок переходов начального состояния, порталы подтверждены изображением ([формат состояния](k1/formats/game-state.md)) | Да | ≈ |
+| Случайные встречи на мировой карте | ? | Да — монстры прерывают путь, высокий навык следопыта уменьшает встречи ([gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm), [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | ≈ |
+| Корабли | ≈ нет — заявлены как добавление K2, с водными путешествиями и островами ([SoftClub](https://www.softclub.ru/games/pc/19815-knyaz-2)) | Да — покупка корабля, плавание, поиск островов ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
+| Морские сражения | ≈ нет | Да — добавлены в K2 ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)); случайные столкновения с налётчиками и воинами Владыки ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
+| Интерьеры зданий | ? | ≈ — описан вход к кладовщику, в казармы с поединками, кузницу ([gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
+| Пещеры и подземелья | ? | ? | ? |
+| Скрытые предметы и тайники | Да — запись тайника; отрицательное золото скрывает его, сундуки — те же записи ([формат состояния](k1/formats/game-state.md)) | ≈ — руководства описывают зарытые и посаженные предметы, остающиеся на месте | ≈ |
+| Предметы остаются после ухода с карты | ≈ — readme ENG называет сохранение брошенных вещей отличием сетевого режима, косвенно предполагая удаление в одиночном | Да — посаженные корни после возвращения становятся постоянным растением ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
+| Управление скоростью игры | Да — numpad +/- меняют множитель проходов обновления за кадр (readme ENG; [Slavik game_input.cpp:183-190](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_input.cpp#L183-L190), [game_play.cpp:122-135](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_play.cpp#L122-L135)) | ≈ нет — рецензия сообщает постоянную скорость ([PandoraKvest](https://pandorakvest.ru/text/49)) | ? |
 
-**K2-era additions.** Running, the world map with its random encounters, ships and naval
-battles are all documented as things the second part introduced, not as things the first
-part had and 2.5 inherited. Conversely, transitions between locations, hidden caches and
-village life are already in the 1999 data and are **not** new in part 2.
+**Добавления эпохи K2.** Бег, мировая карта со случайными встречами, корабли и морские сражения описываются как новшества второй части. Переходы, тайники и жизнь деревень уже есть в данных 1999 года; их нельзя считать новшествами K2.
 
-Sources for this group: [SoftClub K2](https://www.softclub.ru/games/pc/19815-knyaz-2),
-[Steam guide to K2](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179),
-[gospitaliers guide to K2](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm),
-[PandoraKvest on K2](https://pandorakvest.ru/text/49),
-[DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz),
-[gospitaliers series page](https://gospitaliers.narod.ru/knyaz_opisanie.htm),
-[StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy),
-our own data ([game-state.md](k1/formats/game-state.md), [movement.md](k1/movement.md)).
+Источники: [SoftClub K2](https://www.softclub.ru/games/pc/19815-knyaz-2), [Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm), [PandoraKvest](https://pandorakvest.ru/text/49), [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz), [обзор серии gospitaliers](https://gospitaliers.narod.ru/knyaz_opisanie.htm), [StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy), собственные [данные состояния](k1/formats/game-state.md) и [перемещения](k1/movement.md).
 
-### 4. Combat
+<a id="4-combat"></a>
 
-| Mechanic | K1 | K2 | K2.5 |
+### 4. Бой
+
+| Механика | K1 | K2 | K2.5 |
 |---|---|---|---|
-| Real-time combat | Yes | Yes | Yes |
-| Tactical pause with orders | ? — no order-giving pause is documented; the shipped readme maps `Esc` to the main menu | ≈ none — attacks come from all sides and a retreat order has to be given to each character separately ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)); the 2003 review complains that the game still has no pause for issuing orders and reaching the inventory ([PandoraKvest](https://pandorakvest.ru/text/49)) | Yes — a publisher page describes a pause mode in which combat orders can be reviewed and changed and ammunition actions performed ([SoftClub 2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy)); the same is described as an active pause in combat ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) |
-| A weapon in each hand | ≈ none | Yes — new combat possibilities include fighting armed in two hands ([SoftClub](https://www.softclub.ru/games/pc/19815-knyaz-2)), and it is a skill of its own ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
-| Additional strikes | ? | Yes — "additional strikes" among the new combat possibilities ([SoftClub](https://www.softclub.ru/games/pc/19815-knyaz-2)) | ≈ |
-| Crossbows | ≈ none — listed as a new weapon of part 2 ([SoftClub](https://www.softclub.ru/games/pc/19815-knyaz-2)); 1's parsed skill list has marksmanship but no crossbow ([game-state.md](k1/formats/game-state.md)) | Yes — a new weapon brought by the Byzantines, with a skill of its own; crossbows outrange and outdamage bows ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
-| Additional heavy weapons | ? | Yes — knuckles, two-handed swords, axes and clubs are named as new weapon types ([SoftClub](https://www.softclub.ru/games/pc/19815-knyaz-2)) | ≈ |
-| Magic upgrades of items | ? — the item record carries a bonus, a poison and a concentration value, which says little by itself ([game-state.md](k1/formats/game-state.md)) | Yes — the magic-casting skill raises the values of gems set into weapons and armour; per item the cap is +6 to an attribute and +48 to armour or damage, and a stone cannot push past a cap already reached ([gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
-| Alchemy | ≈ — elixirs, oils and poisons exist (a poison field and a concentration field in the item record, a village healer's wares), but the mixing itself is not documented for part 1 | Yes — recipes combine an ingredient with a jar (balm, oil, poison, antidote, brew, elixir), and the mixing skill sets their concentration ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
-| New monster types | baseline set | ≈ — an extended set (guides name desert and mountain foes, pirates, the Lord's warriors) | Yes — a new faction, the clan of the Yellow Dogs of the desert ([SoftClub 2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy), [StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy)) |
+| Бой в реальном времени | Да | Да | Да |
+| Тактическая пауза с приказами | ? — не описана; readme назначает Esc главному меню | ≈ нет — приходится отдельно отдавать приказ отступления каждому ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)); рецензия 2003 года отмечает отсутствие паузы для приказов и инвентаря ([PandoraKvest](https://pandorakvest.ru/text/49)) | Да — издатель описывает просмотр/изменение боевых приказов и действия с амуницией на паузе ([SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy)); активную паузу отмечает [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz) |
+| Оружие в каждой руке | ≈ нет | Да — новая возможность ([SoftClub](https://www.softclub.ru/games/pc/19815-knyaz-2)) и отдельный навык ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
+| Дополнительные удары | ? | Да — перечислены среди новых возможностей ([SoftClub](https://www.softclub.ru/games/pc/19815-knyaz-2)) | ≈ |
+| Арбалеты | ≈ нет — новое оружие K2 ([SoftClub](https://www.softclub.ru/games/pc/19815-knyaz-2)); в разобранных навыках K1 есть стрельба, отдельного арбалета нет ([формат состояния](k1/formats/game-state.md)) | Да — оружие византийцев с отдельным навыком, большей дальностью и уроном, чем лук ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
+| Дополнительное тяжёлое оружие | ? | Да — названы кастеты, двуручные мечи, топоры и дубины ([SoftClub](https://www.softclub.ru/games/pc/19815-knyaz-2)) | ≈ |
+| Магическое улучшение предметов | ? — бонус, яд и концентрация в записи сами по себе не доказывают механику ([формат состояния](k1/formats/game-state.md)) | Да — навык колдовства повышает значения вставленных камней; предел предмета +6 к параметру и +48 к броне/урону, камень не превышает достигнутый предел ([gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
+| Алхимия | ≈ — эликсиры, масла и яды существуют: поля яда/концентрации и товары лекаря; само смешивание для K1 не описано | Да — ингредиент и сосуд дают бальзам, масло, яд, противоядие, брагу, эликсир; навык определяет концентрацию ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
+| Новые монстры | Исходный набор | ≈ — расширен: пустынные и горные враги, пираты, воины Владыки | Да — клан Жёлтых Псов пустыни ([SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy), [StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy)) |
 
-**Tactical pause is not the same as a pause menu.** The cell for 2.5 is graded on the
-publisher's own wording: while paused, combat orders can be reviewed and changed and
-ammunition handled — that is an order-giving pause, not a menu that merely stops the
-game. Two independent sources say part 2 had no such mode, and nothing published says
-part 1 had one (its readme only maps `Esc` to the main menu).
+**Тактическая пауза отличается от меню паузы.** Издатель K2.5 прямо описывает изменение приказов и работу с амуницией при остановленном бое. Два независимых источника сообщают отсутствие такой возможности в K2; опубликованного свидетельства для K1 нет, readme знает только главное меню по Esc.
 
-**Not new in part 2.** Alchemy, the retinue, capturing and running villages, and
-construction all have a footing in the 1999 game — see the next table for what the
-starting-state data of part 1 actually carries. Do not describe them as 2's inventions.
+**Не новшества второй части.** Алхимические предметы, дружина и структуры управления/строительства деревень имеют основания уже в игре 1999 года. Данные ниже подтверждают наличие структур; доступность конкретных действий игроку требует отдельного доказательства.
 
-Sources for this group: [SoftClub K2](https://www.softclub.ru/games/pc/19815-knyaz-2),
-[SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy),
-[Steam guide to K2](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179),
-[gospitaliers guide to K2](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm),
-[PandoraKvest on K2](https://pandorakvest.ru/text/49),
-[DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz),
-[StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy).
+Источники: [SoftClub K2](https://www.softclub.ru/games/pc/19815-knyaz-2), [SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy), [Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm), [PandoraKvest](https://pandorakvest.ru/text/49), [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz), [StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy).
 
-### 5. Settlements and economy
+<a id="5-settlements-and-economy"></a>
 
-The first part's column comes mostly from our own files: the presence of the structures
-is confirmed by the parser and by byte-exact round-trips, the *meaning* of the fields is
-read from the Slavik reference and stays at `≈` there. Details in
-[game-state.md](k1/formats/game-state.md).
+### 5. Поселения и экономика
 
-| Mechanic | K1 | K2 | K2.5 |
+Колонка K1 в основном основана на собственных файлах. Наличие структур подтверждено парсером и побайтным циклом чтения/записи; **смысл** полей по Slavik остаётся ≈. Подробности: [формат состояния](k1/formats/game-state.md).
+
+| Механика | K1 | K2 | K2.5 |
 |---|---|---|---|
-| Villages under the player | ≈ — 15 villages stand in the 1999 starting state, on the same 15 maps in all three heroes' files (of 20 record slots), each with an elder's party and staffed workplaces; that the player can take one over is not something the data states | Yes — take villages under your care and rule them, which in practice means collecting tribute and repelling attacks ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
-| Village management | ≈ — five workplaces (elder, healer, merchant, blacksmith, voivode), each pointing at a character; most villages start with all five staffed, one starts with the elder alone ([game-state.md](k1/formats/game-state.md)) | Yes — a village-management skill decides how much tribute the village yields ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
-| Construction | ≈ — 119 building slots per village with a kind, a state, a map-object index and a countdown, and a declared count of two kinds of buildings (in the starting state: 2 to 11 of one kind, 0 to 100 of the other); whether the player commissions buildings is not established | Yes — new buildings are raised through the elder and masters from the retinue move into them ([PandoraKvest](https://pandorakvest.ru/text/49)); a good builder is needed to repair burned buildings and raise new ones ([gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)); a bridge can be commissioned | ≈ |
-| Assigning specialists | ≈ — the five village workplaces above | Yes — builder, healer, blacksmith and hunter fill named roles ([gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
-| Producing goods | ≈ — the healer's potions and the merchant's and blacksmith's wares are recorded per village | ≈ — a blacksmith in the village lets part of the tribute be spent on buying weapons ([gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ? |
-| Collecting tribute | ≈ — a tribute amount and a tribute deadline are recorded per village | Yes — tribute has levels, the starting level is low, and a high level is untested by the guide's author ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
-| Production runs on a timer | ≈ — timer fields per village for the healer, the blacksmith and the voivode; all five village timers read zero in a fresh start, so they only move during play ([game-state.md](k1/formats/game-state.md)) | ? | ? |
-| Tribute is due on a timer | ≈ — a deadline field, meaning per Slavik, zero in a fresh start | ? | ? |
+| Деревни игрока | ≈ — 15 деревень на одинаковых 15 картах во всех трёх начальных состояниях, из 20 слотов; у каждой отряд старосты и работники. Возможность захвата сами данные не доказывают | Да — опека деревень, дань и защита ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
+| Управление деревней | ≈ — пять рабочих мест со ссылками на персонажей: староста, лекарь, торговец, кузнец, воевода. Обычно заняты все, в одной деревне только староста ([формат состояния](k1/formats/game-state.md)) | Да — навык управления определяет дань ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
+| Строительство | ≈ — 119 слотов зданий на деревню: вид, состояние, индекс объекта карты, отсчёт; объявлены два числа зданий, в старте 2–11 одного вида и 0–100 другого. Заказ игроком не установлен | Да — строительство через старосту, заселение мастерами дружины ([PandoraKvest](https://pandorakvest.ru/text/49)); нужен строитель для сгоревших и новых зданий ([gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)); можно заказать мост | ≈ |
+| Назначение специалистов | ≈ — пять мест выше | Да — строитель, лекарь, кузнец и охотник ([gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
+| Производство товаров | ≈ — зелья лекаря, товары торговца и кузнеца записаны на деревню | ≈ — кузнец позволяет тратить часть дани на оружие ([gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ? |
+| Сбор дани | ≈ — сумма и срок в записи деревни | Да — уровни дани, начальный низкий; высокий автор руководства не проверял ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
+| Производство по таймеру | ≈ — поля лекаря, кузнеца, воеводы; все пять таймеров деревни в новом старте нулевые, ненулевые значения должны возникать при игре ([формат состояния](k1/formats/game-state.md)) | ? | ? |
+| Срок дани по таймеру | ≈ — поле срока по Slavik, в старте ноль | ? | ? |
 
-Sources for this group: [Steam guide to K2](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179),
-[gospitaliers guide to K2](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm),
-[PandoraKvest on K2](https://pandorakvest.ru/text/49),
-our own data ([game-state.md](k1/formats/game-state.md)).
+Источники: [Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm), [PandoraKvest](https://pandorakvest.ru/text/49), [собственные данные](k1/formats/game-state.md).
 
-### 6. Time and world simulation
+<a id="6-time-and-world-simulation"></a>
 
-| Mechanic | K1 | K2 | K2.5 |
+### 6. Время и симуляция мира
+
+| Механика | K1 | K2 | K2.5 |
 |---|---|---|---|
-| Day/night cycle | Yes — a day counter runs through light phases; a full cycle is 21600 ticks, 21.6 minutes at the 60 ms tick at game speed 0 and shorter as the speed control adds counter steps per frame. The divisor, the thirteen int16 phase thresholds and the option gate are read out of our own copy of the game in [game time](k1/time.md) ([Slavik `game.cpp:1764-1890`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L1764-L1890), [`game.h:28`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.h#L28), [movement.md](k1/movement.md) for the tick) | Yes — a day/night mode that can be switched on and off ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
-| Lighting changes with the hour | Yes — one ambient colour per phase reaches the ground, the objects and each creature separately, and ground tiles are lit by their `LIGHTS.N` mask only in the ground-light interval within the longer dark span; the per-channel blend rules and the windows are in [lighting](k1/lighting.md) ([lights-res.md](k1/formats/lights-res.md)) | Yes — guides complain about pitch darkness at night ([PandoraKvest](https://pandorakvest.ru/text/49)) | ≈ |
-| Permanent-day option | Yes — a configuration flag gates **only** the lighting computation while the day counter keeps running: the gate is a test of that flag alone, and the two places that advance the counter are not under it, which we read out of the game ourselves; the option is read from the saved options ([game time](k1/time.md), [Slavik `game.cpp:120`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L120), [`game.cpp:1776`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L1776), [`game.h:1464`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.h#L1464)) | Yes — turning the day/night change off in the options keeps it daytime all the time ([gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
-| Night affects ordinary NPCs | ? | Yes — civilians refuse to talk late at night, while the main characters are ready to talk at any hour ([PandoraKvest](https://pandorakvest.ru/text/49), [gospitaliers guide](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
-| Traders unavailable at night | ? | Yes — part of the population is unreachable at night (the same civilian restriction) | ≈ |
-| Creatures or spirits appear at night | ? | Yes — a spirit by the grave appears only at night, and only with the day/night mode switched on ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
-| Quests conditioned on the hour of day | ? | Yes — a quest is solved by waiting for night so that a warehouse keeper goes to bed and returns in the morning ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
-| NPCs go to sleep and change availability | ? | Yes — the same guide evidence as the two rows above | ≈ |
-| Production timers | ≈ — the village timer fields ([game-state.md](k1/formats/game-state.md)) | ? | ? |
-| Economic timers | ≈ — the tribute amount and deadline fields | ? | ? |
-| Monster attributes change at night | ? | ? | ? |
-| Permanent day stops the game clock | Yes — no: our own read of both editions and the tutorial finds both counter increments outside lighting-option branches. The option gates the lighting result while the counter continues ([counter evidence](k1/time.md#the-day-counter-and-the-length-of-a-cycle), [gate order](k1/lighting.md#the-order-of-the-checks)) | ? | ? |
+| Смена дня и ночи | Да — цикл 21600 тиков, 21,6 минуты при тике 60 мс и скорости 0; ускорение добавляет проходы счётчика за кадр. Делитель, 13 порогов int16 и условие настройки прочитаны из своих файлов ([игровое время](k1/time.md); [Slavik game.cpp:1764-1890](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L1764-L1890), [game.h:28](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.h#L28), [тик перемещения](k1/movement.md)) | Да — переключаемый режим суток ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
+| Освещение меняется со временем | Да — фоновый цвет действует на землю, объекты и существ с отдельными условиями; маски LIGHTS.N освещают землю только в интервале внутри более длинного тёмного участка ([освещение](k1/lighting.md), [LIGHTS.RES](k1/formats/lights-res.md)) | Да — жалобы на непроглядную ночь ([PandoraKvest](https://pandorakvest.ru/text/49)) | ≈ |
+| Постоянный день | Да — настройка ограничивает **только** вычисление света, счётчик продолжается; обе точки увеличения вне ветвей настройки. Собственное чтение; постоянный свет карты проверяется раньше и остаётся исключением ([время](k1/time.md), [Slavik game.cpp:120](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L120), [game.cpp:1776](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L1776), [game.h:1464](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.h#L1464)) | Да — отключение смены суток оставляет день ([gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
+| Ночь влияет на обычных NPC | ? | Да — мирные жители не разговаривают поздно ночью, главные персонажи доступны всегда ([PandoraKvest](https://pandorakvest.ru/text/49), [gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm)) | ≈ |
+| Торговцы недоступны ночью | ? | Да — часть жителей недоступна по тому же правилу | ≈ |
+| Ночные существа/духи | ? | Да — дух у могилы появляется ночью, только при включённой смене суток ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
+| Задания зависят от времени суток | ? | Да — ожидание сна кладовщика ночью и возвращения утром ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)) | ≈ |
+| NPC спят и меняют доступность | ? | Да — те же свидетельства выше | ≈ |
+| Производственные таймеры | ≈ — поля деревень ([формат состояния](k1/formats/game-state.md)) | ? | ? |
+| Экономические таймеры | ≈ — сумма и срок дани | ? | ? |
+| Характеристики монстров меняются ночью | ? | ? | ? |
+| Постоянный день останавливает часы мира | Да — **не останавливает**: оба увеличения счётчика вне ветвей настройки в обоих изданиях и tutorial ([счётчик](k1/time.md#the-day-counter-and-the-length-of-a-cycle), [порядок проверок](k1/lighting.md#the-order-of-the-checks)) | ? | ? |
 
-What each part is evidenced by: part 1 has the cycle in code and the timers in data;
-part 2 has first-hand guide evidence for the toggle, sleeping civilians, a night-only
-spirit and a quest that waits for dark; for 2.5 the day/night claims are inherited from
-part 2 and no first-hand description was found.
+Для K1 есть цикл в коде и таймеры в данных; для K2 — руководства о переключателе, спящих жителях, ночном духе и задании с ожиданием темноты. Для K2.5 преемственность предполагается, прямого описания не найдено.
 
-Sources for this group: [Steam guide to K2](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179),
-[gospitaliers guide to K2](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm),
-[PandoraKvest on K2](https://pandorakvest.ru/text/49),
-[Slavik](https://github.com/Marisa-Chan/Slavik) (read-only reference),
-our own data ([game-state.md](k1/formats/game-state.md), [lights-res.md](k1/formats/lights-res.md),
-[movement.md](k1/movement.md)).
+Источники: [Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [gospitaliers](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm), [PandoraKvest](https://pandorakvest.ru/text/49), [Slavik](https://github.com/Marisa-Chan/Slavik) только для чтения, собственные [данные состояния](k1/formats/game-state.md), [света](k1/formats/lights-res.md), [перемещения](k1/movement.md).
 
-### 7. Narrative and quests
+<a id="7-narrative-and-quests"></a>
 
-| Mechanic | K1 | K2 | K2.5 |
+### 7. Сюжет и задания
+
+| Механика | K1 | K2 | K2.5 |
 |---|---|---|---|
-| Plot differs per hero | ≈ — the starting states differ per hero in our own data: own starting map, parties, caches and exits ([game-state.md](k1/formats/game-state.md)); a plot-level difference beyond the opening is not stated by a cited source | ≈ — six heroes across three peoples ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)); one hero's party admits only men, another's only women — a distinct plot per hero is not stated by a cited source | ≈ — 4 heroes with their own lines ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) |
-| Quest variety | ≈ — quests live outside the starting state, in `QUEST*.RES`, and dialogues are chosen by a record byte ([game-state.md](k1/formats/game-state.md)); the variety of quest types itself is unconfirmed | Yes — main and side quests, "not always of one type" ([PandoraKvest](https://pandorakvest.ru/text/49)) | ≈ — inherited from 2; the advertised more than 100 locations and more than 1000 game scenes are a publisher content-scale claim and do not speak to quest diversity ([SoftClub 2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy), [StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy)) |
-| Reputation changes NPCs and dialogue | ≈ none | ≈ none | Yes ([SoftClub 2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy), [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) |
-| Several endings | ? | ? | Yes — several different endings ([SoftClub 2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy)) |
-| Voiced dialogue | ? | ? | ? |
-| Dialogue conditions on the time of day | ? | Yes — civilians only talk during the day; night-gated quest steps ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [PandoraKvest](https://pandorakvest.ru/text/49)) | ≈ |
+| Разный сюжет у героев | ≈ — различаются стартовая карта, отряды, тайники, выходы ([формат состояния](k1/formats/game-state.md)), но сюжет после вступления источником не подтверждён | ≈ — шесть героев трёх народов ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)); у одного только мужчины в отряде, у другого женщины, но отдельный сюжет не заявлен | ≈ — четыре героя со своими линиями ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) |
+| Разнообразие заданий | ≈ — QUEST*.RES вне начального состояния, диалоги выбирает байт записи ([формат состояния](k1/formats/game-state.md)); разнообразие типов не подтверждено | Да — основные и побочные, не всегда однотипные ([PandoraKvest](https://pandorakvest.ru/text/49)) | ≈ — преемственность K2; более 100 локаций и 1000 игровых сцен — масштаб контента от издателя, не доказательство типов заданий ([SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy), [StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy)) |
+| Репутация меняет NPC и диалоги | ≈ нет | ≈ нет | Да ([SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy), [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) |
+| Несколько концовок | ? | ? | Да ([SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy)) |
+| Озвученные диалоги | ? | ? | ? |
+| Диалоги зависят от суток | ? | Да — мирные жители говорят днём, есть ночные шаги заданий ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [PandoraKvest](https://pandorakvest.ru/text/49)) | ≈ |
 
-Sources for this group: [SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy),
-[Steam guide to K2](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179),
-[PandoraKvest on K2](https://pandorakvest.ru/text/49),
-[DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz),
-[StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy),
-our own data ([game-state.md](k1/formats/game-state.md)).
+Источники: [SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy), [Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179), [PandoraKvest](https://pandorakvest.ru/text/49), [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz), [StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy), [собственные данные](k1/formats/game-state.md).
 
-### 8. Technical and content differences
+<a id="8-technical-and-content-differences"></a>
 
-| Feature | K1 | K2 | K2.5 |
+### 8. Техника и содержимое
+
+| Возможность | K1 | K2 | K2.5 |
 |---|---|---|---|
-| Network mode | Yes — a LAN/DirectPlay mode shipped with the ENG edition (`LAN_KONG.EXE`, `SERVER`, `Servers.cfg`); the RUS edition carries only `CLIENT.EXE`, so the mode is edition-specific (our own observation, [editions.md](k1/editions.md)); up to 16 players over three peoples in an amulet-carry mode, with its own party cap of two companions and persistent dropped items (our own observation of the shipped readme); official servers closed long ago ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | ≈ none — the series table marks network play as absent ([gospitaliers series page](https://gospitaliers.narod.ru/knyaz_opisanie.htm)) | ≈ none — same table; the store card lists it as single-player ([StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy)) |
-| Supported resolutions | Yes — 640×480 and 800×600: interface resources exist per language for both sizes (`MENU640R/E/T.RES`, `MENU800R/E/T.RES`, and the same for `INTO`, `INTR`, `ME`, `NEW`, `NEWH`, `PLAY`, `SAVE`), and the shipped options menu offers a resolution setting (our own observation); the original topped out at 800×600 ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | ≈ 1024×768 — the publisher's minimum hardware line asks for a card supporting 1024×768 at 16 bit ([SoftClub](https://www.softclub.ru/games/pc/19815-knyaz-2)); the review only says the resolution went up ([PandoraKvest](https://pandorakvest.ru/text/49)) | ≈ 1024×768 — assumed from the base game, unconfirmed |
-| Separate story campaigns | ≈ — three heroes with distinct starting states ([game-state.md](k1/formats/game-state.md)); the hero count alone does not establish separate campaigns | ≈ — six heroes ([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)); the hero count alone does not establish separate campaigns | ≈ — four heroes ([gospitaliers series page](https://gospitaliers.narod.ru/knyaz_opisanie.htm)); the hero count alone does not establish separate campaigns |
-| Shared game base with K2 | — | the base part | Yes — a standalone add-on made by a fan group on the second game's base, published by 1C, filling the gap between part 1 and part 2 ([gospitaliers series page](https://gospitaliers.narod.ru/knyaz_opisanie.htm), [StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy)) |
-| Save compatibility 2 / 2.5 | — | not confirmed | not confirmed |
-| Binary format compatibility | not confirmed | not confirmed | not confirmed |
-| New locations and content | the original game | new content | extra content: over 100 locations, new buildings, trees and landscape elements for the southern lands, a new faction ([SoftClub 2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy)) |
+| Сетевой режим | Да — ENG содержит LAN/DirectPlay: LAN_KONG.EXE, SERVER, Servers.cfg; RUS только CLIENT.EXE, состав зависит от издания ([издания](k1/editions.md)). Собственное readme: до 16 игроков трёх народов, перенос амулета, отдельный предел двух спутников, сохранение брошенных вещей. По историческому обзору официальные серверы давно закрыты ([DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz)) | ≈ нет — отсутствует в таблице серии ([gospitaliers](https://gospitaliers.narod.ru/knyaz_opisanie.htm)) | ≈ нет — та же таблица, карточка указывает одиночную игру ([StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy)) |
+| Разрешения | Да — 640×480, 800×600: MENU640R/E/T.RES, MENU800R/E/T.RES и аналогичные INTO, INTR, ME, NEW, NEWH, PLAY, SAVE; настройка разрешения в исходном меню, собственное наблюдение. Потолок 800×600 отмечает [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz) | ≈ 1024×768 — минимум требует видеокарту с этим режимом и 16 бит ([SoftClub](https://www.softclub.ru/games/pc/19815-knyaz-2)); рецензия говорит лишь о росте разрешения ([PandoraKvest](https://pandorakvest.ru/text/49)) | ≈ 1024×768 — предполагается по базе, не подтверждено |
+| Отдельные сюжетные кампании | ≈ — три героя с разными стартами ([формат состояния](k1/formats/game-state.md)); число героев не доказывает отдельные кампании | ≈ — шесть героев ([Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179)), тот же предел вывода | ≈ — четыре героя ([gospitaliers](https://gospitaliers.narod.ru/knyaz_opisanie.htm)), тот же предел вывода |
+| Общая игровая база с K2 | — | Базовая часть | Да — самостоятельное дополнение фанатской группы на базе второй игры, издано 1С, заполняет промежуток между K1 и K2 ([gospitaliers](https://gospitaliers.narod.ru/knyaz_opisanie.htm), [StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy)) |
+| Совместимость сохранений K2/K2.5 | — | Не подтверждена | Не подтверждена |
+| Совместимость бинарных форматов | Не подтверждена | Не подтверждена | Не подтверждена |
+| Новые локации и содержимое | Исходная игра | Новое содержимое | Более 100 локаций, новые здания, деревья и элементы южного ландшафта, новая фракция ([SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy)) |
 
-Sources for this group: [gospitaliers series page](https://gospitaliers.narod.ru/knyaz_opisanie.htm),
-[SoftClub K2](https://www.softclub.ru/games/pc/19815-knyaz-2),
-[SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy),
-[PandoraKvest on K2](https://pandorakvest.ru/text/49),
-[DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz),
-[StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy),
-our own observation of the unpacked editions ([editions.md](k1/editions.md)).
+Источники: [gospitaliers](https://gospitaliers.narod.ru/knyaz_opisanie.htm), [SoftClub K2](https://www.softclub.ru/games/pc/19815-knyaz-2), [SoftClub K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy), [PandoraKvest](https://pandorakvest.ru/text/49), [DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz), [StopGame](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy), собственное наблюдение [распакованных изданий](k1/editions.md).
 
-## Requires verification
+<a id="requires-verification"></a>
 
-Cells left at `?`, and the specific question each still needs answered:
+## Требуется проверка
 
-1. **Party caps.** Whether the hero counts toward the "up to ten" of part 1; the real
-   maximum beyond 6 companions in part 2 (the guide's table stops there); the maximum in
-   2.5. Whether temporary companions who join for a single task occupy a slot.
-2. **Charisma thresholds.** The unfilled rows of the companion table for both parts 2
-   and 2.5, and any per-hero hiring limits.
-3. **Maximum level.** For all three parts. The 150 reported for 2 is an attribute cap,
-   not a level cap; the figure "up to 13" for part 1 has no source found and is not
-   repeated above.
-4. **Ranks in 2.5.** Whether the rank system of part 2 is kept, and how it differs.
-5. **Game speed control in 2.5.** Part 1 has it, part 2 is reported not to.
-6. **A world map in part 1.** Only 2-era sources frame it as new; no first-hand
-   statement about part 1.
-7. **Random encounters in part 1**, and whether any world-map travel existed there at
-   all.
-8. **Building interiors, caves and underground locations in part 1** — our map data does
-   not name maps, so the question is open for all three parts.
-9. **A tactical pause in part 1.** The shipped readme knows only `Esc` for the main
-   menu; absence is unconfirmed.
-10. **Item magic upgrades and potion mixing in part 1.** The fields exist in the item
-    record; the gameplay around them is not documented.
-11. **Production and tribute timers in parts 2 and 2.5** — whether they tick on the game
-    clock, and at what interval.
-12. **Night effects in part 1** (ordinary NPCs, traders, night-only creatures) and
-    **night behaviour in 2.5** — everything claimed for 2.5 is inherited from 2 by
-    assumption.
-13. **Whether a permanent-day option freezes the world clock** in parts 2 and 2.5.
-    K1 is resolved by our own executable read: only lighting is gated; the
-    counter keeps running ([time](k1/time.md), [lighting](k1/lighting.md)).
-14. **Monster attributes at night** — no source for any part.
-15. **Voiced dialogue** — no source for any part.
-16. **Multiple endings in parts 1 and 2.**
-17. **Female heroes in 2.5** — the count of heroes is four, their gender split is not
-    reported.
-18. **Resolutions of 2 and 2.5** — only a minimum hardware line and a reviewer's "the
-    resolution went up"; no mode list.
-19. **Network play in 2 and 2.5** — a third-party series table and a single-player store
-    card, no first-party statement of absence.
-20. **Save and binary format compatibility** between 2 and 2.5, and between all three
-    parts. See [engine verification](series.md#verify-the-shared-engine-hypothesis): this is the same open
-    question, and the tables above do not settle it.
-21. **Separate story campaigns and a plot that differs per hero** — the hero counts and
-    the differing starting states are confirmed; no cited source states separate
-    campaigns or hero-specific plots for any part.
-22. **Quest variety in 2.5** — the location and scene counts are a publisher content
-    figure; a source that describes the quest types themselves is missing.
+1. **Пределы отряда:** входит ли герой в десять K1; максимум K2 после шести спутников; максимум K2.5; занимают ли слот временные спутники.
+2. **Пороги харизмы:** недостающие строки K2/K2.5 и ограничения найма по герою.
+3. **Максимальный уровень** всех частей. 150 в K2 — предел характеристики. Для утверждения «до 13» в K1 источник не найден, оно не включено в таблицу.
+4. **Ранги K2.5:** сохранение и отличия системы K2.
+5. **Скорость игры K2.5:** в K1 управление есть, для K2 сообщается отсутствие.
+6. **Мировая карта K1:** новшеством её называют только источники эпохи K2, прямого свидетельства для K1 нет.
+7. **Случайные встречи K1** и существование путешествия по мировой карте.
+8. **Интерьеры, пещеры, подземелья:** прежде всего K1; карты не содержат названий. Пещеры и подземелья требуют проверки во всех частях, интерьеры K2 пока косвенны.
+9. **Тактическая пауза K1:** readme знает лишь Esc для главного меню; отсутствие не подтверждено.
+10. **Магическое улучшение и смешивание зелий K1:** поля предметов есть, действия вокруг них не описаны.
+11. **Таймеры производства и дани K2/K2.5:** связь с часами и интервалы.
+12. **Ночь K1:** обычные NPC, торговцы, ночные существа. **Поведение ночью K2.5:** все утверждения пока перенесены по предположению из K2.
+13. **Останавливает ли постоянный день часы K2/K2.5.** Для K1 ответ установлен чтением EXE: только свет, счётчик продолжается ([время](k1/time.md), [освещение](k1/lighting.md)).
+14. **Характеристики монстров ночью:** нет источников для всех частей.
+15. **Озвученные диалоги:** нет источников для всех частей.
+16. **Несколько концовок K1/K2.**
+17. **Героини K2.5:** известно число четыре, не распределение по полу.
+18. **Разрешения K2/K2.5:** есть минимальные требования и замечание о росте разрешения, нет списка режимов.
+19. **Сетевая игра K2/K2.5:** сторонняя таблица и карточка одиночной игры, нет прямого заявления разработчика об отсутствии.
+20. **Совместимость сохранений и форматов:** K2/K2.5 и всех трёх частей; см. [проверку движка](series.md#verify-the-shared-engine-hypothesis). Эти таблицы вопроса не решают.
+21. **Отдельные кампании и сюжет героя:** число героев и стартовые различия подтверждены, отдельные кампании и полный сюжет по герою прямо не установлены источниками.
+22. **Разнообразие заданий K2.5:** числа локаций/сцен отражают масштаб; нужен источник о типах заданий.
 
-## Sources for the comparison
+<a id="sources-for-the-comparison"></a>
 
-Checked 2026-11-04.
+## Источники сравнения
 
-| Source | Used for | Status |
+Доступность проверялась 2026-11-04; это исторический срез.
+
+| Источник | Использование | Статус на дату проверки |
 |---|---|---|
-| [SoftClub: K2](https://www.softclub.ru/games/pc/19815-knyaz-2) | publisher's feature list for 2: heroes, skills, ships, two-handed fighting, new weapons, settlement management; the 1024×768 hardware line | reachable |
-| [SoftClub: K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy) | publisher's feature list for 2.5: reputation, the pause mode with combat orders and ammunition, over 100 locations, the new faction, several endings | reachable |
-| [Steam guide to K2](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179) | heroes and genders, six attributes, skill growth, ranks and the 150 cap, the charisma table for 2 **and** 2.5, running, world map, ships, night content, alchemy recipes, villages | reachable |
-| [gospitaliers guide to K2](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm) | hero roster, attributes, skills, tribute levels, builders, gem-set item upgrades, the permanent-day option and its effect | reachable |
-| [gospitaliers series page](https://gospitaliers.narod.ru/knyaz_opisanie.htm) | series table: hero counts 3 / 6 / 4, network play per part, dates, 2.5 as a fan-made standalone add-on published by 1C | reachable |
-| [DTF: history of the series](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz) | part 1 heroes and classes, the retinue of ten, classes removed in 2, running and the world map and naval battles as additions of 2, reputation and the active pause in 2.5, the 800×600 ceiling of part 1, the network mode of part 1 | reachable |
-| [PandoraKvest review of K2](https://pandorakvest.ru/text/49) | a contemporary 2003 comparison with part 1: running versus game speed, no order-giving pause, night civilians, village building and masters, companion settings | reachable |
-| [StopGame: K2.5](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy) | 2.5 as a fan-group production published by 1C, its premise, the new faction, scale figures, "somewhat changed character development" | reachable |
-| [Marisa-Chan/Slavik](https://github.com/Marisa-Chan/Slavik) | read-only reference for part 1: the day counter and light phases, the day/night option flag, the speed multiplier. Cited by file and line as of the pinned commit [`cf5a332`](https://github.com/Marisa-Chan/Slavik/tree/cf5a3320dc93859e3dc51f37ee823fed30f399b6), its code is never copied | reachable |
-| [MobyGames: *Legend of the North: Konung*](https://www.mobygames.com/game/3325/legend-of-the-north-konung/) | intended for part 1 technical metadata | **not reachable** (403), nothing above relies on it |
-| [Cyclowiki: K2.5](https://www.cyclowiki.org/wiki/) | intended for the 2.5 hero roster | **not reachable** (404), the hero count is taken from DTF and gospitaliers instead |
-| ag.ru catalogue page for K2.5 | intended for 2.5 heroes and requirements | **not reachable** (redirects to 404), nothing above relies on it |
+| [SoftClub: K2](https://www.softclub.ru/games/pc/19815-knyaz-2) | Список издателя: герои, навыки, корабли, оружие в двух руках, новые виды оружия, поселения; требование 1024×768 | Доступен |
+| [SoftClub: K2.5](https://www.softclub.ru/games/pc/19816-knyaz-2-prodolzhenie-legendy) | Репутация, пауза с приказами/амуницией, более 100 локаций, фракция, несколько концовок | Доступен |
+| [Руководство Steam по K2](https://steamcommunity.com/sharedfiles/filedetails/?id=1506357179) | Герои и пол, шесть параметров, рост навыков, ранги и предел 150, харизма K2 и K2.5, бег, мировая карта, корабли, ночь, алхимия, деревни | Доступен |
+| [Руководство gospitaliers по K2](https://gospitaliers.narod.ru/knaz/k2_bigguide.htm) | Герои, параметры, навыки, дань, строители, камни улучшений, постоянный день | Доступен |
+| [Обзор серии gospitaliers](https://gospitaliers.narod.ru/knyaz_opisanie.htm) | Число героев 3/6/4, сеть, даты, самостоятельное фанатское дополнение K2.5 от 1С | Доступен |
+| [DTF: история серии](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz) | Герои и классы K1, дружина десяти, отказ от классов в K2, бег/карта/море как новшества K2, репутация и активная пауза K2.5, предел 800×600 и сеть K1 | Доступен |
+| [PandoraKvest: рецензия K2](https://pandorakvest.ru/text/49) | Сравнение 2003 года с K1: бег/скорость, отсутствие паузы приказов, ночь, строительство/мастера, настройки спутников | Доступен |
+| [StopGame: K2.5](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy) | Фанатская разработка, издатель 1С, завязка, фракция, масштаб, изменение развития | Доступен |
+| [Marisa-Chan/Slavik](https://github.com/Marisa-Chan/Slavik) | Только чтение: счётчик суток, фазы, настройка смены суток, множитель скорости K1; ссылки закреплены на [cf5a332](https://github.com/Marisa-Chan/Slavik/tree/cf5a3320dc93859e3dc51f37ee823fed30f399b6), код не копируется | Доступен |
+| [MobyGames: Legend of the North: Konung](https://www.mobygames.com/game/3325/legend-of-the-north-konung/) | Планировались технические сведения K1 | **Недоступен**, 403; утверждения выше на него не опираются |
+| [Cyclowiki: K2.5](https://www.cyclowiki.org/wiki/) | Планировался список героев K2.5 | **Недоступен**, 404; число героев взято из DTF/gospitaliers |
+| Страница каталога ag.ru о K2.5 | Планировались герои и требования | **Недоступна**, перенаправляет на 404; не использована |
 
-Our own observations are limited to `original/k1/` (never committed) and to what our
-parsers report: file names and sizes, record layout, counts, and the readme shipped with
-the ENG edition. Game texts, sprites and renders stay out of the repository.
+Собственные наблюдения ограничены original/k1/ и результатами парсеров: имена/размеры файлов, структура записей, количества и readme ENG. Игровые тексты, спрайты и рендеры не попадают в репозиторий.
 
-**Engine identity is not claimed.** Nothing above says that K1, K2 and
-K2.5 share an engine; the shared base of 2.5 with 2 is a published statement about
-the product, and the relation of part 1 to part 2 remains the hypothesis described at the
-[series overview](series.md).
+**Общий движок не утверждается.** Общая база K2.5 и K2 — опубликованное свойство продукта. Отношение движков K1 и K2 остаётся гипотезой из [обзора серии](series.md).

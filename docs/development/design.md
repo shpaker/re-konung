@@ -1,147 +1,141 @@
-# Product design principles
+<a id="product-design-principles"></a>
 
-How the player-facing experience of re-konung is decided: what each source of
-inspiration is authoritative for, and what is deliberately not borrowed. This is
-the canonical statement of those principles — other documents link here instead of
-repeating them. Structure and component boundaries are [../ARCHITECTURE.md](../../ARCHITECTURE.md);
-rules of work are [../AGENTS.md](../../AGENTS.md).
+# Принципы продукта
 
-These are project decisions, not findings about the original, so the confidence
-markers of [the reverse-engineering loop](../../AGENTS.md) do not apply to them. Where
-a principle quotes what the original does, that fact keeps its own marker in the
-document that recovered it (for example [k1/creatures.md](../research/k1/creatures/README.md)).
+Как принимаются решения о пользовательском опыте re-konung: за что отвечает
+каждый источник вдохновения и что намеренно не заимствуется. Это основной
+документ принципов; остальные ссылаются сюда. Структура и границы компонентов —
+в [архитектуре](../../ARCHITECTURE.md), правила работы — в [AGENTS.md](../../AGENTS.md).
 
-## The two references
+Это решения проекта, а не открытия об оригинале; отметки уверенности
+[цикла исследования](../../AGENTS.md) к ним не применяются. Если принцип
+ссылается на поведение оригинала, факт сохраняет собственную отметку
+на странице исследования, например [существ](../research/k1/creatures/README.md).
 
-Two sources, two non-overlapping roles:
+<a id="the-two-references"></a>
 
-- **The original «Князь» is the source of the game.** Gameplay rules, content,
-  atmosphere and visual identity come from the original files and from behavior
-  recovered by the reverse-engineering loop. A rule that has not been confirmed is
-  marked unknown in `docs/` and left unimplemented, never replaced by an invented
-  one — the rules of [../AGENTS.md](../../AGENTS.md), "Reverse engineering", apply in
-  full.
-- **The modern CRPGs of Larian Studios are the reference for the experience.**
-  First of all **Baldur's Gate 3** and **Divinity: Original Sin 2**. They define
-  what "good" means for how the game is controlled, how the world is presented and
-  how an interface behaves — the bar a design decision is measured against, not a
-  thing to reproduce.
+## Два ориентира
 
-The goal follows from both: a modern, responsive interface a player understands at
-once, keeping the character of the original. The interface is not a preservation
-project, and neither is the engine — the same stance as
-[../AGENTS.md](../../AGENTS.md), "Priority: modern experience".
+У источников разные роли:
 
-## What the Larian reference covers
+- **Оригинальный «Князь» — источник самой игры.** Правила, содержимое,
+  атмосфера и визуальная узнаваемость берутся из файлов и поведения,
+  восстановленного исследованием. Неподтверждённое правило отмечается
+  в `docs/` как неизвестное и не реализуется по догадке. Полностью действуют
+  правила [AGENTS.md](../../AGENTS.md#reverse-engineering).
+- **Современные CRPG Larian Studios — ориентир пользовательского опыта.**
+  Прежде всего **Baldur’s Gate 3** и **Divinity: Original Sin 2**. Они задают
+  уровень управления, представления мира и поведения интерфейса, по которому
+  оценивается решение, а не образец для копирования.
 
-A design decision about any of these is evaluated against the reference rather than
-against what was possible on the hardware of 1999:
+Цель — современный отзывчивый интерфейс, понятный сразу и сохраняющий
+характер оригинала. Интерфейс и движок не обязаны воспроизводить технические
+ограничения 1999 года.
 
-| Area | The question the reference answers |
+<a id="what-the-larian-reference-covers"></a>
+
+## Область ориентира Larian
+
+Эти решения оцениваются по современному опыту, а не по возможностям старого железа:
+
+| Область | На какой вопрос отвечает ориентир |
 |---|---|
-| Controls | Which input does what, and how a player discovers it: which device leads, what each button and modifier means, whether actions can be rebound — patterns weighed against the reference, none of them fixed here |
-| Camera | Placement, edge behavior, zoom that stays readable at a pixel-art scale, follow and return to the party |
-| World interaction | Hovering a cell or object, click-to-move, reachable-vs-unreachable feedback, cursor state under load |
-| Selection | Single and group selection, selection feedback that survives a busy scene, what a right-click means when several things are under the pointer |
-| HUD | What is on screen at all, where it lives, what is always visible and what is summoned |
-| Inventory | Screens and flows for equipping, moving, stacking and using items, comparison of gear |
-| Dialogues | Reading pace, who speaks, choices and their legibility |
-| Journals | Quests, known characters and places, anything the player needs to recall later |
-| Tooltips | What a tooltip promises, when it appears, how much it holds |
-| Feedback | Whether every action says immediately that it was heard: cursor, sound, animation, the marker that something is in progress |
+| Управление | Как обнаруживается действие, какое устройство основное, что значат кнопки/модификаторы, можно ли переназначить ввод; конкретные привязки здесь не закреплены |
+| Камера | Положение, поведение у края, читаемый масштаб пиксельной графики, следование за отрядом и возврат к нему |
+| Взаимодействие с миром | Наведение на клетку/объект, движение по нажатию, обратная связь о достижимости, курсор под нагрузкой |
+| Выделение | Один персонаж и группа, заметность в насыщенной сцене, смысл правой кнопки при нескольких объектах под указателем |
+| HUD | Что вообще показывается, где находится, что видно постоянно и что вызывается отдельно |
+| Инвентарь | Экипировка, перемещение, стопки и использование предметов, сравнение снаряжения |
+| Диалоги | Темп чтения, говорящий, варианты ответа и их читаемость |
+| Журналы | Задания, известные персонажи/места, сведения для последующего обращения |
+| Подсказки | Содержание, момент появления, объём |
+| Обратная связь | Немедленное подтверждение каждого действия: курсор, звук, анимация, признак выполнения |
 
-## What is not borrowed
+<a id="what-is-not-borrowed"></a>
 
-A reference is not a specification, and nothing here is a requirement to implement
-everything Baldur's Gate 3 has:
+## Что не заимствуется
 
-- **No copies.** No interface layouts, icons, sprites, fonts, sounds, texts or any
-  other asset of another game — the repository already distributes no game content
-  at all ([../AGENTS.md](../../AGENTS.md), "Copyrighted content").
-- **No foreign presentation.** «Князь» stays 2D pixel art with its isometric
-  look; the reference games are 3D and that part of them says nothing to us.
-- **No foreign systems.** D&D rules, turn-based combat, classes, dice and the rest
-  of another game's design are not mechanics to port. Combat, inventory and
-  dialogues come from the original, once they are recovered; until then they stay
-  `[ ]` in [../ARCHITECTURE.md](../../ARCHITECTURE.md).
-- **No invented original behavior.** "A modern CRPG does it this way" never becomes
-  evidence that the original did.
+Ориентир не является спецификацией и не требует реализовать всё из Baldur’s Gate 3:
 
-## Where the principles apply
+- **Без копирования.** Макеты, иконки, спрайты, шрифты, звуки, тексты и другие
+  материалы чужих игр не копируются. Репозиторий вообще не распространяет
+  игровой контент ([AGENTS.md](../../AGENTS.md#copyrighted-content)).
+- **Без чужого визуального формата.** «Князь» остаётся изометрической
+  2D пиксельной игрой; трёхмерность ориентиров к нему не переносится.
+- **Без чужих игровых систем.** D&D, пошаговый бой, классы, броски и прочие
+  системы другой игры не переносятся. Бой, инвентарь и диалоги берутся
+  из восстановленных правил оригинала; до этого они отмечены как
+  нереализованные в [архитектуре](../../ARCHITECTURE.md).
+- **Без выдуманного поведения оригинала.** Современная CRPG никогда
+  не служит доказательством того, что так делал оригинал.
 
-- **The player program first: `kn-player` with its frontend `kn-fe-player`.** The
-  player-facing game is what these principles govern — the camera, input, HUD,
-  inventory, dialogues and journals, built on the shared mechanisms `kn-render`,
-  `kn-input` and `kn-ui` (layers 01–03 of [../ARCHITECTURE.md](../../ARCHITECTURE.md)).
-- **The viewer — `kn-viewer` with `kn-fe-viewer` — stays a development tool.** Its
-  read-only status names what it never does: it writes no game file and is not a
-  smaller player, so it gains no HUD, inventory or dialogue UI
-  ([../ARCHITECTURE.md](../../ARCHITECTURE.md)). It is not static: it drives the
-  creature simulation, animates creature actions and behavior and toggles overlays
-  exactly so a person can see what the data means. It shares the camera, input and
-  visual-feedback principles, so that both programs feel like one engine — the
-  stepwise, pixel-exact wheel zoom of the viewer is the existing example of that
-  shared behavior.
+<a id="where-the-principles-apply"></a>
 
-## The UI foundation
+## Где действуют принципы
 
-Both programs are skinned by one design system — the crate
-[`kn-ui`](../../crates/frontend/bevy/ui) — so the viewer a developer opens and the
-game a player runs look like the same engine. What it fixes:
+- **Прежде всего игра: `kn-player` и `kn-fe-player`.** Камера, ввод, HUD,
+  инвентарь, диалоги и журналы используют общие механизмы `kn-render`,
+  `kn-input`, `kn-ui` — слои 01–03 [архитектуры](../../ARCHITECTURE.md).
+- **Просмотрщик `kn-viewer` / `kn-fe-viewer` остаётся инструментом разработки.**
+  Он не пишет игровые файлы и не получает игровой HUD, инвентарь или диалоги.
+  При этом он запускает симуляцию существ, показывает анимацию действий
+  и поведения, переключает оверлеи для понимания данных. Камера, ввод
+  и обратная связь следуют общим принципам, чтобы оба приложения ощущались
+  одним движком. Пример — ступенчатый попиксельный zoom колесом.
 
-- **Palette.** Dark, warm-neutral surfaces with a single muted amber accent;
-  the values live in kn-ui's `palette` and are not duplicated elsewhere.
-- **Type.** PT Sans, bundled with the crate: one family covering full Cyrillic
-  and Latin, setting every screen — the viewer's dev panel included, since
-  `KonungUiPlugin` rewrites every control font (composite interiors Feathers
-  composes itself among them) to PT Sans; the viewer's captions stay English
-  because it is a development tool.
-- **Scales.** Spacing and typography steps come from kn-ui, not from
-  per-panel improvisation.
-- **Controls.** Feathers widgets composed through kn-ui helpers — adopted, not
-  re-implemented — with explicit states (hover, pressed, disabled, checked,
-  focus ring) and keyboard navigation as first-class.
-- **Minimalism.** Minimalism in presentation, not in information. No
-  decorative noise: compact panels, flat surfaces, screen space belongs to
-  the world. Presentation is minimal so the content reads; the content never
-  shrinks to earn the style — an interface of re-konung carries no less
-  information than the original Konung did (its facts come from `docs/`),
-  organized the way the reference organizes it: a clear hierarchy, side-by-side
-  comparison, a detail panel over progressive disclosure. A screen that
-  reduces the original's facts to three buttons is a regression, not a
-  restyle.
+<a id="the-ui-foundation"></a>
 
-The UI is deliberately **not** a copy of the original Konung interface — the
-stance of [../AGENTS.md](../../AGENTS.md), "Priority: modern experience". The
-original supplies the game's rules, content and visual identity, which stays
-2D isometric pixel art; the interface follows the modern reference above.
+## Основа интерфейса
 
-### Menus and settings — the first customers
+Оба приложения используют одну дизайн-систему —
+[`kn-ui`](../../crates/frontend/bevy/ui):
 
-The player's shell (main menu, settings, loading) is where the foundation
-meets the product:
+- **Палитра.** Тёмные тёплые нейтральные поверхности, один приглушённый
+  янтарный акцент; значения находятся в `palette` kn-ui и не дублируются.
+- **Шрифт.** Встроенный PT Sans с полной кириллицей и латиницей.
+  `KonungUiPlugin` заменяет шрифт каждого элемента, включая внутренности
+  составных Feathers-контролов. Подписи просмотрщика остаются английскими:
+  это инструмент разработки.
+- **Масштабы.** Ступени отступов и типографики берутся из kn-ui,
+  а не подбираются отдельно для каждой панели.
+- **Элементы управления.** Виджеты Feathers собираются через помощники kn-ui,
+  а не реализуются заново. Состояния наведения, нажатия, недоступности,
+  отметки и фокуса явные; клавиатурная навигация обязательна.
+- **Минимализм оформления, не информации.** Компактные панели и плоские
+  поверхности без декоративного шума оставляют место миру. Интерфейс
+  не должен содержать меньше сведений, чем оригинал: факты берутся из `docs/`,
+  подача — ясная иерархия, сравнение рядом, панель подробностей вместо
+  сокрытия сведений за последовательными раскрытиями. Свести факты оригинала
+  к трём кнопкам — регрессия, а не смена стиля.
 
-- **Two languages from the first day.** Russian and English — the editions
-  the project studies — set in PT Sans everywhere, native names in the
-  language picker, and the settings screen previews the draft language live
-  while the rest of the interface keeps the applied one until a save lands.
-- **Settings hold only what works.** Language, fullscreen, vsync — each is
-  really applied and really persisted; nothing decorative. Saving is honest:
-  a failure keeps the draft for a retry, rolls the runtime back, and says
-  what happened in one line.
-- **The menu is a door, not a lobby.** The game's own name, three actions,
-  one line of failure if the last session did not build; the world gets the
-  screen back the moment a session exists.
-- **The player is not the viewer.** The viewer gains none of this: it stays a
-  read-only development tool sharing only the design system.
+Интерфейс намеренно отличается от старого. Оригинал поставляет правила,
+контент и узнаваемую изометрическую 2D графику; способ взаимодействия
+ориентируется на современный опыт.
 
-## Applying them
+<a id="menus-and-settings--the-first-customers"></a>
 
-When a new game interface or control is designed, name the reference the decision
-was measured against, in the ticket or in the document that records it. Reproducing
-a 1999 UI limitation — a control that hides a state, a click that does nothing
-visible, an action whose cost is invisible — needs a reason, not inertia; the
-original's artificial caps are not reproduced as a matter of policy. Where the
-result deliberately differs from the original, the divergence is written into
-`docs/` beside the fact about the original, as [../AGENTS.md](../../AGENTS.md)
-requires, so that it reads as intentional.
+### Меню и настройки — первые потребители
+
+Оболочка игры — главное меню, настройки, загрузка — применяет основу на практике:
+
+- **Два языка сразу.** Русский и английский, как у исследуемых изданий.
+  Везде PT Sans, названия языков на самих языках. Экран настроек показывает
+  черновой язык сразу, остальной интерфейс сохраняет применённый до записи.
+- **Только работающие настройки.** Язык, fullscreen, vsync действительно
+  применяются и сохраняются. Ошибка сохраняет черновик для повтора,
+  откатывает параметры выполнения и объясняется одной строкой.
+- **Меню — вход в игру.** Название игры, три действия, строка ошибки
+  предыдущей неудачной сессии; как только сессия готова, экран возвращается миру.
+- **Просмотрщик не получает игровую оболочку.** Он разделяет дизайн-систему,
+  оставаясь инструментом разработки только для чтения.
+
+<a id="applying-them"></a>
+
+## Применение
+
+При разработке интерфейса или управления укажите в задаче либо документе,
+с каким ориентиром сравнивалось решение. Для повторения старого ограничения —
+скрытого состояния, нажатия без видимой реакции, действия с невидимой ценой —
+нужна причина. Искусственные пределы оригинала по умолчанию не воспроизводятся.
+Намеренное отличие записывается в `docs/` рядом с исходным фактом,
+как требует [AGENTS.md](../../AGENTS.md), чтобы было понятно, что оно осознанно.

@@ -1,89 +1,112 @@
-# Rust builds and CI
+<a id="rust-builds-and-ci"></a>
 
-## Build profiles
+# Сборка Rust и CI
 
-Three profiles (`crates/Cargo.toml`) with separate jobs; the local development loop never builds `release`.
+<a id="build-profiles"></a>
 
-| Profile | Runs | Own code | Dependencies |
+## Профили сборки
+
+Три профиля в `crates/Cargo.toml` разделяют задачи. Обычный цикл локальной
+разработки использует `dev-runtime`; `release` запускается явно для замеров
+и отдельных проверок.
+
+| Профиль | Где используется | Наш код | Зависимости |
 |---|---|---|---|
-| `dev` | `just cargo-test`, `just cargo-lint`, prek hooks (pre-commit clippy, pre-push) | opt-level 0, full debug info | opt-level 0 |
-| `dev-runtime` | `just viewer`, `just game` | opt-level 1, `debug = "line-tables-only"` | opt-level 3, build scripts and proc macros too (`build-override`) |
-| `release` | `just viewer-release`, `just game-release`, `just check-maps`, manual benchmarks, release artifacts | opt-level 3 | opt-level 3 |
+| `dev` | `just cargo-test`, `just cargo-lint`, хуки prek: clippy перед коммитом, проверки перед push | opt-level 0, полная отладочная информация | opt-level 0 |
+| `dev-runtime` | `just viewer`, `just game` | opt-level 1, `debug = "line-tables-only"` | opt-level 3, включая build scripts и proc macros (`build-override`) |
+| `release` | `just viewer-release`, `just game-release`, `just check-maps`, ручные замеры, артефакты релиза | opt-level 3 | opt-level 3 |
 
-`dev-runtime` exists because Bevy is only usable at dependency opt-level 3, while the edit-rebuild loop needs own code to compile fast. It was measured on this machine (Windows, rustc 1.99, warm cache, one-line edit; the first measurement of a case is dropped when the first run carries a one-off cost):
+На Ubuntu требуются системные библиотеки, перечисленные в действующем CI:
 
-| Warm loop | `release` (before) | `dev-runtime` static | + rust-lld | + bevy_dylib |
+```sh
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+    g++ pkg-config libx11-dev libxkbcommon-x11-0 libxkbcommon-dev \
+    libwayland-dev libasound2-dev libudev-dev
+```
+
+`dev-runtime` нужен потому, что Bevy требует оптимизированных зависимостей,
+а наш код должен быстро пересобираться. Исторический замер: Windows,
+rustc 1.99, прогретый кеш, правка одной строки; первый результат исключался,
+если содержал разовые затраты:
+
+| Прогретый цикл | `release` до изменений | `dev-runtime`, статически | + rust-lld | + bevy_dylib |
 |---|---|---|---|---|
-| edit in `kn-render` → viewer binary | 7.6 s | 6.8 s | 5.9 s | **2.2 s** |
-| edit in the viewer binary → relink | 4.2 s | 7.5 s | 4.5 s | **1.0 s** |
-| no-op | 0.3 s | 0.3 s | 0.4 s | 0.4 s |
+| Правка `kn-render` → бинарный файл просмотрщика | 7,6 с | 6,8 с | 5,9 с | **2,2 с** |
+| Правка бинарного крейта → перелинковка | 4,2 с | 7,5 с | 4,5 с | **1,0 с** |
+| Без изменений | 0,3 с | 0,3 с | 0,4 с | 0,4 с |
 
-Three levers, each measured:
+Три измеренных приёма:
 
 - **rust-lld** (`.cargo/config.toml`, `[target.x86_64-pc-windows-msvc] linker = "rust-lld"`,
-  `-C linker-flavor=lld-link`). Bundled with the toolchain (rustc ≥ 1.70), nothing to install;
-  CI is ubuntu-latest and the section does not touch it. Applies to every local Windows
-  build, including dev test binaries. Adding rustflags rebuilds every cached unit once
-  (~2.5 min per profile); delete the file to fall back to `link.exe`.
-- **`debug = "line-tables-only"`** for `dev-runtime`: PDB writing is the Windows link cost,
-  backtraces keep file and line. Not measured against `debug = 2` separately — with the two
-  levers below the relink is 1 s anyway.
-- **`bevy/dynamic_linking`** behind the `dynamic` feature of `kn-fe-viewer`/`kn-fe-player`,
-  passed by the `viewer`/`game` recipes. Bevy moves into `bevy_dylib.dll` (137 MB in
-  `crates/target/dev-runtime/deps`), the app binary links in ~1 s. Both windows verified on
-  Windows/Vulkan. Caveats: the exe only starts through `cargo run`/`just` (the DLL is found
-  via the `deps` directory on the PATH cargo sets); launching it directly needs the DLL
-  copied next to it. Own code must stay at opt-level ≤ 1 — true for `dev-runtime`. The
-  feature is opt-in per recipe: drop `--features …/dynamic` to link statically.
+  `-C linker-flavor=lld-link`). Входит в toolchain (rustc ≥ 1.70); установка
+  не нужна. Секция действует на Windows, включая dev-тесты, не на Linux CI.
+  Добавление rustflags один раз пересобирает кеш всех единиц (~2,5 мин на профиль).
+  Удаление этой настройки возвращает `link.exe`.
+- **`debug = "line-tables-only"`** для `dev-runtime`: запись PDB — часть
+  стоимости линковки Windows; backtrace сохраняет файл и строку.
+  Отдельного сравнения с `debug = 2` не было: вместе с остальными приёмами
+  перелинковка уже занимает 1 с.
+- **`bevy/dynamic_linking`** за feature `dynamic` крейтов `kn-fe-viewer`/`kn-fe-player`,
+  включаемой рецептами `viewer`/`game`. Bevy уходит в `bevy_dylib.dll`
+  (137 МБ в `crates/target/dev-runtime/deps`), приложение линкуется за ~1 с.
+  Оба окна проверены на Windows/Vulkan. EXE запускается через `cargo run`/`just`,
+  которые добавляют deps в PATH; прямому запуску нужна DLL рядом с EXE.
+  Наш код должен оставаться на opt-level ≤ 1, как в `dev-runtime`.
+  Уберите `--features …/dynamic`, чтобы линковать статически.
 
-`just check-maps` intentionally remains on `release`: it is headless parsing, fully CPU-bound
-in own code (no Bevy rendering), and runs an order of magnitude slower in `dev-runtime`
-(measured 77 s for all 50 RUS maps; ~5 s in release). This exception is the only place where
-the release profile is still needed locally — every viewer/player recipe switched to dev-runtime.
+`just check-maps` намеренно использует `release`: безоконный разбор ограничен
+процессором и нашим кодом, без рендера Bevy. В `dev-runtime` он на порядок
+медленнее: исторически 77 с для полного набора 50 номеров RUS против ~5 с
+в release. Обычные `viewer`/`game` используют `dev-runtime`, явные варианты
+`*-release` и ручные замеры сохраняются.
 
-Bevy features are declared once in `[workspace.dependencies]` with `default-features = false`
-and only what both apps use: 2D sprites, Feathers UI, text with the embedded default font,
-picking, winit. The default 3D/PBR/glTF/audio/gizmos/anti-alias/post-process chain is off
-(no code references to it — grep over `crates/`); what remains of `bevy_gizmos`, `bevy_gilrs`,
-`bevy_scene`, `bevy_animation`, `bevy_state` comes in through `bevy_feathers` implications.
-Both windows verified after the cut; the regression found during the audit was the missing
-`bevy_ui_render`/`ui_bevy_render` (the Feathers panel panics with `DrawFunctions<TransparentUi>
-must be added` without them). The feature set lives in one place now, and cargo unifies it
-across all five Bevy crates, so an addition in one crate cannot silently re-enable defaults
-for the others.
+Возможности Bevy объявлены один раз в `[workspace.dependencies]` с
+`default-features = false`: 2D-спрайты, Feathers UI, текст со встроенным шрифтом,
+picking, winit. Цепочка 3D/PBR/glTF/audio/gizmos/anti-alias/post-process
+по умолчанию выключена: ссылок на неё в нашем коде нет. Оставшиеся
+`bevy_gizmos`, `bevy_gilrs`, `bevy_scene`, `bevy_animation`, `bevy_state`
+приходят через зависимости `bevy_feathers`. После сокращения проверены оба окна.
+Обнаруженная регрессия — отсутствие `bevy_ui_render`/`ui_bevy_render`:
+без них панель Feathers паникует с `DrawFunctions<TransparentUi> must be added`.
+Единый набор возможностей Cargo объединяет для всех пяти Bevy-крейтов;
+изменение одного не должно незаметно включать стандартный набор остальных.
 
-sccache is optional, not part of the setup: `RUSTC_WRAPPER=sccache` (after installing it
-separately) shares compiled dependencies between the agent worktrees, each of which keeps its
-own `crates/target` (the cache is per machine, the target directories stay separate). Without
-it a fresh worktree pays one cold dependency build per profile (≈2.5–3 min each here).
+sccache необязателен и не входит в настройку: после отдельной установки
+`RUSTC_WRAPPER=sccache` позволяет рабочим деревьям использовать общий кеш
+компиляции. У каждого остаётся собственный `crates/target`; без кеша новое
+дерево оплачивает холодную сборку зависимостей каждого профиля
+(в записанном окружении ≈2,5–3 мин).
 
 ## CI (`.github/workflows/ci.yml`)
 
-Measured on GitHub-hosted runners, rustc 1.99.1, 2026-11-13, each row its own run
-(PR #120 runs 43404019876 cold, 43407464572 warm):
+Замеры на GitHub-hosted runners, rustc 1.99.1, 2026-11-13; каждая строка —
+отдельный запуск PR #120: 43404019876 холодный, 43407464572 прогретый.
 
-| Job | Runner | Cold | Warm |
+| Задание | Runner | Холодный | Прогретый |
 |---|---|---|---|
-| `rust` — fmt, clippy, test (`dev`) | ubuntu-latest | 7m32s | 3m56s |
-| `build` — `kn-viewer` + `kn-player`, full link (`dev-runtime`) | ubuntu-latest | 14m50s | 1m39s |
-| `build-windows` — same as `build` | windows-latest | 21m1s | 1m44s |
+| `rust`: fmt, clippy, test (`dev`) | ubuntu-latest | 7 мин 32 с | 3 мин 56 с |
+| `build`: полная линковка `kn-viewer` + `kn-player` (`dev-runtime`) | ubuntu-latest | 14 мин 50 с | 1 мин 39 с |
+| `build-windows`: та же сборка | windows-latest | 21 мин 1 с | 1 мин 44 с |
 
-The `build` job is the PR gate; `build-windows` runs on push to main and `workflow_dispatch` only.
-The same profile measures 1.4× slower on windows-latest than on ubuntu-latest (`cargo build
---timings`: 503 units, 3379 s of rustc in 859 s of wall on Linux against 4635 s in 1204 s on
-Windows), so the gate lives on Linux. A Windows-only regression is caught by the post-merge smoke
-on main, not on the PR — an accepted trade-off; the release path still requires a green main run
-(`version.yml`). Cold build profile is identical on both runners: `bevy_*` crates take 56–58% of
-the rustc time (`bevy_feathers` 141 s, `bevy_render` 137 s, `bevy_ui` and `bevy_sprite_render`
-121 s each on Linux), so the job time hinges on dependency compilation, not on own code
-(`kn-render` compiles in 39 s at opt-level 1).
+`build` — проверка PR; `build-windows` запускается только при push в main
+и `workflow_dispatch`. Тот же профиль на windows-latest оказался в 1,4 раза
+медленнее ubuntu-latest: `cargo build --timings`, 503 единицы, 3379 с rustc
+за 859 с общего времени на Linux против 4635 с за 1204 с на Windows.
+Поэтому проверка PR работает на Linux. Регрессию только Windows ловит сборка
+после слияния в main — принятый компромисс; релиз требует зелёного main
+(`version.yml`). В холодной сборке `bevy_*` занимают 56–58% времени rustc:
+на Linux `bevy_feathers` 141 с, `bevy_render` 137 с, `bevy_ui` и
+`bevy_sprite_render` по 121 с. Основные затраты — зависимости;
+`kn-render` при opt-level 1 компилируется за 39 с.
 
-Dependency compilation is cached with `Swatinem/rust-cache@v2` (`workspaces: crates`): only
-dependencies are cached, workspace crates rebuild every run by design; the job id is part of the
-cache key by default, so the three jobs keep separate caches without extra inputs — measured
-≈1.1 GB (`dev`), ≈0.8 GB (`dev-runtime` Linux), ≈0.7 GB (`dev-runtime` Windows), restore 23–34 s
-per job, and no re-save on an exact key hit. Both build jobs run `--timings` and upload
-`cargo-timing.html` as a run artifact, so every regression in build time is attributable per
-crate. There is no nightly schedule: pushes to main happen several times a day and every green
-main run refreshes the caches; revisit if the cadence drops (GitHub evicts caches after 7 days
-of disuse, and the repo-wide limit is 10 GB).
+Кеш зависимостей — `Swatinem/rust-cache@v2`, `workspaces: crates`.
+Крейты workspace намеренно пересобираются каждый раз; идентификатор задания
+по умолчанию входит в ключ, поэтому три задания имеют отдельные кеши:
+≈1,1 ГБ (`dev`), ≈0,8 ГБ (`dev-runtime` Linux), ≈0,7 ГБ (Windows).
+Восстановление — 23–34 с на задание, точное совпадение ключа не сохраняется повторно.
+Обе сборки запускаются с `--timings` и публикуют `cargo-timing.html` как
+артефакт запуска для разбора затрат по крейтам. Ночного расписания нет:
+при записанной частоте push в main несколько раз в день успешные запуски
+обновляли кеши. При снижении частоты это стоит пересмотреть: GitHub удаляет
+неиспользуемые 7 дней кеши, лимит репозитория в записанной конфигурации — 10 ГБ.

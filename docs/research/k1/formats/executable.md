@@ -1,139 +1,98 @@
-# KONUNG.EXE — embedded tables
+<a id="konungexe--embedded-tables"></a>
 
-Some data lives in the executable: RUS konung.res (PE, renamed by the installer)
-and ENG KONUNG.EXE. Code: `konung/k1/executable.py`, Rust
-`crates/game/k1/k1-data/src/executable.rs`; Rust does not parse the item-name
-tables. Tables are located by structure rather than fixed offsets, which vary
-by edition. Equipment needs two tables, flames a third; text tables supply
-names and menu descriptions. See [characters](../creatures/README.md).
+# KONUNG.EXE — таблицы в исполняемом файле
 
-**Confirmed:** the three graphics tables are found uniquely in both editions
-(`tests/k1/test_graphics.py`), equipment aligns with models and flames with
-objects. We searched independently using Slavik's `WeapArmorItemInfo`
-(`game.h:735-748`) and `EqLookUp1` (`game_data.cpp:115`) as structural references;
-values come from the EXE, not copied reference tables.
+Часть данных игра держит не в ресурсах, а в exe. В RUS это `konung.res` (PE-файл, который установщик переименовал), в ENG — `KONUNG.EXE`. Код — `konung/k1/executable.py`, в Rust — `crates/game/k1/k1-data/src/executable.rs` (без таблиц предметов). Таблицы ищутся по строению, а не по смещению, потому что в изданиях они лежат в разных местах. Две таблицы нужны, чтобы нарисовать снаряжение персонажа ([graph-res.md](graph-res.md)), третья — чтобы анимировать огни ([flames-res.md](flames-res.md)), остальные — имена персонажей и названия предметов и карт («Тексты»). Имена существ и то, как ведёт себя запись персонажа, — в [поведении существ](../creatures/behavior.md).
 
-## Armor and weapon descriptions
+**Статус:** все три таблицы находятся однозначно в обоих изданиях (`tests/k1/test_graphics.py`), а рисунок по ним сходится с игрой: шлемы, доспехи и оружие сидят на моделях, огни горят на своих местах. Источник: искали сами, по структурам из Slavik `game.h:735-748` (`WeapArmorItemInfo`) и `game_data.cpp:115` (`EqLookUp1`); значения читаются из exe, а не берутся из Slavik.
 
-70 consecutive 64-byte records, indexed by Item.info_id ([Game.N](game-state.md)).
+<a id="armor-and-weapon-descriptions"></a>
 
-| Offset | Type | Meaning | Confidence |
+## Описания доспехов и оружия
+
+70 записей по 64 байта подряд. Номер записи — `Item.info_id` предмета ([game-state.md](game-state.md)).
+
+| Смещение | Тип | Смысл | Уверенность |
 |---|---|---|---|
-| 0 | 44 bytes | Zero-padded name, ENG Latin / RUS CP866 | **Confirmed** |
-| 44 | 9 × s16 | Damage and other numeric properties | **By Slavik**; most meanings **unknown** |
-| 62 | s16 | GRAPH.RES equipment set 0–23; −1 means not drawn | **Confirmed** by rendering |
+| 0 | 44 байта | название (ENG — латиница, RUS — CP866), дополнено нулями | подтверждено |
+| 44 | 9 × s16 | урон и другие числа | по Slavik; смысл большинства неизвестен |
+| 62 | s16 | набор снаряжения `GRAPH.RES` (0–23); −1 — не рисуется | подтверждено рендером |
 
-Slavik uses 32-bit numbers and a leading index; the file instead uses 16-bit
-numbers after the name, without an index. Search for 70 records with nonempty
-names followed by zeros and a final set in −1…23. Starts: ENG 0x40F88, RUS
-0x3FD50. Records 42/43 exchange sets between editions: 13,16 versus 16,13.
+В Slavik эта таблица записана 32-битными числами с номером в начале. В exe числа 16-битные, номера нет, а перед ними стоит название. Поиск идёт по строению: 70 записей подряд, у каждой непустое название, за ним только нули, и набор от −1 до 23. Таблица лежит в ENG с `0x40F88`, в RUS — с `0x3FD50`.
 
-## Equipment slot order
+RUS и ENG различаются: у записей 42 и 43 наборы переставлены (13, 16 и 16, 13).
 
-72 rows of six s32 values, each a permutation of equipment slots 0–5. Search
-for all 72 consecutively: ENG 0x4A034, RUS 0x48DFC. The last eight rows give
-direction order without weapons in hands (`EqLookUp1`); reference composition
-uses them. The first 64 are two 4×8 armed sets (`EqLookUp2`, `EqLookUp3`), not
-yet used by that composition path.
+<a id="equipment-slot-order"></a>
 
-## Flame animation ranges
+## Порядок слотов при отрисовке
 
-Seven pairs of s32: inclusive first/last [FLAMES.RES](flames-res.md) frames.
-Consecutive ranges cover 0–73 without gaps: 0–10, 11–21, 22–32, 33–43, 44–54,
-55–59, 60–73. That structure uniquely locates ENG 0x422A0 / RUS 0x41068.
-**Confirmed** by map 17's burning-house render.
+72 строки по 6 × s32, каждая — перестановка слотов `Character.equipment` 0–5. Ищутся как 72 такие строки подряд (ENG с `0x4A034`, RUS с `0x48DFC`). Последние 8 строк — порядок для каждого из 8 направлений, когда оружие не в руках; так рисует Slavik (`EqLookUp1`). Первые 64 — два набора по 4 × 8 для оружия в руках (`EqLookUp2`, `EqLookUp3`); их мы пока не используем.
 
-Slavik stores these in `game_data.cpp:479` but wraps at the last index
-(`game.cpp:1596`), skipping the final frame. We include it because the table
-assigns all 74 frames to a kind; fidelity of that choice remains a **hypothesis**.
+<a id="flame-animation-ranges"></a>
 
-## Texts
+## Анимации огней
 
-Fixed-size text fields followed by zeros, no pointer arrays: base + index ×
-record size. RUS is CP866; ENG is Latin except one name byte interpreted as
-CP866. Text is copyrighted content: display it locally, never embed it in
-fixtures, documentation or reports.
+7 пар по 2 × s32: первый и последний кадр `FLAMES.RES` для каждого вида огня ([flames-res.md](flames-res.md)), оба конца включены. Пары идут подряд и без пропусков, от кадра 0 до последнего (73). По этому строению таблица находится однозначно: в ENG с `0x422A0`, в RUS с `0x41068`. Виды: 0–10, 11–21, 22–32, 33–43, 44–54, 55–59, 60–73. **Подтверждено** рендером: на карте 17 горят дома сожжённой деревни.
 
-Code: Python `parse` (`Texts`, `items`), `character_name`, `item_name`; Rust
-`Texts`, `parse_texts`, `character_name`. Graphics tables remain usable without
-texts. Rust's `Executable::texts_error` preserves the ambiguity reason so
-not searched, missing and ambiguous are distinguishable from `texts == None`.
+В Slavik таблица записана в коде (`game_data.cpp:479`), а анимация переходит на первый кадр, когда номер кадра доходит до последнего (`game.cpp:1596`). Так последний кадр каждого вида не показывается. По таблице все 74 кадра принадлежат какому-то виду, поэтому мы считаем последний кадр частью анимации — **гипотеза**.
 
-### Recognition and parity
+<a id="texts"></a>
 
-A text record in Python, Tiled and Rust must have at least one byte before the
-first zero, every text byte ≥0x20, and only zeros afterwards. A former Rust
-check inspected only the first byte; it was corrected to match Python. No
-checked ENG name contains an interior control byte, so it did not affect those files.
+## Тексты
 
-Equipment-name recognition is deliberately looser: Python `_is_equipment_table`
-and Tiled `isEquipmentTable` inspect the first byte only, so an interior control
-byte must not invalidate an equipment table. Rust uses `equipment_text_start`.
-Python/Rust accept a full unterminated 44-byte name; Tiled rejects it. It does
-not occur in our editions; synthetic test
-`equipment_names_are_checked_looser_than_texts` records that distinction.
+Имена, прозвища и названия лежат в exe записями фиксированной длины: текст, дальше нули до конца поля. Массивов указателей нет: код берёт адрес начала таблицы и прибавляет номер × размер записи. RUS — CP866 (как названия снаряжения), ENG — латиница, кроме одного байта в одном имени, который читается как буква CP866. Если тексты в exe не нашлись однозначно (например, в другом издании), `texts` — `None`, а таблицы снаряжения и огней всё равно читаются: без имён карта рисуется и открывается в Tiled. Код — `executable.parse` (`Texts`, `items`), `character_name`, `item_name`; то же в Rust — `crates/game/k1/k1-data/src/executable.rs` (`Texts`, `parse_texts`, `character_name`), без таблиц предметов. Тексты — чужой контент: они только показываются локально, в документах и тестах их нет.
 
-**Confirmed:** table searches are unique in both editions and all Game.0–2
-references reach filled records (`tests/k1/test_graphics.py`, Rust
-`k1-data/tests/original_graphics.rs`). Our structure/code search agrees with
-Slavik `game_locale.cpp:31-224` counts, without using its strings. The detailed
-ENG census found the name block at 0x45794, 20/30 monster names, all nonzero
-human/nickname records filled, all 56 map names. That census session did not
-repeat RUS measurements; cross-edition tests remain separate evidence. Runtime
-Rust/Python digests compare table ordering/content and every character name
-without writing the strings anywhere.
+<a id="recognition-and-parity"></a>
 
-| Table | Record | Count | RUS | ENG | Index |
+### Распознавание и соответствие эталону
+
+**Признак текстовой записи** общий для всех трёх реализаций — Python, расширения Tiled и Rust: запись подходит, если до первого нуля стоит хотя бы один байт и ни один байт текста не управляющий (все ≥ 0x20), а после первого нуля идут только нули. Управляющий байт в середине текста — уже не текстовая запись. В Rust-порте проверка смотрела только первый байт записи и принимала такие строки; расхождение с эталоном исправлено, на наших файлах оно не проявлялось (записей с управляющим байтом в середине текста в блоке имён ENG нет).
+
+**Признак записей снаряжения — слабее**, и это не оплошность, а различие двух разных проверок в самом эталоне: `_is_equipment_table` (`konung/k1/executable.py`) и `isEquipmentTable` (`tiled/konung/lib/k1.mjs`) смотрят только первый байт имени, управляющий байт в середине таблицу не отбрасывает. Строгий признак из предыдущего абзаца к именам снаряжения применять нельзя: на издании с таким именем Rust отверг бы таблицу, которую эталон принимает, и разбора карты не получилось бы вовсе. В Rust для снаряжения своя проверка — `equipment_text_start`. Единственное расхождение между реализациями: имя, занявшее все 44 байта без терминатора, эталон и Rust принимают, а расширение Tiled отбрасывает. На наших изданиях таких имён нет, случай проверяется синтетикой (`equipment_names_are_checked_looser_than_texts`).
+
+**Статус:** все таблицы находятся по строению однозначно в обоих изданиях, и все ссылки из `Game.0`–`Game.2` попадают в заполненные записи (`tests/k1/test_graphics.py`, для Rust — `crates/game/k1/k1-data/tests/original_graphics.rs`). Источник: искали сами, разбором записей и кода exe; числа записей совпадают с таблицами Slavik `game_locale.cpp:31-224`, тексты Slavik не используются. Наш замер на ENG: блок имён начинается с `0x45794`, как в таблице ниже, названий монстров заполнено ровно 20 из 30, имена и прозвища заполнены, кроме нулевых записей, названия карт — все 56; Rust и Python дают одинаковые состав и порядок строк всех четырёх таблиц и одинаковые имена всех персонажей (сверка дайджестами в рантайме, строки при этом никуда не пишутся). В той сессии подробный подсчёт RUS не повторялся: издание там не было распаковано. Это ограничение исторического замера; тесты обоих изданий — отдельное подтверждение.
+
+| Таблица | Запись | Записей | RUS | ENG | Номер |
 |---|---|---|---|---|---|
-| Monsters | 32 bytes | 30, first 20 filled | 0x4455C | 0x45794 | `(class & 0x7F) − 0x41` |
-| Human names | 32 bytes | 171, record 0 empty | Immediately after monsters | Same block | Character byte 0xD4 |
-| Nicknames | 32 bytes | 21, record 0 empty | Immediately after names | Same block | Byte 0xD5; zero omits nickname |
-| Map names | 40 bytes | 56 | 0x41594 | 0x427CC | Map − 1 |
-| Accessories | 120-byte name + 4 × s16 | 9 | 0x3E2B0 | 0x3F4E8 | Item.info_id |
-| Potions | Same | 14 | 0x3F650 | 0x40888 | Item.info_id |
-| Other items | Same | 54 | 0x46B1C | 0x47D54 | Item.info_id |
-| New-game menu lines | 512 bytes | 20 | 0x4951C | 0x4A754 | Line index |
+| монстры | 32 байта | 30, заполнены первые 20 | `0x4455C` | `0x45794` | `(класс & 0x7F) − 0x41` |
+| имена людей | 32 байта | 171, запись 0 пустая | сразу за монстрами | | байт 0xD4 персонажа |
+| прозвища | 32 байта | 21, запись 0 пустая | сразу за именами | | байт 0xD5 персонажа; 0 — без прозвища |
+| названия карт | 40 байт | 56 | `0x41594` | `0x427CC` | номер карты − 1 |
+| украшения | 120 байт названия + 4 × s16 | 9 | `0x3E2B0` | `0x3F4E8` | `Item.info_id` |
+| зелья | так же | 14 | `0x3F650` | `0x40888` | `Item.info_id` |
+| прочие предметы | так же | 54 | `0x46B1C` | `0x47D54` | `Item.info_id` |
+| строки меню новой игры | 512 байт | 20 | `0x4951C` | `0x4A754` | номер строки |
 
-Monsters/names/nicknames form a 222-record block recognized by filled/empty
-positions. Map names form the unique 56×40 run, including names for absent
-maps. Accessory/potion/other records are 128 bytes with both image indices
-(third/fourth numbers) positive; lengths distinguish the three runs. The four
-numbers are bonus, weight, image and loot image **by Slavik**.
+Монстры, имена и прозвища — один сплошной блок из 222 записей; он ищется по тому, что в нём заполнено и что пусто. Названия карт — единственная серия из 56 записей «текст + нули» по 40 байт; названия есть и у номеров без карты. Украшения, зелья и прочее — три серии 128-байтных записей, у которых обе картинки (третье и четвёртое число) больше 0; серии различаются длиной. Числа после названия — бонус, вес, картинка, картинка клада, по Slavik.
 
-New-game menu texts are the unique 20×512 run (`game_newgame.cpp:276-365`,
-`Locale::NewGameMenu`): 0–2 hero descriptions in screen-box order Dragomir,
-Mikhail, Wolf (Game.N 1,2,0), 3–6 classes, 7–19 hints for attributes, carrying
-capacity, party and skills. A neighboring 19×512 message table starts at RUS
-0x41F1C / ENG 0x43154; it is a separate measured table, not parsed here.
-Rust reads the 20-record series as `Texts::newgame`.
+Строки меню новой игры — единственная серия из 20 записей «текст + нули»
+по 512 байт (`game_newgame.cpp:276-365`, `Locale::NewGameMenu`): 0–2 —
+описания героев в экранном порядке Драгомир, Михаил, Волк (Game.N 1, 2, 0),
+3–6 — четыре занятия, 7–19 — подсказки характеристик, грузоподъёмности,
+отряда и навыков. Рядом отдельная серия из 19 таких записей: общие сообщения
+интерфейса, RUS `0x41F1C`, ENG `0x43154`. Она только измерена, парсер её
+не читает. **Rust читает серию из 20 записей** (`Texts::newgame`).
 
-### Character names
+<a id="character-names"></a>
 
-**Confirmed by EXE-code inspection:** classes 0x41–0x50 use the monster-species
-name; all others, including village women/children from 0x51, use name plus
-space plus a nonzero nickname. Our Game.N census finds one unnamed class-0x51
-villager per file: name/nickname zero, group 31, map 37. Rust tests reproduce
-that count.
+### Имена персонажей
 
-For invalid indices, Python can join an empty part with a space (`name ` or
-` name`); Rust omits empty parts. There is no difference on checked files:
-placed characters' indices resolve, except the villager with both parts empty.
-This distinction matters when interpreting name digests.
+ У классов 0x41–0x50 (бит 0x40, виды 0–15) — название вида из таблицы монстров. У остальных, в том числе у женщин и детей деревень (класс с 0x51), — имя по номеру и, если прозвище не 0, пробел и прозвище. Так собирает имя код exe — **подтверждено** разбором кода. В каждом `Game.N` один житель с именем 0 и прозвищем 0, то есть без имени: это класс 0x51 из отряда 31, он расставлен на карте 37 (наш замер; тест в Rust повторяет то же число).
 
-Python parse loses all texts if accessory/potion/other item tables are missing.
-Rust does not parse those tables and does not require them for character/map
-names. Both editions contain all required tables, so this does not change their
-results.
+Отличие порта в сборке имени: при номере вне таблицы эталон склеивает пустую часть с непустой через пробел — «имя » или « имя», Rust пустую часть опускает. На наших файлах различия нет: у всех расставленных персонажей оба номера указывают в заполненные записи, кроме одного жителя, у которого пусты обе (у обеих реализаций он пуст). Различие записано, потому что имена сверяются дайджестом: без пометки оно выглядело бы как расходимость таблиц.
 
-### Item names
+Отличие порта: в эталоне `parse` теряет тексты целиком, если в exe не нашлись ещё и таблицы предметов (украшения, зелья, прочее). В Rust таблиц предметов пока нет, поэтому `texts` зависит только от блоков имён и названий карт. На обоих известных изданиях это ничем не различается: там находятся и те, и другие.
 
-Item.type_id 0–5 and 12 use armor/weapons; 6–8 accessories; 9 potions; 11 other
-items. Type 10 has no table and does not occur. Type 12 is a quiver: weapon
-records 30–33 name it; concentration stores arrow count (Slavik
-`game_item.cpp:185`). Every owned/loot item of every Game.N resolves a name.
+Потеря текстов не молчит: `Executable::texts_error` хранит сообщение причины (неоднозначный поиск), иначе «не искали», «не нашлось» и «нашлось двояко» дают одно и то же `texts == None`, а для отладки нового издания они разные.
 
-## Not found in EXE data
+<a id="item-names"></a>
 
-The 24 equipment palette indices were not found as bytes, u16 or u32 arrays;
-embedded instructions are a **hypothesis**. Our indices come **by Slavik**
-`resources.cpp:15` (`CharEquipPal`), visually checked for natural equipment colors.
+### Названия предметов
+
+Название предмета выбирается по виду (`Item.type_id`): 0–5 и 12 — таблица доспехов и оружия, 6–8 — украшения, 9 — зелья, 11 — прочее. У вида 10 таблицы нет, в данных он не встречается. Вид 12 — колчан, его названия — записи 30–33 таблицы оружия, а «концентрация» — число стрел (Slavik `game_item.cpp:185`). Названия есть у всех предметов персонажей и кладов во всех `Game.N`.
+
+<a id="not-found-in-exe-data"></a>
+
+## Чего в exe не нашлось
+
+Палитры наборов снаряжения (24 номера) не лежат в данных ни как байты, ни как 16- или 32-битные числа. Скорее всего, они зашиты в код. Номера взяты из Slavik `resources.cpp:15` (`CharEquipPal`) — **по Slavik**, проверено глазами: цвета снаряжения на карте естественные.

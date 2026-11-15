@@ -1,5 +1,13 @@
 # How to contribute
 
+## Documentation language
+
+Project documentation is Russian: `docs/`, root guides and crate READMEs.
+New pages and substantive edits follow that language. Keep commands, paths,
+API names and source citations unchanged when translating. Code, identifiers,
+comments, doc-comments, tests, agent/skill instructions and GitHub-facing files
+remain English; issue and PR descriptions retain the translation rule below.
+
 ## Language of Issues and PRs
 
 Titles and the whole body are English, in both issues and pull requests. The description ends with

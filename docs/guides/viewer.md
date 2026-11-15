@@ -1,8 +1,10 @@
-# Inspect maps in the viewer
+<a id="inspect-maps-in-the-viewer"></a>
 
-[Set up the checkout](setup.md) and [prepare your game files](game-files.md).
-The viewer is a read-only development tool: it inspects and simulates maps;
-editing original files is a [Tiled](tiled.md) task.
+# Просмотр карт
+
+[Подготовьте окружение](setup.md) и [файлы игры](game-files.md).
+Просмотрщик — инструмент разработки только для чтения: он показывает и
+симулирует карты. Редактирование оригинальных файлов выполняется в [Tiled](tiled.md).
 
 ```sh
 just viewer 17
@@ -10,34 +12,39 @@ GAME_DIR=original/k1/eng/game just viewer 4 tutorial
 just viewer-release 17
 ```
 
-Without a map number, the first map of the source opens. Tutorial maps exist in
-ENG only. `GAME_DIR` defaults to `original/k1/rus/game`.
+Без номера открывается первая карта источника. Обучение есть только в ENG.
+По умолчанию `GAME_DIR` равен `original/k1/rus/game`.
 
-## Controls
+<a id="controls"></a>
 
-| Action | Control |
+## Управление
+
+| Действие | Управление |
 |---|---|
-| Choose a map or show overlays | Left panel |
-| Pan | WASD, arrows or left-button drag |
-| Zoom in discrete steps | Mouse wheel / trackpad, outside the panel |
-| Play/pause simulation and animation | Play checkbox or Space |
-| Step one tick forward/back | `.` / `,` |
-| Keep daylight while the clock runs | Constant day checkbox or `N` |
-| Return creatures to their spawn positions | Reset positions |
-| Restart animation and simulation at tick zero | Reset animation |
-| Inspect the day cycle | Time slider and phase presets |
+| Выбрать карту или оверлеи | Левая панель |
+| Переместить камеру | WASD, стрелки или перетаскивание левой кнопкой |
+| Изменить масштаб по ступеням | Колесо мыши / трекпад вне панели |
+| Запустить или приостановить симуляцию и анимацию | Флажок Play или Space |
+| Шаг на один тик вперёд / назад | `.` / `,` |
+| Сохранить дневной свет при работающих часах | Флажок Constant day или `N` |
+| Вернуть существ на начальные позиции | Reset positions |
+| Начать анимацию и симуляцию с нулевого тика | Reset animation |
+| Посмотреть суточный цикл | Ползунок времени и готовые позиции |
 
-A new map fits the camera to its content. Overlays do not rebuild the map or
-reset playback. Hidden creature overlays hide names too. A map switch starts an
-independent simulation; the constant-day preference survives until the viewer
-exits. A paused special resumes where it stopped. Reset positions preserves the
-clock, camera and pause state; Reset animation starts the sequence again.
+При открытии карты камера охватывает её содержимое. Оверлеи не пересобирают
+карту и не сбрасывают воспроизведение. Скрытие существ скрывает и их имена.
+Смена карты создаёт независимую симуляцию; выбор постоянного дня сохраняется
+до выхода из просмотрщика. Приостановленная особая анимация продолжается
+с того же места. Reset positions сохраняет часы, камеру и паузу;
+Reset animation начинает последовательность заново.
 
-The panel distinguishes visible sprites from all assembled sprites and reports
-texture failures. Creature labels show `#<id> <name>` when a name exists.
-An invalid CLI map number fails instead of silently choosing another map.
+Панель различает видимые и все собранные спрайты и сообщает об ошибках текстур.
+Подпись существа имеет вид `#<id> <name>`, если имя известно.
+Неверный номер карты в CLI приводит к ошибке, а не к выбору другой карты.
 
-## Headless checks
+<a id="headless-checks"></a>
+
+## Проверки без окна
 
 ```sh
 just check-maps
@@ -46,10 +53,10 @@ cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- \
     --game-dir original/k1/rus/game check --all --format json
 ```
 
-`check` needs no window or GPU context and returns nonzero for map construction
-or texture-decode errors. Use `check --map 1` to select one map.
-The viewer also exposes `simulate`; `cargo run --release --manifest-path
-crates/Cargo.toml -p kn-viewer -- --help` lists its options.
+`check` не создаёт окно или GPU-контекст и возвращает ненулевой код при ошибке
+сборки карты или декодирования текстур. Для одной карты используйте `check --map 1`.
+Есть также команда `simulate`; её параметры доступны через
+`cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- --help`.
 
-For benchmark flags, debug variables and measured frame-time gates, see
-[viewer implementation](../development/rust/viewer.md).
+Флаги замеров, переменные диагностики и результаты проверки времени кадра —
+в [устройстве просмотрщика](../development/rust/viewer.md).

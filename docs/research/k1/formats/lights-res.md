@@ -1,44 +1,41 @@
-# LIGHTS.RES — tile-light masks
+<a id="lightsres--tile-light-masks"></a>
 
-145472 bytes, identical in RUS and ENG. Code: `konung/k1/lights_res.py`
-(`parse`, `to_rgba`). Each map's [LIGHTS.N](map.md#lightsn) selects the masks.
+# LIGHTS.RES — маски света
 
-```sh
+Маски освещения тайлов: 145472 байта, одинаковые в RUS и ENG.
+Код — konung/k1/lights_res.py (parse, to_rgba). Соответствие тайла и маски
+задаёт LIGHTS.N карты ([формат карты](map.md)). Отображение света:
+
+```bash
 uv run konung k1 map original/k1/rus/game out/k1/maps -n 1 --lights
 ```
 
-**Confirmed:** the mask sizes described by Slavik sum to the file size
-(`tests/k1/test_maps.py`); the render shows smooth light patches without gaps.
-Sources: Slavik `resources.cpp:350-377` (`LoadLightsRes`), `game.cpp:996-1003`,
-checked on our files.
+**Статус:** раскладка **подтверждена**: сумма размеров масок по Slavik даёт ровно размер файла (`tests/k1/test_maps.py`), а свет на рендере ложится плавными пятнами без щелей. Источник: Slavik `resources.cpp:350-377` (`LoadLightsRes`) и `game.cpp:996-1003`, проверено на наших файлах.
 
-## Structure
+<a id="structure"></a>
 
-No header; one brightness byte per pixel.
+## Структура
 
-| Offset | Size | Meaning | Confidence |
+Заголовка нет, байт на пиксель — яркость:
+
+| Смещение | Размер | Смысл | Уверенность |
 |---|---|---|---|
-| 0 | 64 × 64 | Mask | **Unknown** purpose: Slavik reads but never uses it |
-| 4096 | 64 × 43 | Mask | **Unknown**, same limitation |
-| 6848 | 19 × 114 × 64 | Tile masks | **Confirmed** |
+| 0 | 64 × 64 | маска | назначение **неизвестно**: Slavik её читает, но не использует |
+| 4096 | 64 × 43 | маска | то же |
+| 6848 | 19 × 114 × 64 | маски тайлов | подтверждено |
 
-Values range 0–43, or 0–31 in tile masks. Slavik converts them by
-`255 / 100 · v`; `to_rgba` does the same. This intensity mapping is a **hypothesis**.
+Яркость в файле — от 0 до 43, у масок тайлов — до 31. Slavik растягивает её в 0–255 как `255 / 100 · v`; так же делает `to_rgba`, это **гипотеза**.
 
-## Tile masks
+<a id="tile-masks"></a>
 
-A mask fills the 114 × 64 rectangle. The game selects it before drawing the
-ground and upper tile, so only their rhombus receives its light (Slavik
-`game.cpp:996-1003`). Decorations and objects draw later; their exclusion from
-this tile light was initially **hypothetical**, without an in-game check.
-The later byte-level [lighting research](../lighting.md) distinguishes tile
-light from the ambient fade that reaches other surfaces. `to_rgba` clears alpha
-outside the rhombus.
+## Маски тайлов
 
-Mask 0 is almost uniform (29–31 across the rhombus); other masks fall to zero
-at their patch's edge, giving smooth transitions between tiles.
+Маска заполняет весь прямоугольник 114 × 64, а не только ромб тайла. Игра задаёт маску перед тем, как нарисовать тайлы земли и верхнего слоя клетки, поэтому свет достаётся только пикселям этих тайлов, то есть ромбу (Slavik `game.cpp:996-1003`). Декорации и объекты рисуются позже и, по Slavik, не светятся — **гипотеза**, в игре не сверено. `to_rgba` делает маску прозрачной вне ромба.
 
-**By Slavik:** ground light is enabled in evening windows (`CalculateLight`,
-`game.cpp:1764-1880`); the mask adds the light color (`game.cpp:975-983`). Python
-and Tiled draw a warm-yellow indication immediately above the ground and below
-decorations/objects. It indicates light placement rather than a final night image.
+Маска 0 почти равномерна (яркость 29–31 по всему ромбу), у остальных яркость спадает до 0 к краю пятна. Поэтому соседние тайлы с разными масками дают плавное пятно.
+
+По Slavik свет земли включается в вечерних фазах цикла (CalculateLight,
+game.cpp:1764-1880), маска добавляет цвет света к тайлу (game.cpp:975-983).
+Точные окна и позднейшая побайтовая проверка описаны в [исследовании освещения](../lighting.md).
+В рендерере Python и Tiled свет нарисован тёплым жёлтым над землёй, под декорациями
+и объектами: это показывает расположение света, не вид ночной сцены.

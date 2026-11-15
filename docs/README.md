@@ -1,27 +1,38 @@
-# Documentation
+<a id="documentation"></a>
 
-Choose a task. Guides describe use; development pages explain our implementation;
-research records evidence about the original. [Architecture](../ARCHITECTURE.md)
-owns the component model; [AGENTS.md](../AGENTS.md) owns agent obligations.
+# Документация
 
-## Use the tools
+Выберите задачу. Руководства объясняют использование, раздел разработки — нашу
+реализацию, исследования — факты об оригинале. [Архитектура](../ARCHITECTURE.md)
+описывает компоненты, [AGENTS.md](../AGENTS.md) — обязательные правила для агентов.
+Язык проектной документации — русский; команды, пути, имена API и ссылки на
+источники сохраняются в исходном виде.
 
-- [Set up a checkout](guides/setup.md) and [prepare your game files](guides/game-files.md).
-- [Run the player](guides/player.md) and create a character.
-- [Edit maps in Tiled](guides/tiled.md), manually or through an agent.
-- [Inspect maps in the viewer](guides/viewer.md), including headless checks.
+<a id="use-the-tools"></a>
 
-## Develop the project
+## Пользоваться инструментами
 
-[Development index](development/README.md): product principles, builds, testing,
-agent workflow, releases and Tiled internals.
+- [Подготовить окружение](guides/setup.md) и [файлы игры](guides/game-files.md).
+- [Запустить игру](guides/player.md) и создать персонажа.
+- [Редактировать карты в Tiled](guides/tiled.md) вручную или через агента.
+- [Изучать карты в просмотрщике](guides/viewer.md), в том числе без окна.
 
-[Rust topics](development/rust/README.md): data and scenes, movement, simulation,
-rendering, viewer measurements and player UI. Decisions and measurements live
-with their subsystem rather than in this index.
+<a id="develop-the-project"></a>
 
-## Research the original
+## Разрабатывать проект
 
-[Research index](research/README.md): sources, the series comparison and disc images.
-[K1 index](research/k1/README.md): format status, editions, movement, creatures,
-new-game rules, time and lighting. K2/K2.5 engine compatibility remains a hypothesis.
+[Оглавление разработки](development/README.md): принципы продукта, сборка,
+проверки, работа агентов, релизы и устройство расширения Tiled.
+
+[Раздел Rust](development/rust/README.md): данные и сцены, перемещение,
+симуляция, рендеринг, замеры просмотрщика и интерфейс игры. Решения и замеры
+находятся рядом с соответствующей подсистемой.
+
+<a id="research-the-original"></a>
+
+## Исследовать оригинал
+
+[Оглавление исследований](research/README.md): источники, сравнение частей
+серии и образы дисков. [Раздел K1](research/k1/README.md): состояние форматов,
+издания, перемещение, существа, новая игра, время и освещение.
+Общность движка K2/K2.5 остаётся гипотезой.

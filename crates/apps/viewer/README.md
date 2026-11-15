@@ -1,12 +1,12 @@
 # kn-viewer
 
-CLI and headless reports for re-konung-viewer. Window assembly lives in kn-fe-viewer.
+CLI и отчёты re-konung-viewer без окна. Приложение с окном собирает kn-fe-viewer.
 
-- CLI parsing and initial map resolution; invalid selections return failure.
-- check builds scenes/decodes textures without a window or GPU and emits text/JSON.
-- simulate runs the game simulation headlessly and reports failures/counters.
-- ViewerConfig crosses the frontend boundary; CLI types stay here.
+- Разбор CLI и выбор начальной карты; неверный выбор завершает запуск с ошибкой.
+- check строит сцены и декодирует текстуры без окна/GPU, выводит текст или JSON.
+- simulate запускает симуляцию без окна и сообщает отказы и счётчики.
+- ViewerConfig передаётся фронтенду; типы CLI остаются здесь.
 
-Details: [topic documentation](../../../docs/guides/viewer.md).
-Checks: `just cargo-test`, `just cargo-lint`. Pure logic tests need no window/GPU;
-real-data cases use local original/ and skip when absent.
+Подробности: [тематическая документация](../../../docs/guides/viewer.md).
+Проверки: `just cargo-test`, `just cargo-lint`. Чистая логика не требует окна/GPU;
+проверки на игровых данных используют локальный original/ и пропускаются без него.

@@ -1,12 +1,12 @@
 # kn-render
 
-Shared Bevy presentation of kn-game scenes, without format knowledge or game rules.
+Общее отображение сцен kn-game в Bevy без знания форматов и игровых правил.
 
-- TextureCache shares Image handles by TextureId; scene maps pieces to sprites and visibility groups.
-- animation owns the map Clock and sprite sequences; camera owns framing, zoom and bounds, without input bindings.
-- CreatureAnimationPlugin owns composite nodes, clip swaps, depth/interpolation and simulation catch-up ordering.
-- Lighting applies game-supplied parameters; the game layer decides creature states and behavior.
+- TextureCache разделяет Image по TextureId; scene переводит элементы в спрайты и группы видимости.
+- animation владеет Clock карты и последовательностями; camera — кадрированием, масштабом и границами, без привязки ввода.
+- CreatureAnimationPlugin владеет составными узлами, сменой клипов, глубиной/интерполяцией и порядком догоняющей симуляции.
+- Освещение применяет параметры игрового слоя; тот же слой определяет состояние и поведение существ.
 
-Details: [topic documentation](../../../../docs/development/rust/rendering.md).
-Checks: `just cargo-test`, `just cargo-lint`. Pure logic tests need no window/GPU;
-real-data cases use local original/ and skip when absent.
+Подробности: [тематическая документация](../../../../docs/development/rust/rendering.md).
+Проверки: `just cargo-test`, `just cargo-lint`. Чистая логика не требует окна/GPU;
+проверки на игровых данных используют локальный original/ и пропускаются без него.

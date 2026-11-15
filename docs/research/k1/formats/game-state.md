@@ -1,273 +1,246 @@
-# Game.N — starting state
+<a id="gamen--starting-state"></a>
 
-Characters, squads, caches, transitions and villages placed over Konung.N.
-Game.0/1/2 are 709822 bytes in RUS and ENG; ENG also has tutorial TGame.1.
-Code: `konung/k1/game_state.py` (`parse`, `serialize`).
+# Game.N — начальное состояние новой игры
 
-```sh
+Персонажи, отряды, клады, переходы между картами и деревни — всё, что стоит на картах поверх `Konung.N`. Файлы `Game.0`, `Game.1`, `Game.2` по 709822 байта (RUS и ENG) и `TGame.1` (только ENG, обучение). Код — `konung/k1/game_state.py` (`parse`, `serialize`). Выгрузка в JSON:
+
+```bash
 uv run konung k1 game original/k1/rus/game out/k1/game -n 0
+```
+
+Рендер карты с маркерами персонажей, отрядов, кладов и переходов:
+
+```bash
 uv run konung k1 map original/k1/rus/game out/k1/maps -n 1 --game 0
 ```
 
-**Confirmed:** block sizes sum to 709822, every cross-reference resolves and all
-seven files round-trip byte for byte (`tests/k1/test_game_state.py`). Positions
-were checked by rendering. Other field meanings retain their source-only status.
-Sources: Slavik `game_state.cpp` (`GameState::Load`, `LoadGameState`), `game.h`
-(array sizes), checked against our files.
+**Статус:** раскладка блоков **подтверждена**: сумма размеров даёт ровно 709822 байта, «прочитать → записать» возвращает все семь файлов побайтно (`tests/k1/test_game_state.py`), все ссылки между блоками сходятся. Места проверены рендером (см. «Координаты»). Смысл остальных полей — по Slavik. Источник: Slavik `game_state.cpp` (`GameState::Load`, `LoadGameState`), `game.h` (размеры массивов), проверено на наших файлах.
 
-## File selection
+<a id="file-selection"></a>
 
-**By Slavik**, a new game reads GAME.<hero>: 0 Wolf, 1 Dragomir, 2 Mikhail
-(`game_newgame.cpp:306,329,351`, `game.cpp:2436`) and starts on `3 · hero + 1`,
-map 1/4/7 (`game.cpp:2458`). The player group's map field is not used for this:
-it is 1 in every Game.N, 4 in TGame.1. Whether real saves use this format is
-**unknown**; Slavik does not implement save writing.
+## Какой файл когда
 
-**Our experiment:** TUTORIAL.EXE constructs TGAME., TLIGHTS. and TUTORIAL.
-filenames. TGame.1's groups, loot, exits and villages occupy Tutorial.4/5 only;
-its start is a walkable Tutorial.4 cell (test). The filename's 1 being the hero
-index, giving `3 · 1 + 1 = 4`, is a **hypothesis**: consistent with the group's
-map field, but tutorial code was not disassembled. APIs:
-`game_state.numbers(…, map_file.TUTORIAL_FILES)`,
-`load(…, files=map_file.TUTORIAL_FILES)`; render with `--tutorial --game 1`.
+По Slavik, новая игра читает `GAME.<номер героя>`: 0 — Волк, 1 — Драгомир, 2 — Михаил (`game_newgame.cpp:306, 329, 351`, `game.cpp:2436`), и начинает на карте `3 · номер + 1`, то есть 1, 4 или 7 (`game.cpp:2458`). Карта в отряде игрока при этом не читается: во всех `Game.N` там 1, в `TGame.1` — 4. Сохранения в Slavik не реализованы, так что сохраняет ли игра в том же формате — **неизвестно**.
 
-The three hero files differ in squads, caches and exits. **Confirmed across
-editions:** for the same hero, groups, exits, villages and locations agree;
-items, equipment, inventory, character attributes and cache contents differ.
+`TGame.1` — начальное состояние обучения (только ENG): `TUTORIAL.EXE` собирает имена `TGAME.`, `TLIGHTS.` и `TUTORIAL.` с номером (строки в exe, наш эксперимент). Его отряды, клады, переходы и деревни стоят только на картах обучения `Tutorial.4` и `Tutorial.5`, а точка старта — на проходимой клетке `Tutorial.4` (тест). То, что номер в имени — тоже номер героя и обучение начинается на карте `3 · 1 + 1 = 4`, — **гипотеза**: сходится с картой 4 в отряде игрока, но код `TUTORIAL.EXE` не разбирали. Код: `game_state.numbers(…, map_file.TUTORIAL_FILES)`, `game_state.load(…, files=map_file.TUTORIAL_FILES)`; рендер — `konung k1 map … --tutorial --game 1`.
 
-## Layout
+Файлы трёх героев различаются отрядами, кладами и переходами. RUS и ENG одного героя совпадают в отрядах, переходах, деревнях и местах, а различаются предметами, снаряжением, инвентарём и характеристиками персонажей и содержимым кладов — **подтверждено** сравнением.
 
-No header; consecutive little-endian blocks.
+<a id="layout"></a>
 
-| Offset | Records × bytes | Block | Empty slot |
+## Раскладка
+
+Заголовка нет, блоки идут подряд, всё little-endian.
+
+| Смещение | Записей × байт | Блок | Пустой слот |
 |---|---|---|---|
-| 0x00000 | 8192 × 16 | Items | 16 × 0xFF |
-| 0x20000 | 200 × 32 | Groups | Zero |
-| 0x21900 | 500 × 64 | Loot | Zero; occupied slots dense from zero |
-| 0x29600 | 250 × 17 | Exits | Zero; occupied slots dense from zero |
-| 0x2A69A | 2000 × 256 | Characters | Zero |
-| 0xA769A | 20 × 1205 | Villages | Zero |
+| 0x00000 | 8192 × 16 | предметы | 16 × `0xFF` |
+| 0x20000 | 200 × 32 | отряды | нули |
+| 0x21900 | 500 × 64 | клады | нули; занятые идут подряд с нулевого |
+| 0x29600 | 250 × 17 | переходы | нули; занятые идут подряд с нулевого |
+| 0x2A69A | 2000 × 256 | персонажи | нули |
+| 0xA769A | 20 × 1205 | деревни | нули |
 
-**Confirmed:** every free slot in each block has the same representation.
-Loot ends at the first map=0 record; exits at the first target-map=0
-(Slavik `game_state.cpp:411-428`).
+Вид пустых слотов **подтверждён** на всех файлах: все свободные слоты каждого блока одинаковы. Клады кончаются на первой записи с картой 0, переходы — на первой записи с целевой картой 0 (Slavik `game_state.cpp:411-428`).
 
-## Coordinates
+<a id="coordinates"></a>
 
-All positions are fine-grid cells, 160×320 ([map](map.md)); stored **y before x**.
-Rectangles include both boundaries (`game.cpp:887-892`, `game_play.cpp:620-623`).
-Character point (Slavik `game.h:1054`, `FUN_00439ba0`):
-`(58·x + 29·(2 − (y & 1)), 16·y + 16)`, offset (58,16) from a map object in
-the same cell. Pixel fields in character/loot records are zero in every file;
-the game derives them at load.
+## Координаты
 
-**Confirmed by rendering:** map 1's exit zones sit on portals between stone
-idols, arrival cells below them; village workplaces align with doors and the
-forge. Starts on maps 1/4/7 fall on walkable village paths (test). Swapping x/y
-moves some points outside the map.
+Все места — клетки мелкой сетки 160 × 320 (как проходимость в [map.md](map.md)), в файле **сначала y, потом x**. Прямоугольники включают обе границы (Slavik `game.cpp:887-892`, `game_play.cpp:620-623`).
 
-## Group — 32 bytes
+Точка персонажа на картинке карты по Slavik (`game.h:1054`, `FUN_00439ba0`): `(58·x + 29·(2 − y нечётный), 16·y + 16)`. Это на `(58, 16)` правее и ниже позиции объекта карты в той же клетке — точка стоит в середине клетки. Пиксельные поля в записях персонажей и кладов во всех файлах нулевые: игра считает их при загрузке.
 
-A character's map comes from its group.
+Формула и порядок «y, потом x» **подтверждены картинкой**. На карте 1 (`Game.0`) зона каждого перехода лежит ровно на объекте-портале между двумя каменными идолами, а точка прибытия — сразу под ним. Рабочие места деревни стоят у крылец, у кузни и у двери. Точки старта на картах 1, 4 и 7 приходятся на дорожки в деревне и на проходимые клетки (тест). Если поменять x и y местами, часть точек уходит за край карты.
 
-| Offset | Type | Meaning | Confidence |
+<a id="group--32-bytes"></a>
+
+## Отряд (32 байта)
+
+Отряд — группа персонажей на одной карте. Своей карты у персонажа нет, она берётся у отряда.
+
+| Смещение | Тип | Смысл | Уверенность |
 |---|---|---|---|
-| 0x00 | s16 | First member; `size` consecutive characters | **Confirmed:** references agree, no overlapping groups, every member names its group |
-| 0x02 | s32 | Respawn countdown | **By Slavik** `game_play.cpp:1326`, `game.cpp:714` |
-| 0x06 | s16 | Growth countdown | **By Slavik** `game_play.cpp:1315` |
-| 0x08 | 8 × s16 | Interleaved spawn/leash top, bottom, left, right | **By Slavik** |
-| 0x18 | u8 | Maximum size | **By Slavik** |
-| 0x19 | u8 | Growth limit | **By Slavik** |
-| 0x1A | u8 | Target-group index | **By Slavik** |
-| 0x1B | u8 | Map number | **Confirmed:** every map exists |
-| 0x1C | u8 | Member count | **Confirmed** |
-| 0x1D | u8 | AI state: 0 calm, 1 player member inside spawn rect, 0x20 own member outside; 0x80 unexplained | **By Slavik** `game_play.cpp:1024-1062`, `1623-1638`, `1533-1561`; our files only 0/0x80; [behavior](../creatures/behavior.md) |
-| 0x1E | u8 | Group kind; zero empty | Empty meaning **confirmed** |
-| 0x1F | u8 | Unknown | **Unknown** |
+| 0x00 | s16 | первый персонаж отряда; члены — подряд, `size` штук | подтверждено: ссылки сходятся, ни один персонаж не входит в два отряда, у каждого члена `group` = номер отряда |
+| 0x02 | s32 | отсчёт до появления заново | по Slavik (`game_play.cpp:1326`, `game.cpp:714`) |
+| 0x06 | s16 | отсчёт до прироста отряда | по Slavik (`game_play.cpp:1315`) |
+| 0x08 | 8 × s16 | два прямоугольника вперемешку: появление.top, погоня.top, появление.bottom, погоня.bottom, появление.left, погоня.left, появление.right, погоня.right | по Slavik |
+| 0x18 | u8 | наибольший размер отряда | по Slavik |
+| 0x19 | u8 | предел прироста | по Slavik |
+| 0x1A | u8 | номер отряда-цели | по Slavik |
+| 0x1B | u8 | номер карты | подтверждено: все карты существуют |
+| 0x1C | u8 | число членов | подтверждено |
+| 0x1D | u8 | состояние ИИ отряда: 0 спокойно, 1 в отряде игрока есть кто-то внутри прямоугольника появления, 0x20 член отряда вне его. Игра пересчитывает его каждые 16 тиков у бродячих отрядов и у старосты деревни, так что значение из файла — состояние на старте, а не настройка; 0x80 не объясняется | по Slavik (`game_play.cpp:1024-1062`, `game_play.cpp:1623-1638`, `game_play.cpp:1533-1561`); в наших файлах только 0 и 0x80 — [поведение существ](../creatures/behavior.md) |
+| 0x1E | u8 | вид отряда; 0 — слот пуст | подтверждено, что 0 — пустой слот |
+| 0x1F | u8 | | неизвестно |
 
-Kinds from Slavik `game.cpp:637-697`, `game_state.cpp:441`, all observed:
+Виды отрядов (по Slavik `game.cpp:637-697`, `game_state.cpp:441`; встречаются в наших файлах):
+- `0x20` — отряд игрока, всегда слот 0. Прямоугольник появления у него — точка старта на стартовой карте героя: `top` — y, `left` — x, `bottom` — направление (`game_play.cpp:208-231`). Во всех `Game.0`–`Game.2` обоих изданий отряд состоит из ровно одной записи (slot 0, класс 0x5, `name_id` = 124 у всех — имя записи не различает героев; наш замер), поэтому игра и берёт имя героя из таблиц exe по номеру героя, кодом (`game_newgame.cpp:305-351`: 10, 124, 151).
+- `0x41`–`0x50` — бродячие отряды. Игра ставит каждого члена в случайную клетку прямоугольника появления; у большинства из них в файле место (0, 0).
+- `0x53` — одиночные NPC.
+- `0x80`–`0x82` — жители деревень; младшие 2 бита — сторона.
+- У всех, кроме бродячих, место берётся из записи персонажа. **Подтверждено**: у всех таких персонажей место не (0, 0).
 
-- 0x20: player, always slot 0. Spawn top/left give start y/x, bottom gives
-  direction (`game_play.cpp:208-231`). **Our census:** all Game.0–2 of both
-  editions contain exactly one member, character 0, class 0x5, name_id 124.
-  The game assigns hero name indices 10/124/151 by hero number in code
-  (`game_newgame.cpp:305-351`); the raw name does not distinguish heroes.
-- 0x41–0x50: roaming squads; load scatters members in the spawn rect, most
-  having file cell (0,0).
-- 0x53: lone NPC groups.
-- 0x80–0x82: villagers; low two bits describe the village side.
-- All other groups retain member record positions. **Confirmed:** those cells
-  are never (0,0), including the player.
+Бродячие группы — строго 0x41–0x50, поэтому предикаты проверяют диапазон:
+Group::is_roaming в crates/game/k1/k1-data/src/game_state.rs, Group.is_roaming
+в konung/k1/game_state.py, roaming в tiled/konung/lib/k1.mjs. Slavik проверяет
+`unk5 < 0x51 && !(unk5 & 0x80)` в game.cpp:651, но цикл пропускает группу игрока
+(_mainMapChar, game.cpp:638). Путь возрождения и роста без такого пропуска
+использует диапазон `unk5 - 0x41 < 0x10` (game.cpp:708). Наш помощник не имеет
+особого случая игрока, поэтому берёт диапазон: вид 0x20 размещается по записи,
+а не случайно (#53).
 
-Roaming uses the exact range 0x41–0x50 in Python `Group.is_roaming`, Rust
-`Group::is_roaming` and Tiled `roaming`. Slavik's `unk5 < 0x51 && !(unk5 & 0x80)`
-loop (`game.cpp:651`) skips `_mainMapChar` separately (`638`); its respawn/growth
-path instead uses `unk5 - 0x41 < 0x10` (`708`). Our helper has no player exception,
-so it uses the range. **Confirmed on all seven files:** the only kinds are 0x20,
-0x41–0x50, 0x53, 0x80–0x82. The predicates differ only for three player groups
-per edition; no roaming group changes classification (issue #53).
+**Подтверждено** замером всех файлов состояния: RUS Game.0–Game.2,
+ENG Game.0–Game.2 и ENG TGame.1. Встречаются только виды 0x20, 0x41–0x50,
+0x53, 0x80–0x82. Две проверки различаются только на группе игрока — три
+группы на издание; ни одна настоящая бродячая группа не меняет классификацию.
+Во всех семи файлах каждый участник любой небродячей группы, включая игрока,
+имеет позицию не (0,0); тесты реальных файлов закрепляют это и для игрока.
 
-## Character — 256 bytes
+<a id="character--256-bytes"></a>
 
-| Offset | Type | Meaning | Confidence |
+## Персонаж (256 байт)
+
+| Смещение | Тип | Смысл | Уверенность |
 |---|---|---|---|
-| 0x00 | u8 | Animation state 0–9: 0/6 idle, 1/7 walk, 2/8 hit, 3/9 death, 4 human shot or dynamic appearance/transformation, 5 melee | **Confirmed:** [animation states](../creatures/animation.md); paired variants differ by byte 0x03 bit 0x04 |
-| 0x01 | u8 | Direction 0–7 | **By Slavik** |
-| 0x02 | u8 | Orders: 0x01 attack, 0x02 follow, 0x04 shooting, 0x08 move, 0x20 player follower, 0x40 needs decision | **By Slavik**; shooting use confirmed; file census only 0x40/0x60; [orders](../creatures/behavior.md) |
-| 0x03 | u8 | 0x04 weapons in hands; 0x40 pure move without attack/pickup; 0x80 dynamic sprite not yet loaded | **Confirmed:** [flags](../creatures/behavior.md) |
-| 0x04 | u8 | Class: 0x40 dynamic OBJECTS.RES sprite, kind `(class & 0x3F) − 1`; 0x80 dead. Human low 3 bits occupation, bits 3–5 village job | **By Slavik** `game.h:296-309`, `game_play.cpp:2323` |
-| 0x05 | u8 | Group index | **Confirmed** |
-| 0x06 | s16 | Enemy reference | **By Slavik** |
-| 0x08 | s16, s16 | Cell y,x; ignored at roaming load | **Confirmed** by rendering |
-| 0x0C | s16, s16 | Movement goal y,x | **By Slavik** |
-| 0x10 | u8 | Frame | **By Slavik** |
-| 0x11 | u8 | Walk skip mask: process only if `mask == 0 \|\| (counter & mask) == mask` | **By Slavik** `game_play.cpp:3503`; **confirmed** zero in every checked character |
-| 0x12 | u8 | Weapon slot in hands | **By Slavik** |
-| 0x13 | 32 bytes | Route, 0xFF terminator | **By Slavik** |
-| 0x33 | u8 | Level | **By Slavik** |
-| 0x34 | 3 × s32 | Gold, free points, experience | **By Slavik** |
-| 0x40 | 9 × s16 | Fencing, trading, accuracy, carpentry, medicine, identification, smithing, armor, poison (`SKILL_NAMES`) | **By Slavik** |
-| 0x52 | 2 bytes | Unknown | **Unknown** |
-| 0x54 | 9 × s16 | Agility current/base, charisma current/base, health, strength current/base, endurance current/base (`ATTRIBUTE_NAMES`) | **Confirmed** by source and both-edition census |
-| 0x66 | 6 × s16 | Equipment item indices | **Confirmed** by rendering |
-| 0x72 | 32 × u16 | Inventory item indices | **By Slavik** |
-| 0xB2 | 5 × u16 | Accessories | **By Slavik** |
-| 0xBC | 10 × s16 | Miscellaneous; ninth at 0xCC is quiver (item type 12) | **By Slavik** `game.h:320`, `game_state.cpp:70`; remainder **unknown**; quiver **confirmed** zero in all 3179 records per edition |
-| 0xD0 | u8 | See dialog observations below | **Unknown** beyond source reading |
-| 0xD1 | u8 | Flags | **By Slavik** |
-| 0xD2 | 2 bytes | Unknown | **Unknown** |
-| 0xD4 | u8, u8 | Name and nickname indices into EXE text tables | **Confirmed:** references resolve; [texts](executable.md#texts) |
-| 0xD6 | u8 | Human model 0–2 in GRAPH.RES, or dynamic OBJECTS.RES sprite 0–29 for class bit 0x40 | **Confirmed** by rendering |
-| 0xD7 | u8 | Frame count | **By Slavik**; **confirmed** zero in all 6358 filled records across both editions; resources supply duration |
-| 0xD8 | s32 | Palette byte offset in GRAPH.RES color bank | **Confirmed** by rendering |
-| 0xDC | 36 bytes | Pixel positions and image size, derived by the game; zero in files | **By Slavik**, zero census confirmed |
+| 0x00 | u8 | состояние анимации (0–9): 0/6 покой, 1/7 ходьба, 2/8 реакция на удар, 3/9 смерть, 4 — у человека выстрел, у динамического существа своя анимация появления или превращения (один номер, два несмешиваемых смысла), 5 ближняя атака; чётные пары отличаются битом 0x04 байта 0x03 | подтверждено: см. [два смысла состояния 4](../creatures/animation.md#state-4--two-meanings-under-one-number) |
+| 0x01 | u8 | направление (0–7) | по Slavik |
+| 0x02 | u8 | приказы и отметка «нужно решение поведения»: 0x01 атаковать, 0x02 следовать, 0x04 стреляет (именем в коде не назван, поведение подтверждено — [два смысла состояния 4](../creatures/animation.md#state-4--two-meanings-under-one-number)), 0x08 переместиться, 0x20 ведомый член отряда игрока, 0x40 нужно решение | по Slavik; в наших файлах только 0x40 и 0x60 — см. [поведение существ](../creatures/behavior.md) |
+| 0x03 | u8 | 0x04 оружие в руках, 0x40 чистое перемещение без атаки и подбора, 0x80 спрайт динамического объекта ещё не загружен | подтверждено: см. [поведение существ](../creatures/behavior.md) |
+| 0x04 | u8 | класс: бит 0x40 — спрайт из динамических объектов `Objects.res` (монстры, а также женщины и дети деревень; вид = `класс & 0x3F` − 1), 0x80 — мёртв; у людей младшие 3 бита — род занятий, биты 3–5 — работа в деревне | по Slavik (`game.h:296-309`, `game_play.cpp:2323`) |
+| 0x05 | u8 | номер отряда | подтверждено |
+| 0x06 | s16 | номер врага | по Slavik |
+| 0x08 | s16, s16 | место y, x; у бродячих отрядов игра его не читает | подтверждено картинкой — см. «Координаты» |
+| 0x0C | s16, s16 | цель движения y, x | по Slavik |
+| 0x10 | u8 | кадр | по Slavik |
+| 0x11 | u8 | маска пропуска тиков при ходьбе: шаг обрабатывается, только если `маска == 0 \|\| (счётчик & маска) == маска` | по Slavik (`game_play.cpp:3503`); подтверждено замером — во всех наших записях 0, то есть шаг каждый тик |
+| 0x12 | u8 | слот оружия в руках | по Slavik |
+| 0x13 | 32 байта | путь, 0xFF — конец | по Slavik |
+| 0x33 | u8 | уровень | по Slavik |
+| 0x34 | 3 × s32 | золото, свободные очки, опыт | по Slavik |
+| 0x40 | 9 × s16 | навыки: фехтование, торговля, меткость, плотницкое дело, медицина, опознание, кузнечное дело; броня; отравление; в коде — `SKILL_NAMES` | по Slavik |
+| 0x52 | 2 байта | | неизвестно |
+| 0x54 | 9 × s16 | ловкость (текущая, базовая), харизма (текущая, базовая), здоровье, сила (текущая, базовая), выносливость (текущая, базовая); в коде — `ATTRIBUTE_NAMES`. Здоровье — пятое, по 0x5C ([`game_state.cpp:47`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_state.cpp#L47)), шкала 0…1600, интерфейс показывает `(HP + 15) / 16`; в поставляемых файлах 1600, кроме 116 записей со значением 1 ([замеры здоровья](../creatures/combat.md#our-measurements)) | подтверждено: код плюс наш замер обоих изданий |
+| 0x66 | 6 × s16 | надетые доспехи и оружие — номера предметов | подтверждено рендером: по ним рисуется снаряжение |
+| 0x72 | 32 × u16 | инвентарь — номера предметов | по Slavik |
+| 0xB2 | 5 × u16 | украшения | по Slavik |
+| 0xBC | 10 × s16 | разное; девятое, по 0xCC, — колчан: номер предмета вида 12 ([`game.h:320`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.h#L320), [`game_state.cpp:70`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_state.cpp#L70)); равно 0 во всех 3179 записях каждого издания, поэтому никто не начинает игру со стрелами | по Slavik, остальное неизвестно; стрелы — подтверждено нашим замером |
+| 0xD0 | u8 | | неизвестно |
+| 0xD1 | u8 | флаги | по Slavik |
+| 0xD2 | 2 байта | | неизвестно |
+| 0xD4 | u8, u8 | номер имени и номер прозвища в таблицах текстов exe | подтверждено: все номера из `Game.0`–`Game.2` попадают в заполненные записи таблиц ([executable.md](executable.md)) |
+| 0xD6 | u8 | набор спрайтов: у людей — модель 0–2 из `GRAPH.RES`, с битом 0x40 в классе — динамический объект 0–29 из `Objects.res` | подтверждено рендером ([graph-res.md](graph-res.md)) |
+| 0xD7 | u8 | число кадров | по Slavik; наш замер: 0 во всех 6358 заполненных записях обоих изданий, поэтому длительность шага берётся из ресурсов |
+| 0xD8 | s32 | палитра: смещение в байтах в банке цветов `GRAPH.RES` | подтверждено рендером |
+| 0xDC | 36 байт | пиксельные позиции и размер картинки — их считает игра; в файлах нули | по Slavik |
 
-Health is the fifth attribute, s16 at 0x5C
-([`game_state.cpp:47`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_state.cpp#L47)),
-scale 0…1600; displayed points are `(HP + 15) / 16`. Every filled record is at
-1600 except 116 at 1; see [combat measurements](../creatures/combat.md#our-measurements).
+Что состояния и флаги значат для игры — как персонаж ходит, атакует и получает
+приказы — разобрано в [поведение существ](../creatures/behavior.md).
 
-### Menu values versus record values
+<a id="menu-values-versus-record-values"></a>
 
-The original new-game menu initializes its own values rather than displaying
-the record (`game.cpp:2301-2327`): strength 15, agility 3, charisma 3, endurance
-10; fencing 100, trading 10, accuracy 0, carpentry 1, medicine 50,
-identification 20, smithing 10, free points 0, equal for all three heroes.
-The chosen menu values overwrite loaded fields at start (`game.cpp:2453-2472`).
-The raw player record instead has agility 10, trading 64, medicine 101,
-identification 13 in every Game.N of both editions; those values are not used
-as the menu defaults. **Confirmed** by both-edition census plus source.
+### Значения меню и значения записи
 
-Heroes differ in assigned name, base sprite/palette, start map `3 · hero + 1`
-and the selected world's Game.N. Menu demonstration equipment
-(`game_newgame.cpp:276-365`) must be distinguished from the actual starting
-loadout: [new-game research](../new-game.md) records the transfer and our
-intentional truthful-preview difference.
+Меню новой игры задаёт собственные значения, а не показывает запись
+(Slavik `game.cpp:2301-2327`): сила 15, ловкость 3, харизма 3,
+выносливость 10; фехтование 100, торговля 10, меткость 0, плотницкое дело 1,
+медицина 50, опознание 20, кузнечное дело 10, свободные очки 0 — одинаково
+для всех трёх героев. При старте выбранные значения меню замещают поля
+загруженной записи (`game.cpp:2453-2472`). Сырая запись игрока во всех Game.N
+обоих изданий содержит ловкость 10, торговлю 64, медицину 101, опознание 13:
+это не начальные значения меню. **Подтверждено** подсчётом обоих изданий и источником.
 
-## Loot — 64 bytes
+Героев различают назначенное имя, спрайт/палитра, стартовая карта
+`3 · номер + 1` и состояние выбранного Game.N. Демонстрационное снаряжение
+меню (`game_newgame.cpp:276-365`) отличается от реального стартового:
+[исследование новой игры](../new-game.md) описывает перенос и намеренное
+отличие нашего правдивого предпросмотра.
 
-| Offset | Type | Meaning | Confidence |
+<a id="loot--64-bytes"></a>
+
+## Клад (64 байта)
+
+| Смещение | Тип | Смысл | Уверенность |
 |---|---|---|---|
-| 0x00 | 2 × s32 | Derived pixel position | **By Slavik** |
-| 0x08 | s16, s16 | Cell y,x | **Confirmed** by rendering |
-| 0x0C | s16 | Derived image (`game_loot.cpp:7-25`) | **By Slavik** |
-| 0x0E | s16 | Derived index on the map | **By Slavik** |
-| 0x10 | s16 | Gold; negative hides the cache | **By Slavik** `game.cpp:1197` |
-| 0x12 | s16 | Map; zero ends list | **Confirmed** |
-| 0x14 | 22 × s16 | Item references | **By Slavik** |
+| 0x00 | 2 × s32 | позиция в пикселях — считает игра | по Slavik |
+| 0x08 | s16, s16 | место y, x | подтверждено картинкой |
+| 0x0C | s16 | картинка — считает игра (`game_loot.cpp:7-25`) | по Slavik |
+| 0x0E | s16 | номер на карте — считает игра | по Slavik |
+| 0x10 | s16 | золото; < 0 — спрятанный клад, его не видно | по Slavik (`game.cpp:1197`) |
+| 0x12 | s16 | номер карты; 0 — конец списка | подтверждено |
+| 0x14 | 22 × s16 | предметы — номера в блоке предметов | по Slavik |
 
-Chests use the same records, not a separate block.
+Сундуков отдельно нет: это те же клады.
 
-## Exit — 17 bytes
+<a id="exit--17-bytes"></a>
 
-| Offset | Type | Meaning | Confidence |
+## Переход (17 байт)
+
+| Смещение | Тип | Смысл | Уверенность |
 |---|---|---|---|
-| 0x00 | 2 bytes | Unknown | **Unknown** |
-| 0x02 | u8 | Arrival direction | **By Slavik** |
-| 0x03 | s8 | Source map | **Confirmed:** all maps exist |
-| 0x04 | u8 | Target map; zero ends list | **Confirmed** |
-| 0x05 | s16, s16 | Arrival y,x on target | **Confirmed** by rendering |
-| 0x09 | 4 × s16 | Zone top,left,bottom,right | **Confirmed** by rendering |
+| 0x00 | 2 байта | | неизвестно |
+| 0x02 | u8 | направление после перехода | по Slavik |
+| 0x03 | s8 | карта, где зона перехода | подтверждено: все карты существуют |
+| 0x04 | u8 | карта, куда ведёт; 0 — конец списка | подтверждено |
+| 0x05 | s16, s16 | место прибытия y, x на целевой карте | подтверждено картинкой |
+| 0x09 | 4 × s16 | зона: top, left, bottom, right | подтверждено картинкой |
 
-**By Slavik**, entering any zone cell triggers it (`game_play.cpp:613-641`).
+Переход срабатывает, когда игрок встаёт в клетку зоны (`game_play.cpp:613-641`).
 
-## Village — 1205 bytes
+<a id="village--1205-bytes"></a>
 
-| Offset | Type | Meaning | Confidence |
+## Деревня (1205 байт)
+
+| Смещение | Тип | Смысл | Уверенность |
 |---|---|---|---|
-| 0x000 | 4 × u8 | Counts of two building kinds, elder group, map (zero empty) | **By Slavik**; map **confirmed** |
-| 0x004 | 5 × s32 | Healer, smith, commander timers; tribute amount/deadline | **By Slavik** |
-| 0x018 | 119 × 8 | Buildings: s8 kind, s8 state, s16 map object, s16 unknown, s16 countdown | **By Slavik**; unnamed component **unknown** |
-| 0x3D0 | 5 × 8 | Elder/healer/trader/smith/commander workplace: u8 direction, u8 unknown, s16 character, s16 y,x | **By Slavik** `game_play.cpp:2323-2370`, `game_locale.cpp:202` |
-| 0x3F8 | 5 × s32 | Timers | **By Slavik** |
-| 0x40C | 3 × s16 | Healer potions | **By Slavik** |
-| 0x412 | 25 × s16 | Healer goods | **By Slavik** |
-| 0x444 | 32 × s16 | Trader goods | **By Slavik** |
-| 0x484 | 23 × s16 | Smith goods | **By Slavik** |
-| 0x4B2 | u8,u8,s8 | Flags, unknown, smith-goods count | **By Slavik**; unnamed byte **unknown** |
+| 0x000 | 4 × u8 | число зданий двух видов, номер отряда старосты, номер карты (0 — слот пуст) | по Slavik; карта подтверждена |
+| 0x004 | 5 × s32 | таймеры: знахарь, кузнец, воевода, сумма дани, срок дани | по Slavik |
+| 0x018 | 119 × 8 | здания: вид (s8), состояние (s8), номер объекта карты (s16), неизвестное (s16), отсчёт (s16) | по Slavik |
+| 0x3D0 | 5 × 8 | рабочие места старосты, знахаря, купца, кузнеца, воеводы: направление (u8), неизвестное (u8), персонаж (s16), место y, x (s16, s16) | по Slavik (`game_play.cpp:2323-2370`, `game_locale.cpp:202`) |
+| 0x3F8 | 5 × s32 | таймеры | по Slavik |
+| 0x40C | 3 × s16 | зелья знахаря | по Slavik |
+| 0x412 | 25 × s16 | товары знахаря | по Slavik |
+| 0x444 | 32 × s16 | товары купца | по Slavik |
+| 0x484 | 23 × s16 | товары кузнеца | по Slavik |
+| 0x4B2 | u8, u8, s8 | флаги, неизвестное, число товаров кузнеца | по Slavik |
 
-Buildings refer to Konung.N objects of the same map; their state changes the
-image, not placement (`game.cpp:764-780`).
+Здания на карте ставит не этот файл: номер объекта указывает на объект `Konung.N` той же карты, а состояние меняет его картинку (`game.cpp:764-780`).
 
-## Item — 16 bytes
+<a id="item--16-bytes"></a>
 
-**By Slavik** `game_state.cpp:196-210`: s8 type, s8 bonus, s8 special property,
-s8 info index; concentration (s32 arrow count for quiver type 12, otherwise
-f32); f32 weight; s16 poison; u8 flags (bit 0 unidentified); one **unknown** byte.
+## Предмет (16 байт)
 
-Quiver sources: [game.h:320](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.h#L320),
-[game_state.cpp:70](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_state.cpp#L70).
+Вид (s8), бонус (s8), особое свойство (s8), номер описания (s8), концентрация (s32 — число стрел у колчана, вида 12, иначе f32), вес (f32), яд (s16), флаги (u8; бит 0 — не опознан), неизвестный байт. По Slavik (`game_state.cpp:196-210`).
 
-## Dense layout and references
+<a id="dense-layout-and-references"></a>
 
-**Confirmed on all seven files** (`tests/k1/test_game_edit.py`,
-`test_every_state_file_has_the_dense_layout`):
+## Укладка отрядов и ссылки
 
-- Groups occupy consecutive slots from zero; each reserves `growth_limit`
-  character slots. Group i starts at the sum of preceding growth limits.
-- Its first `size` slots are filled, the remainder zero. No characters lie
-  outside groups; `size ≤ max_size ≤ growth_limit`; the last reserve ends by 2000.
-- Each item has exactly one owner: character equipment/inventory/accessory or
-  loot; zero means absent. Additional references are quiver 0xCC
-  (`game.h:498`, `game_character.cpp:694-696`) and village goods
-  (`game_village.cpp:24,36`), all zero in checked files.
+**Подтверждено** на всех семи файлах (`tests/k1/test_game_edit.py`, `test_every_state_file_has_the_dense_layout`):
+- отряды занимают слоты подряд с нулевого, без пустых посередине;
+- за каждым отрядом зарезервировано `growth_limit` слотов персонажей: первый член отряда i равен сумме `growth_limit` отрядов 0…i−1;
+- члены — первые `size` слотов резерва, остальные слоты резерва пустые;
+- персонажей вне отрядов нет, везде `size ≤ max_size ≤ growth_limit`;
+- резерв последнего отряда не выходит за 2000 слотов;
+- у каждого предмета ровно один владелец — персонаж (снаряжение, инвентарь, украшения) или клад; пустой номер — 0. Ещё номер предмета — колчан со стрелами персонажа (0xCC, Slavik `game.h:498`, `game_character.cpp:694-696`) и товары деревни в её хвосте (`game_village.cpp:24`, `36`); во всех файлах там 0.
 
-Character references: group's first member; enemy 0x06 (zero none, positive
-index + 1, negative map object; all zero in files); workplace character (zero
-vacant). Group references: character 0x05, village elder, target group 0x1A
-(all zero for targets). Every workplace references an elder-group member.
+Ссылки на номер персонажа: первый член отряда, враг (0x06: 0 — нет, > 0 — номер + 1, < 0 — объект карты; во всех файлах 0) и персонаж рабочего места деревни (0 — место свободно). Ссылки на номер отряда: отряд персонажа (0x05), староста деревни и отряд-цель (0x1A, везде 0). Все рабочие места ссылаются на членов отряда старосты.
 
-The original grows into `first + size`: hiring, respawn and growth up to the
-limit (`game_quest.cpp:744,1269-1272`, `game.cpp:714`, `game_play.cpp:1316-1322`).
-Reserves must therefore exist and be zero. Quests are loaded from QUEST*.RES,
-not Game.N (`game_state.cpp:446-490`). Dialog selection uses byte 0xD0
-(`game_quest.cpp:207`): most records 0xFF, workers a dialog number; vacant
-workplaces have byte 0x01 in 100–103 (**source reading**, not recovered quest rules).
+Игра сама растит отряды в слот `first + size`: найм, появление бродячих заново, рост до `growth_limit` (Slavik `game_quest.cpp:744`, `1269-1272`, `game.cpp:714`, `game_play.cpp:1316-1322`). Поэтому резерв обязателен и должен быть нулевым. Квестов в `Game.N` нет: Slavik читает их из `QUEST*.RES` (`game_state.cpp:446-490`), а диалог персонажа выбирается по байту 0xD0 (`game_quest.cpp:207`). У большинства в нём 0xFF, у работников — номер диалога; у свободных рабочих мест в байте 0x01 места — 100–103.
 
-## Editing the roster
+<a id="editing-the-roster"></a>
 
-`konung/k1/game_edit.py` (`add_character`, `remove_character`) and the Tiled
-mirror preserve the layout and rewrite the references above; other bytes stay.
+## Добавление и удаление персонажей
 
-- Removal shifts later group members down, zeroes the freed slot, decreases
-  size and releases owned items to 0xFF. An empty 0x53 group is removed;
-  following groups and their character reserves shift, as do group/elder/target
-  references. Player members and village workers cannot be removed.
-- Addition copies a character and its items, including the quiver, with enemy
-  zero and dialog 0xFF. A 0x53 NPC with reserve 1 gets a copied group in the
-  first free group slot after the last character reserve, reserve 1. Other
-  copies append to the existing group. Some shipped 0x53 groups already hold
-  2, 14 or 21 members. If needed, the reserve grows by one (byte limit 255)
-  and everything after it shifts. All character/group/item capacity checks
-  precede mutation; failure changes nothing. Player-group additions are refused.
+Код — `konung/k1/game_edit.py` (`add_character`, `remove_character`), то же в расширении Tiled (`tiled/konung/lib/k1.mjs`). Правки сохраняют укладку и переписывают все ссылки выше, остальной файл не меняется:
 
-This editing policy is inferred from the layout and Slavik: **hypothesis**
-about compatibility with the original game, where edited files have not been
-checked. No shipped group array has an interior hole; edits create none.
+- **Удаление** — следующие члены того же отряда сдвигаются на слот вниз, освободившийся слот обнуляется, `size` − 1; предметы персонажа освобождаются (0xFF). Отряд вида 0x53 без членов убирается: следующие отряды сдвигаются на слот, их персонажи — на его резерв, номера отрядов у персонажей, старосты и цели уменьшаются. Персонажей отряда игрока и работников деревни удалять нельзя.
+- **Добавление** — копия персонажа. Отряд вида 0x53 — обычно один NPC с резервом 1, но в каждом `Game.N` есть такие отряды из 2, 14 и 21 персонажа. Копия NPC с резервом 1 получает свой отряд: копию отряда в первом свободном слоте, за резервом последнего, с резервом 1. Иначе копия становится последним членом отряда; если резерв занят, он растёт на слот (не больше 255 — это байт), и всё за ним сдвигается. Места — слотов персонажей за резервами, слотов отрядов и записей предметов — проверяются до правки; если их нет, ничего не меняется. У копии свои предметы, включая колчан (копии записей в свободных слотах), враг 0 и диалог 0xFF. В отряд игрока добавлять нельзя.
 
-## Writing
+Это наш вывод из укладки и кода Slavik — **гипотеза**: изменённые файлы в самой игре не проверялись. Пустых слотов отрядов посередине нет ни в одном файле, поэтому правки их и не создают.
 
-Serialize in the same block order. Loot/exits are dense from zero, with zero
-padding. Empty groups, characters and villages are zero; empty items 0xFF.
-Every checked file round-trips byte for byte. Edited-state behavior in the
-original remains unverified.
+<a id="writing"></a>
+
+## Запись
+
+`serialize` пишет блоки в том же порядке. Клады и переходы — подряд с нулевого слота, остальное заполняется нулями. Пустые слоты отрядов, персонажей и деревень пишутся нулями, предметов — `0xFF`. На этом «прочитать → записать» возвращает все файлы побайтно. В самой игре изменённые файлы ещё не проверялись.

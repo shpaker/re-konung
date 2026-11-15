@@ -1,40 +1,43 @@
-# MDS/MDF disc images
+<a id="mdsmdf-disc-images"></a>
 
-An image of the owner's disc consists of `*.mds` track metadata and `*.mdf` raw
-sectors (Alcohol 120%). 7-Zip does not open this MDF representation; the
-repository's `konung disc` (`konung/disc.py`) extracts tracks. This is the
-supported extraction path, not an image distributor. Commands:
-[prepare game files](../guides/game-files.md).
+# Образы дисков MDS/MDF
+
+Образ своего диска состоит из метаданных дорожек `*.mds` и сырых секторов
+`*.mdf` (Alcohol 120%). Такой MDF не открывается 7-Zip; дорожки извлекает
+`konung disc` (`konung/disc.py`). Это поддерживаемый способ извлечения,
+а не источник образов. Команды — в [подготовке файлов](../guides/game-files.md).
 
 ## MDS
 
-Little-endian. **Confirmed** on RUS and ENG against the public libmirage format
-description and our own images.
+Little-endian. **Подтверждено** на RUS и ENG по публичному описанию формата
+libmirage и собственным образам.
 
-| Offset | Type | Meaning |
+| Смещение | Тип | Смысл |
 |---|---|---|
-| 0x00 | 16 bytes | `MEDIA DESCRIPTOR` |
-| 0x50 | u32 | First-session block offset |
+| 0x00 | 16 байт | `MEDIA DESCRIPTOR` |
+| 0x50 | u32 | Смещение блока первой сессии |
 
-Session block, 24 bytes: +10 is a u8 track-entry count including service records;
-+20 is a u32 track-table offset. Each track record occupies 80 bytes:
+Блок сессии занимает 24 байта: +10 — u8, число записей дорожек со служебными;
++20 — u32, смещение таблицы дорожек. Запись дорожки — 80 байт:
 
-| Offset | Type | Meaning |
+| Смещение | Тип | Смысл |
 |---|---|---|
-| +0 | u8 | Low nibble: 9 audio, A Mode 1, C Mode 2 Form 1; programs differ in high bits (`0xAA`, `0xEC`) |
-| +4 | u8 | Track number; 0xA0–0xA2 are service TOC records |
-| +0x0C | u32 | Extra-block offset: u32 pregap followed by u32 sector count |
-| +0x10 | u16 | MDF sector size: 2352, or 2448 with subchannels |
-| +0x24 | u32 | First sector |
-| +0x28 | u64 | MDF track offset |
+| +0 | u8 | Младшая тетрада: 9 — audio, A — Mode 1, C — Mode 2 Form 1; старшие биты зависят от программы (`0xAA`, `0xEC`) |
+| +4 | u8 | Номер дорожки; 0xA0–0xA2 — служебные записи TOC |
+| +0x0C | u32 | Смещение дополнительного блока: u32 pregap, затем u32 число секторов |
+| +0x10 | u16 | Размер сектора MDF: 2352 или 2448 с субканалами |
+| +0x24 | u32 | Первый сектор |
+| +0x28 | u64 | Смещение дорожки в MDF |
 
-Each data sector contributes 2048 bytes, starting at byte 16 for Mode 1 or byte
-24 for Mode 2 Form 1. CD audio is 44100 Hz, 16-bit stereo.
+Из сектора данных берутся 2048 байт с позиции 16 для Mode 1 или 24 для
+Mode 2 Form 1. CD audio — 44100 Гц, 16 бит, стерео.
 
-## Checked editions
+<a id="checked-editions"></a>
 
-| Property | RUS | ENG |
+## Проверенные издания
+
+| Свойство | RUS | ENG |
 |---|---|---|
-| Sector size | 2352 | 2448, with subchannels |
-| Data track | Mode 1, 212352 sectors | Mode 2 Form 1 (CD-XA), 162388 sectors |
-| Audio | 10 tracks | 10 tracks |
+| Размер сектора | 2352 | 2448, с субканалами |
+| Дорожка данных | Mode 1, 212352 сектора | Mode 2 Form 1 (CD-XA), 162388 секторов |
+| Аудио | 10 дорожек | 10 дорожек |

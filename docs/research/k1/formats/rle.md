@@ -1,43 +1,49 @@
-# RLE images
+<a id="rle-images"></a>
 
-All K1 sprites (tiles, objects, cursors, flames and shadows) use row-based
-compression with transparent skips. Code: `konung/rle.py`,
-`tiled/konung/lib/k1.mjs` (`decodeRle`); tests: `tests/test_rle.py`.
+# RLE-картинки
 
-**Confirmed:** all GRAPH.RES tiles and OBJECTS.RES objects of both editions decode
-without exceeding row width; GRAPH.RES parses to EOF. Source: Slavik
-`resources.cpp` (`LoadRL8BitImage` and neighboring functions), checked on our files.
+Все спрайты первой части (тайлы, объекты, курсоры, огни, тени) сжаты одинаково: построчно, с прозрачными пропусками. Код — `konung/rle.py`, `tiled/konung/lib/k1.mjs` (`decodeRle`). Тесты — `tests/test_rle.py`.
 
-## Header
+**Статус: подтверждено** — все тайлы `GRAPH.RES` и объекты `OBJECTS.RES` обоих изданий декодируются без выхода за ширину, и `GRAPH.RES` разбирается до последнего байта. Источник: Slavik `resources.cpp` (`LoadRL8BitImage` и соседние).
 
-| Offset | Type | Meaning |
+<a id="header"></a>
+
+## Заголовок
+
+| Смещение | Тип | Смысл |
 |---|---|---|
-| 0 | s16 | Width |
-| 2 | s16 | Height |
-| 4 | s16 × height | Each row's byte length; not needed by the decoder |
+| 0 | s16 | ширина |
+| 2 | s16 | высота |
+| 4 | s16 × высота | длина каждой строки в байтах; декодеру не нужна |
 
-## Row
+<a id="row"></a>
 
-Each command starts with a byte `n`:
+## Строка
 
-| `n` | Meaning |
+Последовательность команд, каждая начинается с байта `n`:
+
+| `n` | Смысл |
 |---|---|
-| 0 | End of row |
-| `n & 0x80` | Skip `n & 0x7F` transparent pixels |
-| 1–127 | Followed by `n` pixels |
+| 0 | конец строки |
+| `n & 0x80` | пропустить `n & 0x7F` прозрачных пикселей |
+| 1–127 | следом `n` пикселей |
 
-Neither skips nor pixel runs may exceed row width. Python, JS and Rust reject
-both cases before writing the output buffer; none occurs in the checked files.
+Координата внутри строки не должна выходить за её ширину — ни после пропуска, ни после
+пикселей. Обе реализации (Python, JS) и Rust возвращают ошибку в том и в другом случае;
+в файлах дистрибутива таких мест нет, проверка отсекает битые данные до записи в буфер.
 
-| Kind | Pixel | Used by |
+Пиксель зависит от вида картинки:
+
+| Вид | Пиксель | Где |
 |---|---|---|
-| RL8 | u8 index into a 256-color palette | Tiles, objects, interface screens |
-| RL16 | u16 RGB555 | Cursors, FLAMES.RES |
-| Shadow | No pixel data; only the mask matters | Object and character shadows |
+| RL8 | u8 — индекс в палитре из 256 цветов | тайлы, объекты, экраны интерфейса |
+| RL16 | u16 — цвет RGB555 | курсоры, огни (`FLAMES.RES`) |
+| Тень | данных нет, важна только маска | тени объектов и персонажей |
 
-## Colors
+<a id="colors"></a>
 
-RGB555: `0RRRRRGG GGGBBBBB`, little-endian. Expand five bits to eight by
-`(v << 3) | (v >> 2)`, as Slavik's `Lkp5To8` does. Its fidelity to the original
-appearance is a **hypothesis**. Slavik's additive flame treatment derives
-alpha as `(2r + g + b) / 4`; this too remains a **hypothesis**.
+## Цвета
+
+RGB555: `0RRRRRGG GGGBBBBB`, младший байт первым. 5 бит растягиваются до 8 повтором старших битов: `(v << 3) | (v >> 2)`. Так делает и Slavik (`Lkp5To8`), это **гипотеза** о том, как цвета выглядели в игре.
+
+Огни Slavik рисует аддитивно: альфа = `(2r + g + b) / 4`. Это тоже **гипотеза**.

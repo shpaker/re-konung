@@ -1,13 +1,13 @@
 # kn-game
 
-The shared facade, scene model, movement engine and simulation, without Bevy.
+Общий фасад, модель сцены, движок перемещения и симуляция без Bevy.
 
-- Game::open/maps/heroes/scene/textures/check exposes K1 through common types.
-- Scene/Piece/TextureId/Animation/PieceGroup carry presentation data without frontend types.
-- movement owns Grid, Cell, Direction, Occupancy, find_route, Walker and World; Passage/Pace supply game-specific data.
-- Simulation evaluates K1 decisions and applies orders through the shared world, including failed-order cooldowns.
-- The movement engine never decides where to go; recovered behavior is evaluated in k1-game.
+- Game::open/maps/heroes/scene/textures/check представляет K1 через общие типы.
+- Scene/Piece/TextureId/Animation/PieceGroup несут данные отображения без типов фронтенда.
+- movement владеет Grid, Cell, Direction, Occupancy, find_route, Walker и World; Passage/Pace передают специфику игры.
+- Simulation вычисляет решения K1 и применяет приказы к общему миру, включая задержку повторов отказавших приказов.
+- Движок перемещения не выбирает цель; восстановленное поведение вычисляется в k1-game.
 
-Details: [topic documentation](../../../docs/development/rust/README.md).
-Checks: `just cargo-test`, `just cargo-lint`. Pure logic tests need no window/GPU;
-real-data cases use local original/ and skip when absent.
+Подробности: [тематическая документация](../../../docs/development/rust/README.md).
+Проверки: `just cargo-test`, `just cargo-lint`. Чистая логика не требует окна/GPU;
+проверки на игровых данных используют локальный original/ и пропускаются без него.

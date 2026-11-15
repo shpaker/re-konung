@@ -51,8 +51,9 @@ Read the relevant document before working; follow the linked procedures.
 
 ## Implementation and checks
 
-- Use English for new documentation, code, identifiers, comments, doc-comments,
-  tests and GitHub-facing files. Translate existing text when touching it.
+- Write project documentation in Russian, including `docs/`, root guides and crate
+  READMEs. Keep code, identifiers, comments, doc-comments, tests, agent/skill instructions
+  and GitHub-facing files in English. Preserve commands, paths and API names in translation.
   Comments explain a hidden constraint or decision in one or two lines, never
   restate the code. Identifiers are unabbreviated. Python: 3.14 and ruff.
 - Shared code belongs above the game-specific packages only when commonality is

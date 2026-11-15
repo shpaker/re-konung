@@ -175,9 +175,8 @@ fn village_runs_count_arrivals_and_replay_under_the_same_seed() {
             );
         }
 
-        // The static-work arrival: record 369 of map 1 carries the merchant
-        // job bits, its slot is occupied by 357, and the order sends it to a
-        // free neighbour of the place (docs/research/k1/creatures/placement.md, «Goal reach»).
+        // Record 369 is a child: its walk can land beside the merchant's place.
+        // The counter classifies destination geometry, not the decision branch.
         let map1 = by_number(1);
         let merchant = map1
             .goal_reaches

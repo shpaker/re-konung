@@ -1,34 +1,23 @@
 # re-konung
 
-Study and recreation of the engine behind «Князь: Легенды Лесной страны»
-(*Konung: Legends of the North*, 1999), then K2 and K2.5 if a shared engine is
-confirmed. An unofficial fan project, unaffiliated with 1C or Snowball; the games
-and their names belong to their respective owners.
+Исследование и воссоздание движка «Князь: Легенды Лесной страны» (Konung: Legends of the North, 1999), затем K2 и K2.5 при подтверждении общего движка. Неофициальный фанатский проект, не связанный с 1С или Snowball; игры и их названия принадлежат правообладателям.
 
-The original supplies the rules, content, atmosphere and visual identity. The
-project improves responsiveness, controls and obsolete technical limits; the
-[product principles](docs/development/design.md) explain the reference for that work.
+Оригинал задаёт правила, содержимое, атмосферу и облик. Проект улучшает отзывчивость, управление и устаревшие технические ограничения; основания описаны в [принципах продукта](docs/development/design.md).
 
-## Start here
+<a id="start-here"></a>
 
-You need your own licensed copy: your disc or a store purchase. No game assets
-are distributed. [Prepare the files](docs/guides/game-files.md), then follow
-[environment setup](docs/guides/setup.md).
+## С чего начать
 
-| Goal | Start |
+Нужна собственная лицензионная копия: свой диск либо покупка в магазине. Игровые материалы не распространяются. [Подготовьте файлы](docs/guides/game-files.md) и [окружение](docs/guides/setup.md).
+
+| Задача | Отправная точка |
 |---|---|
-| Run the player and create a character | [Player guide](docs/guides/player.md) — `just game` |
-| Open, edit and save original maps | [Tiled guide](docs/guides/tiled.md) — `just tiled-install` |
-| Inspect maps, creatures and lighting | [Viewer guide](docs/guides/viewer.md) — `just viewer 17` |
-| Develop the engine or tools | [Development](docs/development/README.md) |
-| Read the formats and recovered game rules | [Research](docs/research/README.md) |
+| Запустить игру и создать персонажа | [Игровое приложение](docs/guides/player.md) — `just game` |
+| Открыть, изменить и сохранить исходную карту | [Tiled](docs/guides/tiled.md) — `just tiled-install` |
+| Исследовать карты, существ и свет | [Просмотрщик](docs/guides/viewer.md) — `just viewer 17` |
+| Разрабатывать движок и инструменты | [Разработка](docs/development/README.md) |
+| Читать о форматах и восстановленных правилах | [Исследования](docs/research/README.md) |
 
-The Rust player and viewer render maps and run the creature simulation. The
-player has menus, settings and a new-game constructor; a complete playable loop
-is still in progress. Python and the Tiled extension remain independent
-reference tools, and Python wins format disagreements.
+Игра и просмотрщик на Rust отображают карты и запускают симуляцию существ. В игре есть меню, настройки и конструктор новой игры; полный игровой цикл ещё разрабатывается. Python и расширение Tiled остаются независимыми эталонными инструментами; при расхождении форматов приоритет у Python.
 
-The [architecture](ARCHITECTURE.md) owns components, boundaries and current status.
-The [documentation index](docs/README.md) connects the guides, implementation
-notes and research. To contribute, read [CONTRIBUTING.md](CONTRIBUTING.md);
-agent instructions are in [AGENTS.md](AGENTS.md).
+[Архитектура](ARCHITECTURE.md) описывает компоненты, границы и текущую готовность. [Оглавление документации](docs/README.md) связывает руководства, реализацию и исследования. Язык документации — русский. Правила сотрудничества: [CONTRIBUTING.md](CONTRIBUTING.md); инструкции агентам: [AGENTS.md](AGENTS.md).

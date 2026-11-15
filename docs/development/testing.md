@@ -1,6 +1,8 @@
-# Testing and reference parity
+<a id="testing-and-reference-parity"></a>
 
-From the repository root:
+# Проверки и соответствие эталону
+
+Из корня репозитория:
 
 ```sh
 just check
@@ -9,105 +11,119 @@ just cargo-test
 just cargo-lint
 ```
 
-`just check` invokes `prek run --all-files --stage manual`: whitespace/newline
-checks, YAML/TOML/JSON and file checks, copyright/download restrictions, ruff,
-Rust formatting/clippy, Python tests and Rust tests. Some hooks format files;
-inspect the resulting diff. Never bypass hooks. `just setup` installs shims.
+`just check` вызывает `prek run --all-files --stage manual`: пробелы и окончания
+строк, YAML/TOML/JSON, проверки файлов, ограничения игровых материалов и ссылок
+на загрузку, ruff, Rust fmt/clippy, тесты Python и Rust. Часть хуков форматирует
+файлы — проверяйте diff. Обходить хуки нельзя. `just setup` устанавливает шимы.
 
-## Hooks and CI
+<a id="hooks-and-ci"></a>
 
-`prek.toml` is authoritative: pre-commit checks/formatters include Rust clippy;
-commit-msg checks Conventional Commits and forbidden attribution; pre-push adds
-Python and Rust tests. `.github/workflows/ci.yml` runs ruff/pytest, Rust
-fmt/clippy/tests, a Linux app build gate and a Windows post-merge smoke build.
-Dependency caching **is configured**; profiles, system libraries and timings
-are in [builds](building.md). PR/issue form rules and their tests are described
-in [CONTRIBUTING.md](../../CONTRIBUTING.md).
+## Хуки и CI
 
-## Synthetic and headless tests
+Источник истины — `prek.toml`: pre-commit проверяет/форматирует файлы,
+включая Rust clippy; commit-msg проверяет Conventional Commits и запрещённую
+атрибуцию; pre-push добавляет тесты Python/Rust. `.github/workflows/ci.yml`
+запускает ruff/pytest, Rust fmt/clippy/tests, сборку приложений на Linux
+и проверочную сборку Windows после слияния. Кеширование зависимостей настроено.
+Профили, системные библиотеки и замеры — в [сборке](building.md).
+Правила форм issues/PR и их тесты — в [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
-Synthetic algorithm tests need no game data. Movement tests (`kn-game/tests/
-movement.rs`, `movement_grid.rs`) exercise invented grids, routes, steps,
-crowds and deterministic traces without Bevy. movement_grid also compares
-K1/Python coordinate formulas over all 51200 cells: a test-only dependency,
-not an engine-layer dependency. Half-cell rounding in character_cell/rect_cells
-uses round_ties_even, matching Python round rather than Rust's ordinary .5 rule.
+<a id="synthetic-and-headless-tests"></a>
 
-Game crates are Bevy-free. Presentation tests use MinimalPlugins without a
-window/GPU to check piece transforms/z, camera fitting/zoom, overlays, CLI,
-error reports, tick-frame selection, fractional time, pause/off and changed
-frame centers. Player creature tests use the real window pipeline without the
-window: start-map creatures exist and state-4 specials remain visible until
-idle; real-data cases skip when originals are absent.
+## Синтетические и безоконные тесты
 
-## Real-file tests
+Синтетическим алгоритмическим тестам игровые данные не нужны. Тесты
+`kn-game/tests/movement.rs` и `movement_grid.rs` проверяют искусственные
+сетки, маршруты, шаги, толпы и детерминированные трассы без Bevy.
+movement_grid также сравнивает формулы координат K1/Python на всех 51200 клетках:
+это зависимость теста, а не слоя движка. Округление половин клетки в
+character_cell/rect_cells использует round_ties_even, как Python round,
+а не обычное правило Rust для .5.
 
-[Prepare the owner's files](../guides/game-files.md) under original/.
-Python data tests skip without them. Rust discovers editions dynamically and
-prints a skip reason when original/ is absent. If original/k1 exists but no
-edition can be found, Rust fails rather than passing vacuously. CI has no game
-files and skips correctly. Fixtures are synthetic, never resource excerpts.
+Игровые крейты не зависят от Bevy. Тесты представления используют MinimalPlugins
+без окна/GPU: преобразования и z частей, охват/масштаб камеры, оверлеи, CLI,
+отчёты об ошибках, выбор кадра по тику, дробное время, pause/off и смену
+центров кадров. Тесты существ игрока запускают настоящий оконный конвейер
+без окна: существа стартовой карты присутствуют, особые анимации состояния 4
+видны до idle. Случаи на реальных данных пропускаются без оригиналов.
 
-### Format writing and graphics
+<a id="real-file-tests"></a>
 
-Rust k1-data tests original.rs, original_game_state.rs, original_game_edit.rs
-and original_graphics.rs mirror Python tests/k1/test_maps.py,
-test_game_state.py, test_game_edit.py and test_graphics.py. Coverage includes:
+## Тесты на реальных файлах
 
-- Byte-exact parse→serialize for every Konung.N, Game.N/TGame.N and
-  LIGHTS.N/TLIGHTS.N of both editions, plus ENG Tutorial.4/5's raw slot 994.
-- State links, hero start, independently checked character-field offsets
-  (block starts 0x2A69A), dense reserves before/after edits, reserve growth,
-  NPC copies with their own group/items and atomic capacity failures.
-- Graphics parse to EOF/block boundaries, simple/dynamic object composition,
-  unique EXE table discovery, flame range coverage and character rendering.
-  The one unnamed villager is a recorded data exception, not a failed parser.
+[Подготовьте свою копию](../guides/game-files.md) в original/.
+Тесты Python пропускаются без данных. Rust обнаруживает издания динамически
+и сообщает причину пропуска, если original/ отсутствует. Если original/k1
+есть, но издания не найдены, Rust завершает проверку ошибкой, не пустым успехом.
+В CI игровых файлов нет, эти тесты корректно пропускаются. Фикстуры синтетические,
+без фрагментов ресурсов.
 
-Serialize checks exact row geometry before writing: an 81-cell row paired
-with a 79-cell row has the expected total byte count but wrong row boundaries.
-Python and Rust enforce the same rule (Python parity added in #18).
+<a id="format-writing-and-graphics"></a>
 
-Read-only graphics have no serialization round-trip. Cross-language digests
-compare decoded RGBA tiles/sprite frames and the GRAPH.RES color bank on local
-data. EXE text test text_tables_match_the_python_reference invokes Python via
-KONUNG_PYTHON, the checkout's .venv, uv run python, then python3. It compares
-entry counts, FNV-1a 64 over UTF-8 character/map-name tables and names assembled
-for every Game.N character. Only the digest algorithm is stored: no game
-strings or constants derived from them. Without editions it spawns no process.
+### Запись форматов и графика
 
-### Scene and renderer parity
+Rust k1-data original.rs, original_game_state.rs, original_game_edit.rs
+и original_graphics.rs соответствуют Python tests/k1/test_maps.py,
+test_game_state.py, test_game_edit.py и test_graphics.py. Проверяются:
 
-k1-game original_scene and kn-game original_facade check reference positions,
-nonempty tiles and drawable decorations, data-driven overlays, deterministic
-draw lists, texture decoding and reproducible check reports.
+- Побайтный parse→serialize всех Konung.N, Game.N/TGame.N,
+  LIGHTS.N/TLIGHTS.N обоих изданий и сырой слот 994 в ENG Tutorial.4/5.
+- Ссылки состояния, старт героя, независимо сверенные смещения полей персонажа
+  (начало блока 0x2A69A), плотные резервы до/после правок, рост резерва,
+  копии NPC со своими группами/предметами, атомарный отказ при нехватке места.
+- Разбор графики до EOF/границ блоков, сборка простых/динамических объектов,
+  однозначное нахождение таблиц EXE, покрытие диапазонов огня и рендер персонажей.
+  Один безымянный житель — отмеченное исключение данных, не сбой парсера.
 
-A scene built with all layers and group-filtered equals a scene built for
-those layers: group_filter_matches_a_scene_without_the_layer checks every
-map and each nonempty layer; pieces_carry_their_group checks facade transport.
-Animation's base image/corner matches the pre-animation static piece; visible
-counts therefore remain unchanged, while layers absent at the base get hidden
-pieces. Flames traverse their EXE ranges at one tick/frame; object sequences
-have frame_count frames of frame_time ticks. Each piece keeps its layer's
-texture identity. Synthetic layer_track/pad_frames cases retain missing frames,
-omit animation for one frame and omit pieces for wholly empty layers.
+Сериализация проверяет геометрию каждой строки: строки на 81 и 79 клеток
+дают правильный общий размер, но неверные границы. Python и Rust проверяют
+одно правило; соответствие Python добавлено в #18.
 
-kn-render original_sprites runs a real Bevy world without a window. Every
-group has a node in PieceGroup::ALL order; GlobalTransform z matches draw-list
-position. VisibilityPlugin verifies inherited hiding, including animated and
-empty frames. Hidden groups retain Animator. Group bounds match scene_bounds
-for visible layers, supporting camera-bound recomputation.
+У графики только для чтения нет проверки обратной сериализации. Межъязыковые
+дайджесты сравнивают декодированные RGBA тайлов/кадров и банк цветов GRAPH.RES
+на локальных данных. Тест EXE text_tables_match_the_python_reference ищет
+Python через KONUNG_PYTHON, .venv рабочего каталога, uv run python, затем python3.
+Он сравнивает число строк, FNV-1a 64 по UTF-8 таблиц имён/карт и имена всех
+персонажей Game.N. Хранится только алгоритм дайджеста: ни строк игры,
+ни вычисленных из них констант. Без изданий процесс не запускается.
 
-## End-to-end inspection and measurements
+<a id="scene-and-renderer-parity"></a>
 
-[Viewer headless checks](../guides/viewer.md#headless-checks) build scenes and
-decode every referenced texture. Recorded ENG runs covered 43 game maps and
-both tutorials in about 5 s release, reporting piece/texture counts, animated
-pieces, frame counts and pieces visible at the base.
+### Сцена и рендерер
 
-Benchmarks are ignored tests or explicit release runs, not routine checks.
-Commands and historical conditions live with
-[movement](rust/movement.md#engine-cost), [poses](rust/data-scene.md#pose-cost),
-[simulation](rust/simulation.md) and [viewer](rust/viewer.md) measurements.
-For a visible format change compare Python output with a Tiled render; keep
-images local in out/. Native pointer acceptance is separately recorded in
-[macOS testing](macos-testing.md).
+k1-game original_scene и kn-game original_facade проверяют эталонные позиции,
+непустые тайлы и видимые декорации, оверлеи из данных, детерминированный список
+отрисовки, декодирование текстур и воспроизводимые отчёты.
+
+Полная сцена после фильтрации групп равна сцене, собранной с выбранными слоями:
+group_filter_matches_a_scene_without_the_layer проверяет все карты и непустые
+слои; pieces_carry_their_group — перенос через фасад. Базовые изображение
+и угол анимации совпадают со статической частью до анимации; видимое количество
+не меняется, а отсутствующие в базовом кадре слои получают скрытые части.
+Огонь проходит включительные диапазоны EXE по тику на кадр; у объектов
+frame_count кадров по frame_time тиков. Текстурная идентичность слоя сохраняется.
+Синтетические layer_track/pad_frames удерживают пропущенные кадры,
+не создают анимацию для одного кадра и части для полностью пустого слоя.
+
+kn-render original_sprites запускает настоящий мир Bevy без окна. Для каждой
+группы создаётся узел в порядке PieceGroup::ALL; GlobalTransform z соответствует
+позиции списка отрисовки. VisibilityPlugin проверяет наследуемое скрытие,
+включая анимированные и пустые кадры. Скрытая группа сохраняет Animator.
+Границы групп совпадают с scene_bounds видимых слоёв для пересчёта границ камеры.
+
+<a id="end-to-end-inspection-and-measurements"></a>
+
+## Сквозная проверка и замеры
+
+[Безоконная проверка просмотрщика](../guides/viewer.md#headless-checks) строит
+сцены и декодирует все используемые текстуры. Записанные прогоны ENG покрывали
+43 игровые карты и оба обучения примерно за 5 с в release; отчёты содержали
+число частей/текстур, анимированных частей, кадров и видимых в базе частей.
+
+Замеры — игнорируемые тесты или явные release-запуски, не обычные проверки.
+Команды и исторические условия находятся рядом с
+[перемещением](rust/movement.md#engine-cost), [позами](rust/data-scene.md#pose-cost),
+[симуляцией](rust/simulation.md) и [просмотрщиком](rust/viewer.md).
+При видимом изменении формата сравнивайте Python и Tiled; изображения остаются
+локально в out/. Проверка нативного указателя отдельно записывается
+в [проверках macOS](macos-testing.md).

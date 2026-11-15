@@ -1,57 +1,70 @@
-# External sources
+<a id="external-sources"></a>
 
-Historical search recorded on **2026-10-28**: GitHub, game-community forums,
-ZenHAX/XeNTaX and PCGamingWiki. Availability and project activity below describe
-that research, not a current network check. Topic pages retain precise source
-citations and confidence; this catalogue does not promote a source-only claim
-to a confirmed fact.
+# Внешние источники
 
-## Code
+Исторический поиск зафиксирован **2026-10-28**: GitHub, игровые форумы,
+ZenHAX/XeNTaX и PCGamingWiki. Доступность и активность проектов ниже относятся
+к тому поиску, не к текущей сетевой проверке. Точные ссылки и уверенность
+сохраняются на тематических страницах; каталог не превращает сведения
+только по источнику в подтверждённый факт.
 
-| Project | What it is | Use and limitations |
+<a id="code"></a>
+
+## Код
+
+| Проект | Что это | Применение и ограничения |
 |---|---|---|
-| [Marisa-Chan/Slavik](https://github.com/Marisa-Chan/Slavik) | C++/SDL2 K1 reimplementation reconstructed from disassembly; FUN_00xxxxxx names remain; activity observed in 2024–2025 | Main structural reference: resources.cpp for GRAPH/OBJECTS/FLAMES/LIGHTS/SOUNDS/MUSICS.RES; game.cpp for LoadGameMap, KONUNG.N/LIGHTS.N and drawing; game_state.cpp for state and CP866. **No license; read only, never copy code.** Local clone ../../Marisa-Chan/Slavik (Windows E:\github\Marisa-Chan\Slavik). |
-| [rtsk_konung_mus_unpacker](https://github.com/dopedealer/rtsk_konung_mus_unpacker) | C MUSICS.RES→OGG extractor | Collector's-edition music format |
-| [konung_map_creator](https://github.com/Ovsyanka/konung_map_creator) | Location maps stitched from screenshots | Local rendering comparison reference |
-| [konung-2-save-editor](https://github.com/Benzeliden/konung-2-save-editor) | K2 save editor | Potential K2 research reference |
-| [konung3-mods](https://github.com/Hawk-Games/konung3-mods) | K3 modifications | Outside scope; background only |
+| [Marisa-Chan/Slavik](https://github.com/Marisa-Chan/Slavik) | Восстановленная по дизассемблеру реализация K1 на C++/SDL2; остались имена FUN_00xxxxxx; наблюдалась активность в 2024–2025 | Основной структурный источник: resources.cpp — GRAPH/OBJECTS/FLAMES/LIGHTS/SOUNDS/MUSICS.RES; game.cpp — LoadGameMap, KONUNG.N/LIGHTS.N и отрисовка; game_state.cpp — состояние и CP866. **Нет лицензии: только чтение, копировать код нельзя.** Локальный клон ../../Marisa-Chan/Slavik (Windows E:\github\Marisa-Chan\Slavik). |
+| [rtsk_konung_mus_unpacker](https://github.com/dopedealer/rtsk_konung_mus_unpacker) | Распаковщик MUSICS.RES→OGG на C | Формат музыки коллекционного издания |
+| [konung_map_creator](https://github.com/Ovsyanka/konung_map_creator) | Карты локаций, склеенные из снимков экрана | Эталон для локального сравнения рендера |
+| [konung-2-save-editor](https://github.com/Benzeliden/konung-2-save-editor) | Редактор сохранений K2 | Возможный источник исследования K2 |
+| [konung3-mods](https://github.com/Hawk-Games/konung3-mods) | Модификации K3 | Вне проекта; только контекст |
 
-## Community technical discussions
+<a id="community-technical-discussions"></a>
 
-These links cite discussions and documentation, not game distribution sources.
+## Технические обсуждения сообщества
 
-- [gospitaliers series page](https://gospitaliers.narod.ru/knyaz_opisanie.htm):
-  descriptions, patch/editor references, and the community forum.
-- [konung.topbb.ru](https://konung.topbb.ru/) and its
-  [editor thread](https://konung.topbb.ru/viewtopic.php?id=135): save offsets
-  for konung.sa1…sa9 / Cheat Engine; no resource-format description found.
-- [HD-patch discussion](https://www.old-games.ru/forum/threads/knjaz-legendy-lesnoj-strany-aka-konung-legends-of-the-north.27570/page-4):
-  Morendil's GOG-compatible patch and Konung/Video/*.flm paths.
-- [ag.ru HEX notes](https://ag.ru/games/konung-legends-of-the-north/cheats/10659): save offsets.
+Ссылки ведут на обсуждения и документацию, а не на распространение игры.
 
-## Edition patches
+- [Страница серии gospitaliers](https://gospitaliers.narod.ru/knyaz_opisanie.htm):
+  описания, упоминания патчей/редакторов и форум сообщества.
+- [konung.topbb.ru](https://konung.topbb.ru/) и
+  [тема редактора](https://konung.topbb.ru/viewtopic.php?id=135): смещения
+  konung.sa1…sa9 / Cheat Engine; описания форматов ресурсов не найдено.
+- [Обсуждение HD-патча](https://www.old-games.ru/forum/threads/knjaz-legendy-lesnoj-strany-aka-konung-legends-of-the-north.27570/page-4):
+  совместимый с GOG патч Morendil и пути Konung/Video/*.flm.
+- [HEX-заметки ag.ru](https://ag.ru/games/konung-legends-of-the-north/cheats/10659):
+  смещения сохранений.
+
+<a id="edition-patches"></a>
+
+## Патчи изданий
 
 - [PCGamingWiki](https://www.pcgamingwiki.com/wiki/Konung:_Legends_of_the_North)
-  and its [Resolution Fix](https://community.pcgamingwiki.com/files/file/1652-konung-legends-of-the-north-resolution-fix/):
-  a widescreen EXE patch reported for RUS CD and collector's/GOG editions.
-- [Gamepressure patch catalogue](https://www.gamepressure.com/games/konung-legends-of-the-north/mods-trainers/z8c14):
-  the same v2 widescreen fixes.
+  и [Resolution Fix](https://community.pcgamingwiki.com/files/file/1652-konung-legends-of-the-north-resolution-fix/):
+  широкоформатный патч EXE, заявленный для RUS CD и коллекционного/GOG изданий.
+- [Каталог патчей Gamepressure](https://www.gamepressure.com/games/konung-legends-of-the-north/mods-trainers/z8c14):
+  те же широкоформатные исправления v2.
 
-## Series history
+<a id="series-history"></a>
 
-- [DTF history](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz).
+## История серии
+
+- [История DTF](https://dtf.ru/games/233716-pervaya-russkaya-rpg-istoriya-serii-knyaz).
 - [Wikipedia](https://en.wikipedia.org/wiki/Konung:_Legend_of_the_North).
 - [Cyclowiki K2](https://www.cyclowiki.org/wiki/%D0%9A%D0%BD%D1%8F%D0%B7%D1%8C_2:_%D0%9A%D1%80%D0%BE%D0%B2%D1%8C_%D0%A2%D0%B8%D1%82%D0%B0%D0%BD%D0%BE%D0%B2).
 - [StopGame K2.5](https://stopgame.ru/game/knjaz_2_prodolzhenie_legendy).
-- [Snowball Studios history](https://www.old-games.ru/wiki/Snowball_Studios).
+- [История Snowball Studios](https://www.old-games.ru/wiki/Snowball_Studios).
 
-The [gameplay comparison](comparison.md#sources-for-the-comparison) records
-its own later source census and reachability limitations.
+[Сравнение механик](comparison.md#sources-for-the-comparison) содержит
+отдельный, более поздний список источников и ограничения их доступности.
 
-## General format research
+<a id="general-format-research"></a>
 
-[awesome-game-file-format-reversing](https://github.com/VelocityRa/awesome-game-file-format-reversing),
-[ZenHAX](https://zenhax.com/) and the XeNTaX archive were searched; no K1-specific
-material was found there. Apart from Slavik, the historical search found no
-public GRAPH.RES/OBJECTS.RES extractor, map editor or format description.
-This is a bounded search result, not a claim that none can exist.
+## Общие исследования форматов
+
+Проверены [awesome-game-file-format-reversing](https://github.com/VelocityRa/awesome-game-file-format-reversing),
+[ZenHAX](https://zenhax.com/) и архив XeNTaX; материалов именно о K1 не найдено.
+Кроме Slavik, тот поиск не обнаружил публичного распаковщика GRAPH.RES/OBJECTS.RES,
+редактора карт или описания форматов. Это результат ограниченного поиска,
+а не утверждение, что таких материалов не может существовать.

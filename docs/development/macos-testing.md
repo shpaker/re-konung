@@ -1,78 +1,89 @@
-# Interactive testing on macOS
+<a id="interactive-testing-on-macos"></a>
 
-Build a local development application with `just game-app`, then open
-`out/macos/re-konung.app` in Finder or select that absolute application path in
-the desktop automation tool. `GAME_DIR=original/k1/eng/game just game-app`
-selects the English edition. Quit the game before rebuilding and relaunch it
-afterwards so that the next test uses the new executable.
+# Интерактивные проверки на macOS
 
-The package has the stable identifier `io.github.shpaker.re-konung.dev`.
-Its launch environment supplies the original-data directory and dynamic-library
-paths that `cargo run` normally supplies. `RE_KONUNG_GAME_DIR` and
-`RE_KONUNG_SETTINGS` are CLI fallbacks; explicit flags take precedence.
-Development settings live in `out/macos/settings.json`, independently of
-the normal game's preferences. The package references the local checkout and
-Rust toolchain; it is not a redistributable release and contains no game data.
+Соберите локальное приложение командой `just game-app`, затем откройте
+`out/macos/re-konung.app` в Finder или выберите его абсолютный путь
+в инструменте автоматизации рабочего стола.
+`GAME_DIR=original/k1/eng/game just game-app` выбирает английское издание.
+Перед пересборкой завершите игру, затем запустите заново, чтобы проверять новый бинарный файл.
 
-## Desktop tool access
+Идентификатор пакета — `io.github.shpaker.re-konung.dev`.
+Окружение запуска задаёт каталог исходных данных и пути динамических библиотек,
+обычно предоставляемые `cargo run`. `RE_KONUNG_GAME_DIR` и
+`RE_KONUNG_SETTINGS` — резервные значения CLI; явные флаги важнее.
+Настройки разработки хранятся в `out/macos/settings.json` отдельно от обычных.
+Пакет ссылается на локальный рабочий каталог и toolchain Rust: он не предназначен
+для распространения и не содержит игровых данных.
 
-Our local check found that `unified-computer-use` did not list the unbundled
-Cargo executable and rejected its path with `Invalid app`. The `.app` path was
-recognized and reached the separate per-application permission check instead.
-The user must allow access to re-konung in the desktop tool before pointer or
-screenshot testing can proceed. Do not change system privacy permissions or
-substitute synthetic control events for actual mouse acceptance.
+<a id="desktop-tool-access"></a>
 
-The bundle's declared executable must be the game binary itself. Our initial
-shell launcher could display a window but coordinate input failed with
-`noWindowsAvailable` and screenshots stopped updating. Putting launch defaults
-in `LSEnvironment` and launching the binary directly resolved this in our local
-test; no desktop-tool or permission configuration was modified.
+## Доступ инструмента рабочего стола
 
-## New-game acceptance
+Локальная проверка показала: `unified-computer-use` не перечислял бинарный файл
+Cargo без пакета и отклонял путь с `Invalid app`. Путь `.app` распознавался
+и доходил до отдельной проверки разрешения на приложение. Перед проверкой
+указателя или снимков пользователь должен разрешить доступ к re-konung.
+Не меняйте системные настройки приватности и не заменяйте проверку реальной
+мышью синтетическими событиями элементов управления.
 
-Open New game, click each hero portrait and verify the name, description,
-selected portrait and sprite change. Change occupation and specializations;
-decrease an attribute, spend its refund elsewhere and verify the point balance,
-carrying capacity and party capacity update. Changing occupation resets the
-allocation; changing hero or specialization preserves it.
+Объявленным исполняемым файлом пакета должен быть сам бинарный файл игры.
+Первоначальный shell-лаунчер показывал окно, но координатный ввод завершался
+`noWindowsAvailable`, а снимки переставали обновляться. Перенос настроек
+запуска в `LSEnvironment` и прямой запуск бинарного файла устранили проблему
+в локальной проверке; настройки инструмента и разрешений не менялись.
 
-Check keyboard focus, Escape/Back, scrolling, readable labels and the separate
-Back/Begin footer at different window sizes. Begin must reach the selected
-hero's start map without a loading error. The automated runtime tests cover
-the full parameter and equipment transfer; see [runtime contracts](rust/player-ui.md#runtime-and-interface-contracts).
-Record which pointer steps were actually observed. Screenshots contain original
-game content: keep them in `out/`, never in git, PRs or issues.
+<a id="new-game-acceptance"></a>
 
-## Recorded pointer acceptance
+## Приёмка новой игры
 
-The development application bundle resolved the previous
-`Invalid app` limitation. After the user approved re-konung, real coordinate
-clicks opened New game, changed the selected hero from Wolf to Dragomir to
-Mikhail, selected Hunter, changed fencing to accuracy and selected medicine.
-Decreasing Hunter agility from 15 to 14 refunded 5 points; increasing strength
-from 3 to 4 spent 2, leaving 3. Switching heroes preserved those choices, and
-Begin loaded Mikhail's starting map without a session error. The runtime tests
-remain the evidence for the complete record transfer, including the fields
-not exposed by an in-game character panel yet.
+Откройте «Новую игру», нажмите каждый портрет и проверьте имя, описание,
+выделение портрета и спрайт. Смените занятие и специализации, уменьшите
+характеристику, потратьте возврат на другую и проверьте баланс очков,
+грузоподъёмность и размер отряда. Смена занятия сбрасывает распределение,
+смена героя или специализации — сохраняет.
 
-Screenshots of the RUS UI at the default 1280-pixel logical width and at a wider
-window confirmed separate portraits, Cyrillic captions, three centered columns
-and readable neutral buttons. Narrow-window scrolling and other DPI scales
-still need a completed pointer run: the attempted resize timed out, and the user
-subsequently took control of the window. No Windows pointer run was performed.
+Проверьте фокус с клавиатуры, Escape/Назад, прокрутку, читаемость и отдельный
+подвал Назад/Начать при разных размерах окна. «Начать» должен открыть
+стартовую карту героя без ошибки загрузки. Автотесты проверяют полный перенос
+параметров и снаряжения; см. [контракты сессии](rust/player-ui.md#runtime-and-interface-contracts).
+Записывайте, какие действия мышью действительно наблюдались. Снимки содержат
+игровой контент: только в `out/`, никогда в git, PR или issues.
 
-### Compact attribute rows
+<a id="recorded-pointer-acceptance"></a>
 
-Local pointer acceptance of the compact rows on macOS covered warrior strength
-15 → 14 → 13 → 12, yielding 5 → 10 → 12 free points and changing the next refund
-from 5 to 2. Increasing agility to 4 spent 2; reducing endurance to 9 refunded 5
-and immediately changed carry limit from 13.3 to 13.0. Both balance counters and
-changed-value highlights were inspected; all four attributes, other statistics
-and footer actions fit the default window without scrolling.
+## Зафиксированная проверка указателем
 
-A subsequent restart exposed a desktop-tool limitation: `getApp` and screenshots
-recognized the window, but coordinate clicks returned `noWindowsAvailable` even
-after rebinding and resetting the tool session. The final tab-group correction
-is therefore verified by the navigation test, not a completed native keyboard
-run. The earlier pointer acceptance above remains separate from that limitation.
+Пакет приложения разработки устранил прежнее ограничение `Invalid app`.
+После разрешения пользователя реальные координатные нажатия открыли «Новую
+игру», сменили Волка на Драгомира, затем Михаила, выбрали охотника, стрельбу
+вместо фехтования и медицину. Уменьшение ловкости охотника с 15 до 14 вернуло
+5 очков; увеличение силы с 3 до 4 потратило 2, осталось 3. Смена героя
+сохранила выбор, «Начать» открыл стартовую карту Михаила без ошибки сессии.
+Полноту переноса записи, включая ещё не показанные игровым интерфейсом поля,
+подтверждают тесты сессии.
+
+Снимки русского интерфейса при исходной логической ширине 1280 пикселей
+и в более широком окне подтвердили отдельные портреты, кириллические подписи,
+три центрированные колонки и читаемые нейтральные кнопки. Проверка прокрутки
+в узком окне и других масштабов DPI не закончена: попытка изменения размера
+завершилась тайм-аутом, затем пользователь взял управление. Проверки мышью
+на Windows не было.
+
+<a id="compact-attribute-rows"></a>
+
+### Компактные строки характеристик
+
+Локальная проверка мышью на macOS охватила силу воина 15 → 14 → 13 → 12:
+баланс 5 → 10 → 12, следующий возврат менялся с 5 на 2. Увеличение ловкости
+до 4 потратило 2; снижение выносливости до 9 вернуло 5 и сразу изменило
+грузоподъёмность с 13,3 до 13,0. Проверены оба счётчика баланса и выделение
+изменённых значений; все четыре характеристики, прочая статистика и подвал
+поместились в исходное окно без прокрутки.
+
+Последующий перезапуск выявил ограничение инструмента рабочего стола:
+`getApp` и снимки распознавали окно, но координатные нажатия возвращали
+`noWindowsAvailable` даже после повторной привязки и сброса сессии инструмента.
+Итоговое исправление tab group поэтому проверено тестом навигации, а не
+завершённым нативным прогоном клавиатуры. Ранее описанная приёмка мышью
+остаётся отдельным результатом.

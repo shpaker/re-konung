@@ -1,28 +1,31 @@
-# Set up a checkout
+<a id="set-up-a-checkout"></a>
 
-Install [uv](https://docs.astral.sh/uv/), [just](https://just.systems) and
-[prek](https://prek.j178.dev). Python 3.14 is managed by uv. For Rust applications,
-install a stable Rust toolchain; for map editing, Tiled 1.12. Extracting a disc
-also needs 7-Zip.
+# Подготовка окружения
 
-From the repository root:
+Установите [uv](https://docs.astral.sh/uv/), [just](https://just.systems) и
+[prek](https://prek.j178.dev). Проект требует Python 3.14 или новее; uv выбирает
+совместимый интерпретатор, версия 3.14 отдельно не закреплена. Для приложений
+Rust нужен стабильный toolchain, для редактирования карт — Tiled 1.12.
+Извлечение образа диска также требует 7-Zip.
+
+Из корня репозитория:
 
 ```sh
 uv tool install prek
 just setup
 ```
 
-This installs Python dependencies and the shared git hooks. Run `just check`
-after making changes. For Rust profiles, platform dependencies and CI, see
-[builds](../development/building.md); check coverage is in
-[testing](../development/testing.md).
+Команды устанавливают зависимости Python и общие git-хуки. После изменений
+выполняйте `just check`. Профили Rust, системные зависимости и CI описаны
+в [сборке](../development/building.md), состав проверок —
+в [проверках](../development/testing.md).
 
-Prepare [your game files](game-files.md), then choose:
+Подготовьте [файлы игры](game-files.md), затем выберите инструмент:
 
-- [Player](player.md): `just game`.
-- [Viewer](viewer.md): `just viewer 17`.
+- [Игра](player.md): `just game`.
+- [Просмотрщик](viewer.md): `just viewer 17`.
 - [Tiled](tiled.md): `just tiled-install`.
 
-The Tiled extension can also be installed through the repository's plugin
-without a development checkout; its [guide](tiled.md#installation-through-an-agent)
-explains that route.
+Расширение Tiled можно установить и через плагин репозитория без рабочего
+каталога разработки; этот способ описан в
+[руководстве](tiled.md#installation-through-an-agent).

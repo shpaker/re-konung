@@ -1,8 +1,10 @@
-# Run the player
+<a id="run-the-player"></a>
 
-[Set up the checkout](setup.md) and [prepare your game files](game-files.md).
-The player currently provides the menu, settings, character creation and the
-start-map simulation; the full playable game is still in development.
+# Запуск игры
+
+[Подготовьте окружение](setup.md) и [файлы игры](game-files.md).
+Сейчас доступны меню, настройки, создание персонажа и симуляция стартовой
+карты; полноценный игровой цикл ещё разрабатывается.
 
 ```sh
 just game
@@ -10,20 +12,23 @@ GAME_DIR=original/k1/eng/game just game
 just game-release
 ```
 
-Choose **New game**, select the hero, occupation and specializations, and adjust
-attributes. Decreasing an attribute refunds its price; increasing spends points.
-Changing occupation resets allocation; changing hero or specialization preserves
-it. Unspent points carry into the session. **Begin** opens the selected hero's
-start map. **Back** or Escape cancels creation. Tab moves focus; Enter/Space
-activate the focused control.
+Выберите **Новая игра**, героя, занятие и специализации, затем распределите
+характеристики. Уменьшение возвращает цену, увеличение тратит очки.
+Смена занятия сбрасывает распределение; смена героя или специализации
+сохраняет его. Неизрасходованные очки переходят в сессию. **Начать** открывает
+стартовую карту выбранного героя. **Назад** или Escape отменяет создание.
+Tab перемещает фокус; Enter/Space активирует выбранный элемент.
 
-Settings support Russian/English, fullscreen and vsync. A language draft previews
-inside settings; the rest of the UI changes when the save succeeds. On failure,
-the draft remains available for retry and runtime settings roll back.
+Настройки поддерживают русский/английский язык, полноэкранный режим и vsync.
+Черновик языка сразу виден внутри настроек, остальной интерфейс меняется после
+успешного сохранения. При ошибке черновик остаётся для повторной попытки,
+а применённые параметры откатываются.
 
-## CLI and local settings
+<a id="cli-and-local-settings"></a>
 
-For direct Cargo invocation:
+## CLI и локальные настройки
+
+Прямой запуск через Cargo:
 
 ```sh
 cargo run --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-player \
@@ -31,13 +36,14 @@ cargo run --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-player \
     --game-dir original/k1/rus/game --new-game --settings out/player-settings.json
 ```
 
-`--new-game` opens creation directly. `--settings` selects a JSON settings file;
-otherwise the OS configuration directory supplies `re-konung/settings.json`.
-`RE_KONUNG_GAME_DIR` and `RE_KONUNG_SETTINGS` provide environment fallbacks;
-explicit flags take precedence. Missing settings use defaults. An unreadable,
-corrupt or newer file is diagnosed and left untouched when loading.
+`--new-game` сразу открывает создание персонажа. `--settings` задаёт JSON-файл
+настроек; по умолчанию используется `re-konung/settings.json` в системном
+каталоге конфигурации. `RE_KONUNG_GAME_DIR` и `RE_KONUNG_SETTINGS` задают
+резервные значения через окружение; явные флаги имеют приоритет.
+Отсутствующий файл означает настройки по умолчанию. Нечитаемый, повреждённый
+или более новый файл диагностируется и при загрузке не изменяется.
 
-For a Finder application and interactive checks, see
-[macOS testing](../development/macos-testing.md). Implementation contracts are in
-[player/UI](../development/rust/player-ui.md); original creation rules in
-[K1 research](../research/k1/new-game.md).
+Приложение для Finder и интерактивные проверки описаны в
+[проверках macOS](../development/macos-testing.md). Контракты реализации —
+в [игре и интерфейсе](../development/rust/player-ui.md), исходные правила
+создания — в [исследовании K1](../research/k1/new-game.md).

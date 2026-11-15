@@ -1,182 +1,78 @@
-# Viewer implementation and frame measurements
+<a id="viewer-implementation-and-frame-measurements"></a>
 
-[User controls](../../guides/viewer.md) · [Rendering](rendering.md) ·
-[Simulation](simulation.md). Measurements below are recorded historical runs,
-with their original hardware, versions and conditions; this reorganization
-introduces no benchmark results. Later corrected attribution takes precedence
-over earlier hypotheses without erasing the earlier numbers.
+# Устройство просмотрщика и замеры кадров
 
-## Viewer state and diagnostics
+[Управление](../../guides/viewer.md) · [Рендеринг](rendering.md) · [Симуляция](simulation.md). Ниже сохранены исторические замеры с исходным оборудованием, версиями и условиями. Перестройка документации не добавляет новых результатов. Исправленная атрибуция важнее ранних гипотез; прежние числа при этом сохраняются.
 
-kn-fe-viewer separates Viewer state from Feathers controls. Handlers change
-state; sync systems apply it. Rebuild is raised only for a map change, which
-builds SceneOptions::ALL and frames the camera. The viewer selects no hero
-(SceneOptions.hero is None); the map source selects Game.N or TGame.N.
+<a id="viewer-state-and-diagnostics"></a>
 
-Overlay toggles update group Visibility, not sprites or textures. The panel
-counts true InheritedVisibility on sprites (visible/assembled), which includes
-hidden groups and empty animation frames. Summing children would overcount.
-TextureCache::load preserves decode-error text; logs and panel counts expose
-missing images. Invalid CLI map numbers return failure.
+## Состояние и диагностика
 
-Bevy Checkbox reports !Has<Checked> but does not write Checked itself;
-kn-ui::sync_checked mirrors actual state after click or keyboard changes.
-The panel root carries Hovered too, so camera input is captured over gaps
-between controls. Captions are English because this is a development tool;
-KonungUiPlugin applies the shared theme/PT Sans, including Feathers composite
-interiors. Characters are on by default, mirrored by the checkbox.
+kn-fe-viewer отделяет состояние Viewer от элементов Feathers. Обработчики меняют состояние, системы синхронизации применяют его. Rebuild возникает только при смене карты: строит SceneOptions::ALL и кадрирует камеру. Просмотрщик не выбирает героя (SceneOptions.hero = None); источник карты выбирает Game.N либо TGame.N.
 
-Labels are built once per map by k1_game::creatures::labels from EXE names and
-record class/name/nickname indices, exposed as Simulation::labels. The viewer
-imports no K1 name tables. Each label is #<id> plus the assembled name, or bare
-#<id> when unnamed. Synthetic name tests store no game strings. PT Sans covers
-Cyrillic; no game font or user-specified font path is used. LABEL_Z=500 stays
-above map pieces (largest recorded z about 172) and inside the 2D camera's
-±1000 far range; the former z=9999 was clipped. World y points up, so a positive
-label offset belongs above the creature, not below its feet.
+Переключатели слоёв меняют Visibility групп, не спрайты или текстуры. Панель показывает отношение числа спрайтов с истинным InheritedVisibility к числу собранных; учитываются скрытые группы и пустые кадры. Сумма числа детей завысила бы результат. TextureCache::load сохраняет текст ошибки декодирования; лог и счётчики показывают недостающие изображения. Неверный номер карты в CLI завершает запуск неуспешно.
 
-## Playback and lighting controls
+Checkbox Bevy сообщает !Has<Checked>, но сам не записывает Checked; kn-ui::sync_checked отражает действительное состояние после мыши и клавиатуры. Корень панели тоже имеет Hovered, чтобы камера не получала ввод в промежутках между элементами. Подписи английские: это инструмент разработки. KonungUiPlugin применяет общую тему и PT Sans, включая внутренние части составных элементов Feathers. Characters включён по умолчанию, флажок соответствует состоянию.
 
-One Play state drives Clock.ticks for frames and simulation: Space toggles
-Playing/Paused, . and , step. Pausing holds both; the checkbox never chooses
-Off (play_toggle_never_stops_the_animation_behind_the_simulation_s_back).
-apply_playback changes the clock state, not Rebuild; sync_playboxes mirrors it.
+Метки один раз на карту строит k1_game::creatures::labels из имён EXE и индексов класса/имени/прозвища записи; доступны через Simulation::labels. Просмотрщик не импортирует таблицы имён K1. Метка — #<id> и собранное имя, либо только #<id>. Синтетические тесты не содержат строк игры. PT Sans поддерживает кириллицу; игровой шрифт и пользовательский путь к шрифту не нужны. LABEL_Z=500 находится над элементами карты (наибольший записанный z около 172) и внутри диапазона 2D-камеры ±1000; прежнее z=9999 отсекалось. Мировой y направлен вверх, положительное смещение метки помещает её над существом.
 
-Reset positions responds only to its ResetPositions marker's Activate events,
-not the map selector's. reset_creature_sim recreates Game::simulation with the
-same SIM_SEED used by map loads and the player, pins the epoch to current
-Clock.ticks, and zeros relative sim_ticks. Overlays, camera, map, pause, texture
-cache, spawned nodes and labels stay. Nodes/labels sync to new positions.
-Without the epoch pin a fresh simulation would catch up through old history.
+<a id="playback-and-lighting-controls"></a>
 
-Reset animation instead sets Off, zeroes the clock and recreates/replays to tick
-zero. A later Play runs state-4 specials from frame zero. Paused → Play resumes
-the held stage; positions reset preserves the existing clock. These are distinct
-operations. Backward stepping rebuilds/replays rather than reversing the engine;
-[rendering](rendering.md) describes catch-up ordering and the measured long replay.
+## Воспроизведение и освещение
 
-Viewer::constant_day is a session preference. Checkbox or N changes it;
-sync_daynight_boxes mirrors it. update_lighting_state passes
-params_gated(tick,seed,!constant_day) without moving Clock or rebuilding entities.
-It survives map changes and resets only on app restart to
-DEFAULT_CONSTANT_DAY=false (cycle on). The original default is unknown.
---constant-day and --light-tick pin capture/benchmark conditions. The player
-has no equivalent control yet. Original gates and deliberate differences:
-[lighting research](../../research/k1/lighting.md).
+Одно состояние Play управляет Clock.ticks для кадров и симуляции: Space переключает Playing/Paused, . и , делают шаг. Пауза удерживает оба процесса; флажок никогда не выбирает Off (`play_toggle_never_stops_the_animation_behind_the_simulation_s_back`). apply_playback меняет часы, не Rebuild; sync_playboxes отражает состояние.
 
-## Recorded lighting-render cost
+Reset positions реагирует только на Activate своего маркера ResetPositions, не селектора карты. reset_creature_sim пересоздаёт Game::simulation с тем же SIM_SEED, что загрузка карты и игра, фиксирует эпоху на текущем Clock.ticks и обнуляет относительные sim_ticks. Слои, камера, карта, пауза, кеш текстур, узлы и метки сохраняются; позиции синхронизируются заново. Без фиксации эпохи новая симуляция догоняла бы старую историю.
 
-**Render.** The window meter, not the CPU one. Methodology: release build,
-the viewer's `--benchmark 600` mode — 40 settle frames, then 600 measured
-frames of map 17 of the rus edition (12 487 sprites, characters overlay on);
-the samples are the `DiagnosticsStore` frame time that
-`FrameTimeDiagnosticsPlugin` writes each update, the percentiles are
-nearest-rank over the 600 samples, and each row is three runs in a row. The
-benchmark window opens with `PresentMode::AutoNoVsync` (`--benchmark` runs
-only; interactive runs keep the default Fifo), and that choice is the
-methodology, not a tweak: with vsync on, a finished frame sits on the
-monitor's quantum of 16.67 ms — day and night would both read as the
-display's pace and the meter would measure the screen, not the scene.
-Hardware: AMD Ryzen 9 9950X, NVIDIA GeForce RTX 2070 SUPER, wgpu backend
-Vulkan (the adapter log line of the runs). A draw-call counter is not
-reachable from `bevy_render` 0.20 without extra features, so the table counts
-sprites (`ScenePiece` entities of the scene) and the materials of the
-lighting pool instead.
+Reset animation включает Off, обнуляет часы и пересоздаёт/проигрывает состояние до нуля. Следующий Play запускает особые анимации состояния 4 с кадра 0. Paused → Play продолжает удерживаемую стадию; сброс позиций сохраняет часы. Шаг назад пересоздаёт и проигрывает мир, не обращает движок; порядок и стоимость длинного повтора описывает [рендеринг](rendering.md).
 
-| Version | Light | avg ms | p95 ms | p99 ms | sprites | light materials |
+Viewer::constant_day — настройка сеанса; меняется флажком либо N, отражается sync_daynight_boxes. update_lighting_state передаёт params_gated(tick,seed,!constant_day), не двигая Clock и не перестраивая сущности. Настройка переживает смену карты, при перезапуске получает DEFAULT_CONSTANT_DAY=false: цикл включён. Оригинальное начальное значение неизвестно. --constant-day и --light-tick фиксируют условия снимка/замера. В игровом приложении пока нет такого переключателя. Условия оригинала и отличия: [исследование освещения](../../research/k1/lighting.md).
+
+<a id="recorded-lighting-render-cost"></a>
+
+## Историческая стоимость отображения света
+
+Измерялось **окно**, не CPU-модель. Release, --benchmark 600: 40 кадров стабилизации и 600 измеряемых кадров RUS-карты 17, 12 487 спрайтов, слой существ включён. Выборки — время кадра из DiagnosticsStore, записываемое FrameTimeDiagnosticsPlugin; процентили nearest-rank по 600 значениям, каждая строка охватывает три последовательных запуска. Только режим замера использует PresentMode::AutoNoVsync, интерактивный — обычный Fifo. С vsync готовый кадр ждал бы квант дисплея 16,67 мс, и сравнение дня/ночи измеряло бы экран.
+
+Оборудование: AMD Ryzen 9 9950X, NVIDIA GeForce RTX 2070 SUPER, backend wgpu Vulkan по логу адаптера. Счётчик вызовов рисования недоступен в bevy_render 0.20 без дополнительных возможностей; вместо него считались ScenePiece и материалы пула света.
+
+| Версия | Свет | Среднее, мс | p95, мс | p99, мс | Спрайтов | Материалов света |
 |---|---|---|---|---|---|---|
-| a95db9f — the historical local main baseline, full default Bevy features | none | 1.49–1.52 | 1.86–1.94 | 2.06–2.10 | 12 487 | 0 |
-| ba22cda — the lighting study base (#105 build profiles) | none | 1.28–1.29 | 1.64–1.68 | 1.86–1.93 | 12 487 | 0 |
-| spike 3838657 — material on terrain only, CLI-pinned lighting | day, `--light-tick 0` | 3.00–3.01 | 3.46–3.47 | 3.71–3.77 | 12 487 | 20 |
-| spike 3838657 | night, `--light-tick 11000` | 2.96–3.02 | 3.38–3.43 | 3.64–3.67 | 12 487 | 20 |
-| lighting version 16e4371 | day — clock at tick 0 | 3.30–3.33 | 3.82–3.86 | 4.03–4.20 | 12 487 | 21 |
-| lighting version 16e4371 | night, `--light-tick 11000` | 3.27–3.30 | 3.76–3.80 | 3.97–4.06 | 12 487 | 21 |
+| a95db9f, историческая локальная main, все стандартные возможности Bevy | Нет | 1,49–1,52 | 1,86–1,94 | 2,06–2,10 | 12 487 | 0 |
+| ba22cda, база исследования света, профили сборки #105 | Нет | 1,28–1,29 | 1,64–1,68 | 1,86–1,93 | 12 487 | 0 |
+| Прототип 3838657, материал только на земле, свет закреплён CLI | День, --light-tick 0 | 3,00–3,01 | 3,46–3,47 | 3,71–3,77 | 12 487 | 20 |
+| Прототип 3838657 | Ночь, --light-tick 11000 | 2,96–3,02 | 3,38–3,43 | 3,64–3,67 | 12 487 | 20 |
+| Версия света 16e4371 | День, часы на тике 0 | 3,30–3,33 | 3,82–3,86 | 4,03–4,20 | 12 487 | 21 |
+| Версия света 16e4371 | Ночь, --light-tick 11000 | 3,27–3,30 | 3,76–3,80 | 3,97–4,06 | 12 487 | 21 |
 
-The baseline rows carry a caveat the comparison needs: the local `main` ref
-(a95db9f) is one build-infra commit behind `origin/main` (ba22cda, #105,
-which trimmed the Bevy feature set and toolchain), and that commit alone is
-worth ~0.2 ms of average frame time here (1.49 → 1.28). The lighting work
-sits on ba22cda, so the honest lighting deltas read against it:
+Локальная main a95db9f тогда отставала от origin/main ba22cda на один инфраструктурный коммит #105, сокративший набор возможностей Bevy и инструментарий. Уже он меняет среднее примерно на 0,2 мс (1,49 → 1,28). Свет разрабатывался поверх ba22cda; сравнение ведётся с ней:
 
-- **The lighting version's day against ba22cda — the full cost of the materials on
-  every surface:** +2.0 ms of average frame time (1.28 → 3.30–3.33), p95
-  1.64 → 3.82–3.86. Where the base bound no materials, the lighting version hands
-  every terrain, decoration, object and dark-cell creature sprite a light
-  material (21 in the pool, 19 LIGHTS.RES masks plus the two plain ones).
-- **Night against day — the cost of the formula:** none. The night triple
-  changes the uniforms, not the work: 3.27–3.30 against 3.30–3.33 ms of
-  average, inside the runs' spread. The per-frame CPU model is nanoseconds
-  ([CPU lighting cost](simulation.md#lighting-cost)), and the day's zero blend takes the shader's no-op branch,
-  so both phases draw the same material graph.
-- **The spike against the lighting version — extending the material past the
-  terrain:** +0.3 ms of average (3.00 → 3.30–3.33 day, p95 3.46 → 3.82–3.86).
-  The terrain-only material cost 1.7 ms over the base (1.28 → 3.00); covering
-  decorations, objects and the per-creature material swaps adds another
-  third of a millisecond and the one extra plain material (20 → 21).
+- **Материалы на всех поверхностях днём:** +2,0 мс среднего (1,28 → 3,30–3,33), p95 1,64 → 3,82–3,86. Материал получают земля, декорации, объекты и существа в тёмных ячейках: 21 материал, 19 масок LIGHTS.RES и два обычных варианта.
+- **Ночная формула относительно дня:** различие не разрешено разбросом: 3,27–3,30 против 3,30–3,33 мс. Тройка меняет uniforms, не граф материалов; нулевой дневной цвет идёт по пустой ветви шейдера. [CPU-модель](simulation.md#lighting-cost) стоит наносекунды.
+- **Расширение прототипа за пределы земли:** +0,3 мс среднего (3,00 → 3,30–3,33), p95 3,46 → 3,82–3,86. Материал только земли стоил +1,7 мс к базе (1,28 → 3,00); декорации, объекты и замены материалов существ добавили около трети миллисекунды и один материал (20 → 21).
 
-**Unmeasured allocation candidate:** update_creature_lighting still reads
-Simulation::states(), as do creature display/label systems; the cost of that
-state Vec at these populations was not isolated. The per-creature dark map
-itself now reuses Local<HashMap>. Claims that allocation is negligible remain
-unmeasured and require profiling before optimization.
+**Выделение памяти ещё не измерено отдельно.** update_creature_lighting читает Simulation::states(), как и системы существ/меток; стоимость Vec состояния для этих популяций не изолирована. Карта затемнения существ переиспользует Local<HashMap>. Утверждать незначительность выделения памяти до профилирования нельзя.
 
-**Scrub catch-up cost.** Releasing the time slider walks the simulation to
-the clock in one frame — forward by plain ticks, backward by the deterministic
-seed replay. Measured by `benchmark_scrub_catchup_cost` in `kn-fe-viewer`
-(`#[ignore]`, release, needs `original/`) on the busiest simulation of the
-rus edition — map 36 with 65 creatures — as the whole release frame
-(`app.update()` around the settle), three fresh runs per jump:
+**Догоняющая симуляция после ползунка.** Отпускание ползунка догоняет часы за одно обновление: вперёд обычными тиками, назад детерминированным повтором seed. Исторический benchmark_scrub_catchup_cost в kn-fe-viewer (#[ignore], release, нужен original/) измерял целиком app.update() на самой населённой симуляции RUS: карта 36, 65 существ, три свежих запуска на переход.
 
-| Jump | avg settle frame |
+| Переход | Среднее время обновления |
 |---|---|
-| 0 → 18960 (forward, 18 960 ticks) | 54–76 ms (worst of six runs 75.8) |
-| 18960 → 900 (backward, seed replay of 900) | 44–48 ms |
+| 0 → 18960, вперёд на 18 960 тиков | 54–76 мс, максимум шести запусков 75,8 |
+| 18960 → 900, назад с повтором 900 тиков | 44–48 мс |
 
-Both sit below a tenth of a second, so a release is one dropped frame at
-worst, and the backward replay branch is consistently the cheaper one; no
-optimization is warranted until the frame-time gate (#98) says otherwise.
+Оба перехода укладываются в десятую секунды; это задержка одного обновления, которая может пропустить несколько кадров дисплея. Обратный переход стабильно дешевле. Сам этот замер не потребовал оптимизации; критерий времени кадра описан ниже.
 
-## Viewer costs
+<a id="viewer-costs"></a>
 
-The per-frame numbers of the viewer window itself — the simulation plus the
-display on the creature maps, at least the roaming-group map 17 (28 creatures,
-none of which walks in 600 ticks) and the village map 19 (20 creatures, 14
-walking), both editions (issue #83).
+## Стоимость просмотрщика
 
-**Method.** Release build, Windows 11, AMD Ryzen 9 9950X, 64 GiB RAM, NVIDIA
-GeForce RTX 2070 SUPER (the wgpu adapter of every run; the CPU's iGPU sits
-idle), window 1280×800. The window benchmark is
-`--benchmark 8000`: 40 settle frames, then 8000 measured frames — at the
-village's ~2.4 ms frame that is 300–350 simulation ticks, several step cycles
-per walker. The frame is bounded the same way the render table above bounds
-it: `PresentMode::AutoNoVsync` (benchmark runs only), so the meter reads the
-scene and not the display's 16.67 ms quantum; the samples are the
-`DiagnosticsStore` frame time that `FrameTimeDiagnosticsPlugin` writes each
-update — the same wall-clock delta the diagnostics panel shows — and the
-percentiles are nearest-rank over the 8000 samples. Every `BENCH` line now
-carries `max_ms` (the worst measured frame), `ticks` (sim ticks advanced
-across the measured window, snapshotted when the window opens so settle time
-does not leak in), `creatures`, `walking` and `labels` — a recorded line
-self-describes the run, and the identity `ticks · 60 ms ≈ frames · avg_ms`
-marks the honest ones. Runs while the desktop was loaded are discarded, not
-averaged in: they announce themselves by `p95` shifting to 16–17 ms in
-*every* configuration at once — pause included, which a paused scene cannot
-cause — and they still satisfy the identity, so they measure the machine,
-not the scene. The tables keep the clean rounds; both editions' clean rounds
-agree within 0.1–0.3 ms, which is the reproducibility check.
+Исторические замеры окна с симуляцией и отображением (#83): карта 17 с бродячими группами (28 существ, ни одного шага за 600 тиков) и деревня 19 (20 существ, 14 идут), оба издания.
 
-**Instrumentation (AC choice, stated here):** the numbers reproduce from
-instrumentation left in the code behind two environment variables — no
-build flag, and no behavior change unless a variable is set.
-`KN_VIEWER_LABELS=0` spawns no creature id labels (default: spawn, as
-shipped), `KN_VIEWER_PAUSE=1` starts the playback paused (default: playing),
-which holds the simulation and the walk clips out and leaves the settled
-scene — the display floor the playing runs compare against. `knob_value`
-forces the factor off on `0`, keeps the shipped default when the variable
-is absent and forces it on for any other value, pinned by
-`the_benchmark_knobs_default_to_the_shipped_behavior`. The two isolated
-measurements below are `#[ignore]`d tests run by the recorded recipe; the
-data stays in `original/`, reached through `GAME_DIR`.
+**Методика.** Release, Windows 11, AMD Ryzen 9 9950X, 64 GiB RAM, NVIDIA GeForce RTX 2070 SUPER по адаптеру wgpu; встроенный GPU простаивает. Окно 1280×800. --benchmark 8000: 40 кадров стабилизации и 8000 измеряемых, при примерно 2,4 мс деревни это 300–350 тиков, несколько циклов шага каждого пешехода. AutoNoVsync исключает квант дисплея 16,67 мс. Выборки — реальное время DiagnosticsStore из FrameTimeDiagnosticsPlugin, как на панели; процентили nearest-rank по 8000 значениям.
+
+Строка BENCH содержит max_ms, ticks только за измеряемое окно, creatures, walking и labels. Соотношение `ticks · 60 ms ≈ frames · avg_ms` проверяет согласованность. Запуски с нагрузкой рабочего стола отбрасывались: p95 одновременно уходил к 16–17 мс во всех конфигурациях, включая паузу. Они сохраняли равенство, но не изолировали сцену. Чистые серии двух изданий согласовались в пределах 0,1–0,3 мс.
+
+**Инструментирование.** Переменные окружения не требуют флагов сборки и без установки не меняют поведение. KN_VIEWER_LABELS=0 не создаёт метки id; стандартно они создаются. KN_VIEWER_PAUSE=1 начинает на паузе, удерживая симуляцию и клипы ходьбы: это база стоимости отображения. knob_value выключает фактор при 0, сохраняет стандартное значение при отсутствии переменной, включает при любом другом значении (`the_benchmark_knobs_default_to_the_shipped_behavior`). Изолированные тесты ниже помечены #[ignore]; данные остаются в original/, доступны через GAME_DIR.
 
 ```bash
 cargo run --release --manifest-path crates/Cargo.toml -p kn-viewer -- \
@@ -189,238 +85,90 @@ GAME_DIR=original/k1/rus/game cargo test --release --manifest-path \
     -- --ignored --exact --nocapture
 ```
 
-**The visualization tick with the creatures moving.** Playing runs (default
-knobs), 8000 frames each, the spread of the clean rounds:
+**Активная сцена.** Стандартные настройки, по 8000 кадров, разброс чистых серий:
 
-| Map (edition) | playing | paused (display floor) | ticks | p95 / p99 / max, playing |
+| Карта | Воспроизведение | Пауза, база отображения | Тиков | p95 / p99 / максимум, мс, воспроизведение |
 |---|---|---|---|---|
-| 17 RUS — 28 creatures, 0 walking | 3.19–3.57 ms | 3.24–3.78 ms | 425–476 | 3.70–4.28 / 4.28–5.12 / 10.6–12.8 |
-| 17 ENG — 28 creatures, 0 walking | 3.15–3.20 ms | 3.06–3.15 ms | 420–426 | 3.56–3.66 / 3.95–4.12 / 10.4 |
-| 19 RUS — 20 creatures, 14 walking | 2.34–2.62 ms | 2.24–2.61 ms | 311–349 | 2.73–3.23 / 3.12–3.84 / 9.3–13.4 |
-| 19 ENG — 20 creatures, 14 walking | 2.33 ms | 2.23 ms | 310 | 2.75 / 3.13 / 9.1 |
+| 17 RUS, 28 существ, 0 идут | 3,19–3,57 мс | 3,24–3,78 мс | 425–476 | 3,70–4,28 / 4,28–5,12 / 10,6–12,8 |
+| 17 ENG, 28 существ, 0 идут | 3,15–3,20 мс | 3,06–3,15 мс | 420–426 | 3,56–3,66 / 3,95–4,12 / 10,4 |
+| 19 RUS, 20 существ, 14 идут | 2,34–2,62 мс | 2,24–2,61 мс | 311–349 | 2,73–3,23 / 3,12–3,84 / 9,3–13,4 |
+| 19 ENG, 20 существ, 14 идут | 2,33 мс | 2,23 мс | 310 | 2,75 / 3,13 / 9,1 |
 
-The comparison the ticket asks for: **playing − paused, same round, same
-map.** On the village it is +0.09/+0.10/+0.10 ms (RUS rounds 2–3, ENG round
-1) — a reproducible ≈ +0.1 ms for the living scene; the calm map's rounds
-span −0.59…+0.33 ms (RUS) but sit at +0.05…+0.10 ms in all three ENG rounds,
-at most a few percent of the frame. Of the
-village's +0.1 ms the *simulation logic* is measured to own ~1.5 µs per
-frame amortized: a tick lands every ~24th frame and carries the full engine
-tick of 18–22 µs ([rules tick cost](simulation.md#rules-tick-cost)), one walk-swap batch of
-~10 µs (the pose change below) and the depth recompute of ≲0.5 µs — three
-orders below the frame, which is why pausing is invisible in the percentiles
-and the reproducible part of the difference tracks the sprites' churn
-instead (the ≤85 animated pieces of the village, 37 of the calm map, cycling
-their frames every tick, the walkers among them). The headless decide pass
-(map 17, 1.2–1.6 µs/tick) is invisible in the window, as the calm map's
-drift confirms.
+Сравнение — воспроизведение минус пауза на одной карте в одной серии. Для деревни: +0,09/+0,10/+0,10 мс (RUS серии 2–3, ENG серия 1), воспроизводимые около +0,1 мс. Спокойная карта даёт −0,59…+0,33 мс RUS, но +0,05…+0,10 мс во всех трёх ENG-сериях: несколько процентов кадра.
 
-**One pose change, isolated.** `benchmark_pose_swap_cost` runs the shared
-creature subsystem headless (the window app minus the window, `MinimalPlugins`)
-on map 19, one simulation tick per update, and times 400 updates against the
-creatures whose sprite sequences swapped on each: a steady tick frame (the
-simulation advances, no creature changes pose) is the baseline, and frames
-where exactly one creature changes pose isolate the change. Over three runs
-per edition the single-pose-change frames sit above the steady median by
-+10.2–13.7 µs (RUS) and +6.9–12.2 µs (ENG) — a creature's pose change
-re-installs 3.7–3.8 sprite clips (body layers plus shadow), so ~2–4 µs per
-clip install and sprite rewrite. Neighbors: one full engine tick is 18–22 µs
-on the same map; one data-layer pose *build* is 57–72 µs ([pose cost](data-scene.md#pose-cost))
-but happens once per state or direction change, while this swap is the
-per-change display cost on top of clips already built; one depth call is
-~8–19 ns (below). At ~1.1 step starts per tick across the village's walkers,
-pose changes amortize to ~0.2 µs per frame — the AC6 bound (one rebuild per
-state change, none per frame) is what keeps it there.
+Из +0,1 мс деревни логика симуляции оценивается примерно в 1,5 мкс на кадр в среднем: тик примерно каждый 24-й кадр, полный тик движка 18–22 мкс ([стоимость правил](simulation.md#rules-tick-cost)), пакет смен клипов около 10 мкс и глубина не больше 0,5 мкс. Это на три порядка ниже кадра. Воспроизводимая часть разницы согласуется с обновлением до 85 анимированных элементов деревни и 37 спокойной карты каждый тик, но отдельная причинная доля рендеринга здесь не изолирована. Чистый расчёт решений карты 17 за 1,2–1,6 мкс/тик в окне неразличим на фоне разброса.
 
-**The depth recompute while creatures move.** `benchmark_depth_slot_cost`
-times `DepthMap::creature_z` — the binary search over the static stacks, the
-interpolation and the per-id slot. That lookup is what `sync_creature_nodes`
-pays per creature per frame for the shadow's slot, and as `creature_z` for
-the body z whenever a creature's bottom moves; the test runs it over the
-real depth maps with the bottoms the walking creatures actually carry (live
-row plus body height). Spread over
-six runs × both editions × both maps: **8–19 ns per call**, so a frame's
-depth recompute for the whole population is **0.2–0.5 µs** (28 creatures on
-map 17, 20 on map 19). Neighbors: a thousandth of one walk-swap batch
-(~10 µs) and ~1/5000–1/12 000 of the village's frame — no throttling or
-caching of depth recomputes is warranted at these populations.
+**Одна смена позы.** benchmark_pose_swap_cost запускает общую подсистему существ без окна через MinimalPlugins на карте 19: один тик на обновление, 400 обновлений. База — обновление с продвижением симуляции без смены поз; кадры с ровно одной сменой изолируют добавочную цену. По три запуска на издание: +10,2–13,7 мкс RUS и +6,9–12,2 мкс ENG к медиане базы. Смена переустанавливает 3,7–3,8 клипа тела и тени, то есть около 2–4 мкс на установку и перезапись спрайта. Для сравнения: полный тик 18–22 мкс, [сборка позы в слое данных](data-scene.md#pose-cost) 57–72 мкс один раз на смену состояния/направления, вызов глубины около 8–19 нс. Здесь измерена смена уже собранных клипов. При примерно 1,1 начала шага за тик среди жителей она даёт около 0,2 мкс на кадр; предел — одна пересборка на смену состояния, ни одной просто за кадр.
 
-**The creature labels, with and without.** The `KN_VIEWER_LABELS=0` runs sit
-next to the playing runs of the same round: the difference is below the
-round drift on most rounds and never exceeds +0.16 ms (village RUS, 20
-labels) or +0.15 ms (roaming RUS, 28 labels); the clean pairs give
-+0.01–0.16 ms, i.e. ≲5 µs per label per frame — text nodes already spawned,
-per-frame repositioning plus their share of the render. Neighbor: a label
-costs about half a pose change per frame, and 28 labels cost under 1% of the
-60 ms budget — "labels only for visible creatures" has no numbers behind it
-on these maps: all creatures are visible by default, and their labels are
-measured cheap.
+**Пересчёт глубины движения.** benchmark_depth_slot_cost измеряет DepthMap::creature_z: двоичный поиск статических стопок, интерполяцию и слот id. sync_creature_nodes делает поиск для тени каждого существа каждый кадр и для тела при смене нижней границы. Используются реальные карты глубины и позиции нижних границ идущих существ (текущий ряд плюс высота тела). Шесть запусков × оба издания × обе карты: **8–19 нс на вызов**, **0,2–0,5 мкс на всю популяцию за кадр** — 28 либо 20 существ. Один вызов примерно в тысячу раз дешевле пакета смен клипов около 10 мкс; вся глубина занимает около 1/5000–1/12 000 кадра деревни. Кеш или ограничение частоты для этих популяций не оправданы.
 
-**Historical worst frames and attribution limits.** The quiet viewer-cost
-runs recorded village maxima about 9.1–9.7 ms playing versus 3.5–3.7 ms paused
-(reproduced in RUS rounds 2–3 and ENG round 1), including 9.17 ms with labels
-off. Calm-map spikes were about 10 ms even paused (9.5–10.6 ms RUS).
-An early inference blamed tick-frame sprite churn; this was not a measured
-positive cause. The later gate corrected wall-time/tick pairing and found its
-worst intervals ran no simulation tick. Desktop-load runs with p95 16–17 ms
-were discarded, but scheduler/driver attribution remains unconfirmed.
-Keep the historical values separate from those hypotheses. The isolated CPU
-work was at most about 35 µs on a tick frame, far below these spikes.
+**Метки существ.** Сравнение KN_VIEWER_LABELS=0 с воспроизведением той же серии чаще ниже межсерийного разброса; максимум +0,16 мс для 20 меток деревни RUS и +0,15 мс для 28 меток бродячей карты RUS. Чистые пары дали +0,01–0,16 мс; исходная оценка порядка нескольких микросекунд на метку, включая перемещение готового текстового узла и его долю рендеринга. Это сопоставимо с частью смены позы; 28 меток занимают менее 1% бюджета 60 мс. На этих картах замеры не обосновывают отдельную оптимизацию видимости меток.
 
-## Frame time gate
+**Исторические максимумы и границы атрибуции.** В спокойных условиях деревня давала максимумы 9,1–9,7 мс при воспроизведении и 3,5–3,7 мс на паузе (RUS серии 2–3 и ENG серия 1), включая 9,17 мс без меток. Спокойная карта имела около 10 мс даже на паузе: 9,5–10,6 мс RUS. Ранняя гипотеза связывала пики с обновлением спрайтов на тике; положительная причина не измерялась. Поздняя проверка исправила сопоставление интервала времени с тиком и установила: худшие интервалы не исполняли тик симуляции. Нагрузочные серии с p95 16–17 мс исключены; планировщик и драйвер остаются гипотезами. Изолированная CPU-работа на тиковом кадре была около 35 мкс максимум, намного ниже пиков.
 
-The gate turns the recorded viewer costs into a verdict (issue #98): pass =
-average and p95 frame time ≤ 33.3 ms — 30 FPS — on each reference map. The
-gate runs after the ambient lighting (#96) and the constant-day toggle (#97)
-with lighting on, so the numbers are the final render, not a diagnostic
-stage; a failing number opens its own optimization ticket, it is never
-optimized inside the gate's ticket.
+<a id="frame-time-gate"></a>
 
-**Protocol.** Release build, Windows 11, AMD Ryzen 9 9950X, 64 GiB RAM,
-NVIDIA GeForce RTX 2070 SUPER (the wgpu adapter of every run — Vulkan — and
-the machine the "Lighting cost" table above was measured on), window
-1280×800, zoom
-step 3 (scale 1.0 — the startup default; a benchmark run never touches the
-camera or the scene), playback playing (all creatures active, the shipped
-default), day/night lighting on (the cycle follows the sim tick;
-`--constant-day` off). One command runs the gate — maps 17 and 19, both
-editions, 60 seconds each:
+## Критерий времени кадра
+
+Условие #98: среднее и p95 не выше 33,3 мс (30 FPS) на каждой опорной карте. Проверка проводилась после внедрения освещения и постоянного дня, со светом, то есть на итоговом рендеринге. Превышение требует отдельной задачи оптимизации, не скрытой оптимизации внутри задачи замера.
+
+**Протокол.** Release, Windows 11, AMD Ryzen 9 9950X, 64 GiB RAM, NVIDIA GeForce RTX 2070 SUPER, Vulkan; та же машина, что в таблице света. Окно 1280×800, ступень масштаба 3 (scale 1.0, начальная), камера и сцена не меняются. Воспроизведение включено, все существа активны, смена суток включена и следует тику, --constant-day выключен. Карты 17 и 19, оба издания, по 60 секунд:
 
 ```bash
 just viewer-gate
 ```
 
-which is four `cargo run --release … -p kn-viewer` runs of
-`--game-dir original/k1/<rus|eng>/game --map <17|19> --benchmark-secs 60`
-(data in `original/`, never committed). One run prints one `BENCH …` line
-and one `GATE map=.. pass=.. avg_ms=.. p95_ms=.. limit_ms=33.3` line.
+Это четыре запуска cargo run --release … -p kn-viewer с `--game-dir original/k1/<rus|eng>/game --map <17|19> --benchmark-secs 60`. Данные не коммитятся. Каждый запуск печатает BENCH … и `GATE map=.. pass=.. avg_ms=.. p95_ms=.. limit_ms=33.3`.
 
-**Frame bound.** The same bound the "Viewer costs" method records, so the
-numbers stay comparable: benchmark runs render with `PresentMode::AutoNoVsync`
-so the meter reads the scene and not the display's 16.67 ms quantum; the
-samples are the raw per-frame wall-clock deltas `FrameTimeDiagnosticsPlugin`
-writes into `DiagnosticsStore` each update (the diagnostic's latest
-measurement, not its smoothed value); the 40 settle frames are excluded; the
-percentiles are nearest-rank. The benchmark system is ordered after the
-plugin's own frame-time write and after the creature chain, so the sample
-and the tick counter are both complete for the iteration that reads them.
-The delta itself anchors at `First` and carries the previous iteration's
-wall time (bevy_time 0.20.1 `time_system` computes it there;
-bevy_diagnostic 0.20.1 `diagnostic_system` writes it in `Update` from
-`Time<Real>`), so `max_on_tick` pairs each sample with the previous
-iteration's tick count — the ticks whose execution the sample's interval
-includes — and the first sample of a window, whose interval belongs to the
-settle frames, reads 0: the attribution is exact on both sides of the
-pairing. A `--benchmark-secs` run closes the window
-when the samples' sum crosses 60 000 ms — 60 seconds of measured frame time
-whatever the hardware delivers — so the frame count is an output of the run
-(`frames=` in the line), not part of the recipe. The window self-describes:
-`ticks` (sim ticks across the window; a 60-second window is exactly 1000 —
-`TICK_MS` is 60, `k1-data::objects_res`), `creatures`/`walking` (the
-population it ended on), `labels` (whether the name labels drew), and the
-identity `ticks · 60 ms ≈ frames · avg_ms` marks the honest runs — all four
-runs below satisfy it to within 0.2 %.
+**Граница кадра.** AutoNoVsync, сырые последние измерения FrameTimeDiagnosticsPlugin в DiagnosticsStore, не сглаженные; первые 40 кадров исключены, процентили nearest-rank. Система замера выполняется после записи времени и цепочки существ. Сама дельта начинается в First и относится к **предыдущей итерации**: bevy_time 0.20.1 time_system вычисляет её там, bevy_diagnostic 0.20.1 diagnostic_system пишет в Update из Time<Real>. Поэтому max_on_tick сопоставляет выборку с числом тиков предыдущей итерации; первая выборка окна относится ещё к стабилизации и получает 0. Это фиксирует обе стороны сопоставления.
 
-**Reproducibility.** Three passes back to back — twice through the recorded
-commands, once through the `just viewer-gate` recipe itself — were run on
-the pre-integration tree: average and p95 reproduced within 0.04 ms in every
-configuration, p99 within 0.21 ms, the worst frame within 0.41 ms. The
-recorded tolerance stays, scoped to one machine state: repeated back-to-back
-runs on a settled machine count as reproducing while average and p95 stay
-within ±0.05 ms; a larger shift — across power states or across days —
-means the machine state changed, not the scene. Cross-state spread is
-recorded, not averaged in: the tree's passes on this table sit within
-0.06 ms average and 0.11 ms p95 of each other at the widest pairwise
-comparison, with the GPU idling in different power states between passes,
-and the single runs around the table match them. Two shifted states were
-discarded on the way: a pass taken right after a game session had exited
-read 0.5–0.9 ms higher in every configuration (the driver's post-game power
-state, not the scene), and runs under the desktop-load signature — p95
-jumping to 16–18 ms — were discarded with it.
+--benchmark-secs закрывает окно, когда сумма выборок пересекает 60 000 мс. Количество frames — результат, не заданный параметр. Строка содержит ticks за окно (в записанных запусках ровно 1000 при TICK_MS=60 из k1-data::objects_res), конечные creatures/walking и labels. Все четыре запуска ниже выполняют `ticks · 60 ms ≈ frames · avg_ms` с погрешностью до 0,2%.
 
-The table is the re-measurement the integration required — one pass per
-configuration on the tree with #115–#117 in, so what the gate measures now
-includes #116's per-frame name-label rendering, part of main since the
-integration:
+**Воспроизводимость.** До интеграции выполнены три последовательных прохода: два командами, один рецептом just viewer-gate. Среднее и p95 воспроизвелись в пределах 0,04 мс, p99 — 0,21 мс, максимум — 0,41 мс. Допуск для последовательных запусков на стабилизированной машине: ±0,05 мс для среднего и p95. Более крупный сдвиг между днями или режимами питания требует проверки условий, сам по себе не устанавливает причину.
 
-| Map (edition) | avg ms | p95 ms | p99 ms | worst ms | frames | population |
+Между состояниями машины максимальный попарный разброс записанного дерева был 0,06 мс среднего и 0,11 мс p95; между проходами наблюдались разные режимы простоя GPU. Отброшенный проход сразу после игровой сессии давал на 0,5–0,9 мс больше во всех конфигурациях; связь с послесеансовым режимом драйвера — гипотеза. Также исключены серии с нагрузочным признаком p95 16–18 мс. Они не усреднялись с основной таблицей.
+
+Ниже историческая повторная проверка дерева после #115–#117, по одному проходу на конфигурацию, включая покадровый рендеринг имён #116:
+
+| Карта | Среднее, мс | p95, мс | p99, мс | Максимум, мс | Кадров | Популяция |
 |---|---|---|---|---|---|---|
-| 17 RUS | 3.08 | 3.41 | 3.90 | 10.15 | 19 478 | 28 creatures, 0 walking, labels on |
-| 19 RUS | 2.28 | 2.65 | 3.01 | 8.87 | 26 281 | 20 creatures, 14 walking, labels on |
-| 17 ENG | 3.11 | 3.49 | 3.94 | 10.17 | 19 319 | 28 creatures, 0 walking, labels on |
-| 19 ENG | 2.33 | 2.76 | 3.15 | 9.77 | 25 715 | 20 creatures, 14 walking, labels on |
+| 17 RUS | 3,08 | 3,41 | 3,90 | 10,15 | 19 478 | 28 существ, 0 идут, метки включены |
+| 19 RUS | 2,28 | 2,65 | 3,01 | 8,87 | 26 281 | 20 существ, 14 идут, метки включены |
+| 17 ENG | 3,11 | 3,49 | 3,94 | 10,17 | 19 319 | 28 существ, 0 идут, метки включены |
+| 19 ENG | 2,33 | 2,76 | 3,15 | 9,77 | 25 715 | 20 существ, 14 идут, метки включены |
 
-Every window covered exactly 1 000 sim ticks.
+Каждое окно охватило ровно 1000 тиков.
 
-**Verdict: pass, all four configurations, with ~9× headroom.** The slowest
-p95 is 3.49 ms against the 33.3 ms limit. The recorded round sits on the
-pre-integration ranges — the gate's own 2.2–3.3 ms average covers this
-round's 2.28–3.11 ms, the "Viewer costs" playing runs' 3.15–3.57 ms bound
-the calm map from above — so #116's per-frame name labels, drawing over
-every creature every frame while the `BENCH` line counts the same sprites
-and light materials as before, do not show above the machine's spread. One
-same-round pair prices the labels on the village (19 RUS): 2.30 → 2.28 ms
-average and 2.71 → 2.65 ms p95 across `KN_VIEWER_LABELS=0`/on — under the
-round's own reproducibility, so the recorded round leaves the draw cost
-unpriced; the ~0.2 ms an earlier same-round pair measured on the superseded
-integrated table (3.40 → 3.22 ms average, 3.98 → 3.77 ms p95) stays the
-only resolved number, and which machine state lets the pair resolve it is
-unconfirmed. The editions' spread on the same map is 0.03–0.05 ms here
-against the superseded round's 0.8–1.0 ms ("English names draw wider than
-Cyrillic ones") — the same machine-state dependence, hypothesis either
-way. The pre-integration ordering (village 19 faster than calm 17) holds
-on both editions: 2.28 against 3.08 ms on RUS, 2.33 against 3.11 ms on
-ENG.
+**Результат: все четыре конфигурации прошли, запас около 9×.** Худший p95 — 3,49 мс при пределе 33,3. Среднее 2,28–3,11 мс попадает в прежний диапазон критерия 2,2–3,3 мс; спокойную карту сверху ограничивают прошлые 3,15–3,57 мс. Добавление покадровых имён #116 не выделяется над разбросом машины при прежнем числе спрайтов и материалов.
 
-**p99 and the worst frame, with cause.** p99 is 3.01–3.94 ms — the tail is
-the scene's own spread, not a stall class. The worst frame is 8.9–10.2 ms,
-and its `max_on_tick` attribute is 0 in all four windows — measured under
-the corrected pairing: a sample carries the previous iteration's wall time
-(see "Frame bound"), so the flag reads the tick count of that same
-iteration, and none of the intervals the worst samples measured ran a
-simulation tick. Independence predicts the same (a
-tick lands every ~19–26 frames here, so ~4–5 % of the window carries one), and
-the "Viewer costs" isolation bounds what a tick could add — a full engine
-tick is 18–22 µs, a pose swap ~10 µs, three orders below the spike. What
-that leaves the worst frame to be — scheduler noise, a driver stall — stays
-unconfirmed: the exclusion of tick work is measured, the positive cause is
-not observed. The worst frame's position in the window (`max_at`) moves
-freely — 14799 and 15615 on the calm map, 6999 and 13854 on the village —
-which fits noise, not a recurring stage of the frame. Nothing here warrants
-an optimization ticket: every percentile sits an order of magnitude under
-the limit.
+Пара деревни 19 RUS без/с метками: среднее 2,30 → 2,28 мс, p95 2,71 → 2,65 мс; стоимость не разрешается воспроизводимостью серии. Более ранняя, заменённая интеграционная таблица давала около 0,2 мс: среднее 3,40 → 3,22, p95 3,98 → 3,77. Это сохранённый разрешённый замер; условия, при которых пара разрешает разницу, не установлены. Разброс изданий на одной карте здесь 0,03–0,05 мс против прежних 0,8–1,0 мс; предположение о большей ширине английских имён не подтверждено причинно. Деревня быстрее спокойной карты в обоих изданиях: 2,28 против 3,08 RUS и 2,33 против 3,11 ENG.
 
-## The hour we display — our convention, not a fact about K1
+**p99 и худший кадр.** p99 — 3,01–3,94 мс; отдельный класс остановок этим не установлен. Максимум 8,9–10,2 мс имеет max_on_tick=0 во всех четырёх окнах при исправленном сопоставлении: ни один худший интервал не исполнял тик. Тик приходится примерно на каждый 19–26-й кадр, около 4–5% окна; его изолированная цена — 18–22 мкс движка и около 10 мкс смены позы, на три порядка меньше пика. Исключение тиков как причины измерено; положительная причина — планировщик или драйвер — неизвестна. max_at меняется: 14799 и 15615 на спокойной карте, 6999 и 13854 в деревне. Это согласуется с шумом, но не доказывает его. Все процентили на порядок ниже предела; оснований для задачи оптимизации эти результаты не дали.
 
-AC2 of #87 asks for a clock reading, and the original shows no confirmed one, so the mapping is
-ours and is recorded here as such:
+<a id="the-hour-we-display--our-convention-not-a-fact-about-k1"></a>
 
-- **21600 ticks of one cycle stand for 24:00**, so 15 ticks to a minute and 900 to an hour;
-- **cycle tick 0 reads 06:00**, which makes window 1 a morning rather than a midnight;
-- the hour is a **pure function of the simulation tick** — the viewer keeps no time of its own and
-  accumulates nothing;
-- **nothing in the phase or lighting logic reads the displayed hour.** Phases and light are
-  computed from ticks and the [research interval table](../../research/k1/time.md#what-the-source-gives-intervals-not-day-phases); the hour is a label on the same tick.
+## Показываемые часы — наша условность
 
-Under that offset the intervals land at: light 03:08 → 12:00, warm band 08:00 → 10:00, dimming from
-12:00, ground lights 15:00 → 03:00, neutral again at 03:08. The night is longer than the day
-because the dark span is longer, which is the data, not the mapping; another offset would move the
-same asymmetry, not remove it. This hour is unrelated to the 1440 divisor in the code
-([research](../../research/k1/time.md#a-unit-of-1440-ticks)).
+Подтверждённых часов оригинала нет. Для показаний, потребовавшихся в #87, принята явная схема:
 
-## Camera presets (ours)
+- 21600 тиков цикла соответствуют 24:00: 15 тиков на минуту, 900 на час.
+- Тик цикла 0 показывает 06:00: окно 1 становится утром, не полуночью.
+- Часы — чистая функция тика симуляции; отдельного времени и накопителя просмотрщик не имеет.
+- Фазы и свет **не читают показанные часы**: они вычисляются из тиков и [таблицы исследованных интервалов](../../research/k1/time.md#what-the-source-gives-intervals-not-day-phases); часы лишь подписывают тот же тик.
 
-The presets below stay useful as places to stand a camera. They are named after the interval each
-one stands in, not after the four phase words above: those words are display vocabulary of the
-implementation, and a preset that borrowed one could contradict it the way "dusk at 09:00" would.
-The presets are not boundaries and no test should rest on them.
+При этом сдвиге: светло 03:08 → 12:00, тёплая полоса 08:00 → 10:00, затемнение с 12:00, свет земли 15:00 → 03:00, нейтральный цвет снова в 03:08. Ночь длиннее дня из-за длины исходного тёмного интервала; другой сдвиг перенесёт, но не устранит асимметрию. Эти часы не связаны с делителем 1440 в коде оригинала ([исследование](../../research/k1/time.md#a-unit-of-1440-ticks)).
 
-| Preset (named for its interval) | tick | window | what is on screen there |
+<a id="camera-presets-ours"></a>
+
+## Наши предустановки просмотра
+
+Предустановки называют интервал, в котором располагают наблюдение, а не условные четыре названия фаз интерфейса. Иначе подпись вроде «сумерки в 09:00» могла бы противоречить классификации. Предустановки **не являются границами**, тесты не должны на них опираться.
+
+| Предустановка | Тик | Окно | Изображение |
 |---|---|---|---|
-| light | 900 | 1 | neutral ambient, ground unlit — 07:00 on our clock |
-| warm band | 2700 | 3 | the warm plateau, ground unlit — the middle of the warm band, 09:00 |
-| ground-lit plateau | 11000 | 10 | the dark plateau with the tile light on, past the window-8 ramp |
-| final ramp | 18960 | 13 | inside the 121-tick ramp back to neutral, ground unlit |
+| light | 900 | 1 | Нейтральный фон, земля без света; 07:00 наших часов |
+| warm band | 2700 | 3 | Тёплое плато, земля без света; середина полосы, 09:00 |
+| ground-lit plateau | 11000 | 7 | Фон (0, −50, −70), свет тайлов включён, до перехода окна 8 |
+| final ramp | 18960 | 13 | Внутри перехода длиной 121 тик к нейтральному цвету, земля без света |
 
-Where a display names phases of the day, it maps its words over the interval table; a phase word
-is never an extra position in this page.
+Названия фаз отображения классифицируют интервалы таблицы; слово фазы не вводит дополнительной временной границы.

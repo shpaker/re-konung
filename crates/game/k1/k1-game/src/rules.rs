@@ -404,7 +404,7 @@ fn walk_target<G: Ground, R: Random>(
 const NOT_MONSTER: [u8; 3] = [class::WOMAN, class::CHILD, 0x53];
 
 /// The roaming monster's decision, from its squad's recomputed state (Slavik
-/// `game_play.cpp:3156-3181`, `3286`, `3337-3392`; docs/research/k1/creatures/combat.md,
+/// `game_play.cpp:3156-3181`, `3286`, `3337-3392`; docs/research/k1/creatures/behavior.md,
 /// "The monster decision"). Calm stands; `PlayerInside` would start combat —
 /// target choice, attack and shooting are not reverse-engineered, so we give
 /// no order rather than invent one; `MemberOutside` returns. A creature of a

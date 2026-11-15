@@ -1,56 +1,64 @@
-# Agent workflow
+<a id="agent-workflow"></a>
 
-[AGENTS.md](../../AGENTS.md) supplies the mandatory rules for every agent.
-`CLAUDE.md` imports it through `@AGENTS.md`. Checks are shared git hooks, rather
-than agent-specific hooks; the original arrangement followed tank8000's practice.
+# Работа агентов
 
-## Skills and plugins
+[AGENTS.md](../../AGENTS.md) содержит обязательные правила для всех агентов.
+`CLAUDE.md` импортирует его через `@AGENTS.md`. Проверки работают общими
+git-хуками, а не хуками отдельного агента; исходная схема следовала практике tank8000.
 
-Both kinds of skill use a flat `<skill>/SKILL.md` layout:
+<a id="skills-and-plugins"></a>
 
-| Location | Audience and contract |
+## Навыки и плагины
+
+Оба вида навыков имеют плоскую структуру `<skill>/SKILL.md`:
+
+| Расположение | Назначение и контракт |
 |---|---|
-| `skills/` | Users installing the repository plugin without a checkout; no dependency on `just`, `uv` or `original/`. Resolve the plugin root two levels above the skill directory. |
-| `.claude/skills/` | Development within a checkout; includes `konung-reverse-format`. |
+| `skills/` | Для установки плагина без рабочего каталога; без зависимости от `just`, `uv` и `original/`. Корень плагина — на два уровня выше каталога навыка. |
+| `.claude/skills/` | Для разработки внутри репозитория, включая `konung-reverse-format`. |
 
-The user skill `konung-tiled-install` installs the extension and verifies that
-Tiled loads it and opens Konung.N. Installation commands belong to the
-[Tiled guide](../guides/tiled.md#installation-through-an-agent).
+Пользовательский навык `konung-tiled-install` устанавливает расширение,
+проверяет его загрузку в Tiled и открытие Konung.N. Команды установки —
+в [руководстве Tiled](../guides/tiled.md#installation-through-an-agent).
 
-Plugin manifests: `.claude-plugin/` for Claude Code, `plugin.json` and
-`.agents/plugins/marketplace.json` for Codex, `qwen-extension.json` for Qwen Code.
-Claude's `.claude/settings.json` declares the tiled-mcp marketplace/plugin via
-`extraKnownMarketplaces` and `enabledPlugins`.
+Манифесты: `.claude-plugin/` для Claude Code, `plugin.json` и
+`.agents/plugins/marketplace.json` для Codex, `qwen-extension.json` для Qwen Code.
+`.claude/settings.json` объявляет маркетплейс/плагин tiled-mcp через
+`extraKnownMarketplaces` и `enabledPlugins`.
 
-Create a skill only for a recurring sequence across several tasks that cannot
-be replaced by a documentation link. The reverse-engineering skill owns its
-workflow; [research](../research/README.md) owns its evidence.
+Навык создаётся только для повторяемой последовательности в нескольких
+задачах, которую не заменяет ссылка на документацию. Навык исследования
+задаёт процедуру; [исследования](../research/README.md) хранят доказательства.
 
-## Tiled inspection
+<a id="tiled-inspection"></a>
 
-Use [tiled-mcp](https://github.com/shpaker/tiled-mcp) and its `tiled` skill:
-`tiled_status` → `tiled_open` on Konung.N → `map_summary`, `list_objects`,
-`render_map`, `run_script`. Original maps are opened through `tiled/konung/`;
-see [extension internals](tiled.md) for their representation.
+## Проверка в Tiled
 
-A full-size comparison image can be saved by `run_script`; use an absolute
-path under the checkout's `out/`:
+Используйте [tiled-mcp](https://github.com/shpaker/tiled-mcp) и его навык `tiled`:
+`tiled_status` → `tiled_open` на Konung.N → `map_summary`, `list_objects`,
+`render_map`, `run_script`. Оригинальные карты открываются через `tiled/konung/`;
+их представление описано в [устройстве расширения](tiled.md).
+
+Полноразмерное изображение для сравнения сохраняется через `run_script`;
+задайте абсолютный путь внутри `out/` рабочего каталога:
 
 ```js
 const image = map.toImage(); image.save("<repository-root>/out/k1/tiled.png"); return [image.width, image.height]
 ```
 
-`tiled_install_extension` installs tiled-mcp's own Tiled extension with user
-permission. Installation of the game's separate extension is covered by the guide.
-External errors are reported under AGENTS.md's rule; do not silently work around them.
+`tiled_install_extension` устанавливает собственное расширение tiled-mcp
+с разрешения пользователя. Установка отдельного расширения игры — в руководстве.
+Внешние ошибки сообщаются по правилу AGENTS.md; молча обходить их нельзя.
 
-## Checks and data
+<a id="checks-and-data"></a>
 
-`just setup` installs prek shims. `just check` runs file checks, Python and Rust
-format/lint checks and tests; [testing](testing.md) describes the current hooks
-and CI. PR/issue form validation is owned by
+## Проверки и данные
+
+`just setup` устанавливает шимы prek. `just check` запускает проверки файлов,
+форматирование/линты Python и Rust и тесты; [проверки](testing.md) описывают
+действующие хуки и CI. Формат issues/PR и его проверку задаёт
 [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
-Read game files only from `original/`; put all derived output in `out/`.
-Both stay uncommitted. [AGENTS.md](../../AGENTS.md#copyrighted-content) defines
-the distribution restrictions.
+Игровые файлы читаются из `original/`; производные помещаются в `out/`.
+Оба каталога не коммитятся. Ограничения распространения заданы в
+[AGENTS.md](../../AGENTS.md#copyrighted-content).

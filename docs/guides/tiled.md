@@ -1,44 +1,51 @@
-# Edit K1 maps in Tiled
+<a id="edit-k1-maps-in-tiled"></a>
 
-Tiled 1.12 with `tiled/konung/` opens original Konung.N and ENG Tutorial.4/5,
-then saves the same formats. It edits map tiles/decorations/objects/walkability,
-LIGHTS.N and that map's characters, groups, caches and exits in Game.N.
-Graphics resources and EXE tables are read-only; new graphics cannot be added.
+# Редактирование карт K1 в Tiled
 
-[Prepare the game folder](game-files.md). Before editing, make a working copy
-of the entire folder under out/: Game.N is shared by every map. Development
-agents keep original/ unchanged.
+Tiled 1.12 с расширением `tiled/konung/` открывает оригинальные Konung.N
+и ENG Tutorial.4/5 и сохраняет те же форматы. Доступны тайлы, декорации,
+объекты, проходимость, LIGHTS.N и относящиеся к карте персонажи, группы,
+тайники и переходы в Game.N. Графика и таблицы EXE доступны только для чтения;
+добавить новую графику нельзя.
 
-## Installation from a checkout
+[Подготовьте каталог игры](game-files.md). Перед редактированием скопируйте
+весь каталог в out/: Game.N общий для нескольких карт. Агенты не меняют original/.
+
+<a id="installation-from-a-checkout"></a>
+
+## Установка из рабочего каталога
 
 ```sh
 just tiled-install
 ```
 
-The extension is copied into Tiled's extensions directory and is reloaded by
-a running editor. Choose File → Open → the working copy's Konung.N.
+Расширение копируется в каталог расширений Tiled; запущенный редактор
+перезагружает его автоматически. Выберите File → Open → Konung.N рабочей копии.
 
-| Platform | Extension directory |
+| Платформа | Каталог расширения |
 |---|---|
 | Windows | `%LOCALAPPDATA%/Tiled/extensions/konung` |
 | macOS | `~/Library/Preferences/Tiled/extensions/konung` |
 | Linux | `${XDG_CONFIG_HOME:-~/.config}/tiled/extensions/konung` |
 
-GRAPH.RES and Objects.res must be beside the map. Game.0–2 add game-object
-groups; the EXE (RUS konung.res, ENG KONUNG.EXE) supplies equipment and flame
-tables; FLAMES.RES supplies flames; LIGHTS.RES plus LIGHTS.N supplies light.
-Missing optional files omit the corresponding visual layer. Resource names are
-case-insensitive. The first map takes seconds to decode; later maps use caches.
+GRAPH.RES и Objects.res должны лежать рядом с картой. Game.0–2 добавляют
+группы игровых объектов; EXE (RUS konung.res, ENG KONUNG.EXE) — таблицы
+снаряжения и огня; FLAMES.RES — огонь; LIGHTS.RES вместе с LIGHTS.N — свет.
+Без необязательных файлов соответствующий визуальный слой отсутствует.
+Регистр имён не важен. Первая карта декодируется несколько секунд,
+следующие используют кеши.
 
-Tiled selects formats by suffix. Numeric suffixes register 50 formats, one
-per map number. LIGHTS.N and Game.N are not maps: opening them directly is a
-size/format error. See [extension internals](../development/tiled.md) for the
-full layer/property reference and tutorial source selection.
+Tiled выбирает формат по расширению. Для числовых суффиксов зарегистрированы
+50 форматов, по одному на номер карты. LIGHTS.N и Game.N — не карты;
+их прямое открытие завершится ошибкой размера/формата. Полная таблица слоёв,
+свойств и выбор источника обучения — в [устройстве расширения](../development/tiled.md).
 
-## Installation through an agent
+<a id="installation-through-an-agent"></a>
 
-The repository is also a plugin for Claude Code, Codex and Qwen Code. This
-route needs Tiled 1.12 and the user's game copy, not a checkout, just or uv.
+## Установка через агента
+
+Репозиторий поставляется и как плагин Claude Code, Codex и Qwen Code.
+Нужны Tiled 1.12 и своя копия игры; рабочий каталог, just и uv не требуются.
 
 Claude Code:
 
@@ -47,79 +54,86 @@ Claude Code:
 /plugin install konung@re-konung
 ```
 
-Codex: `codex plugin marketplace add shpaker/re-konung`, then select konung
-in `/plugins`. Qwen Code:
+Codex: `codex plugin marketplace add shpaker/re-konung`, затем konung в `/plugins`.
+Qwen Code:
 
 ```sh
 qwen extensions install https://github.com/shpaker/re-konung
 ```
 
-Ask the agent to install the Konung extension and open a map. The shipped
-`konung-tiled-install` skill owns installation/validation details. For a release
-ZIP, extract it so extensions/konung/konung.mjs exists.
+Попросите агента установить расширение Konung и открыть карту. Подробности
+установки и проверки задаёт поставляемый навык `konung-tiled-install`.
+ZIP релиза распакуйте так, чтобы появился extensions/konung/konung.mjs.
 
-## Editing and saving
+<a id="editing-and-saving"></a>
 
-File → Save (Ctrl+S) writes the map in its original format. Save As with the
-Konung map format writes another file. Do not resize the map, delete/rename
-layers or tilesets, or place tiles from another layer's tileset; save rejects
-these with a reason.
+## Редактирование и сохранение
 
-| Layer | Supported changes and limits |
+File → Save (Ctrl+S) записывает карту в исходном формате. Save As с форматом
+карты Konung сохраняет другой файл. Не меняйте размер карты, не удаляйте и
+не переименовывайте слои/тайлсеты, не ставьте тайлы чужого слоя: сохранение
+отклоняет такие изменения с объяснением.
+
+| Слой | Допустимые изменения и ограничения |
 |---|---|
-| ground, overlay | Tiles from graph only, indices up to 254 (one-byte map values) |
-| decorations | Add/remove/move/reorder graph tile objects. Top-left in map pixels. New unknown field 0016000000000000, the most common observed value, meaning unknown. At most 1000 including raw records. |
-| objects | Add/remove/move/change object tiles; at most 1000. Save snaps to the 58×16 staggered fine grid. Existing slot order is retained; new objects append. New service fields flags/frame/frameTime are zero, flames off. |
-| lights | Paint/change/erase mask tiles from lights. Saves alongside the target map with its number and existing filename case; fine values are derived. An originally absent LIGHTS.N is not created. |
-| foot, foot-arrows | Paint their own tiles; erasing clears all four fine cells. Only changed cells and the layer's bits are replaced: low nibble 0xF/0 for foot, 0x40 for foot-arrows. The 160 unmapped edge cells retain their bytes. Object edits do not repaint walkability. |
-| characters | Move, change direction, duplicate or delete, subject to the rules below |
-| groups | Move/resize spawn and leash rectangles; deletion is refused |
-| loot, exits | Add/delete/move/edit; resize exit zones. Existing entries retain list order, new entries append; duplicate slot means a new entry. New exits require targetMap; new loot defaults to zero gold and empty items. Limits: 500 loot, 250 exits across all maps. |
-| arrivals, villages, start | Move and change direction. An arrivals point edits the other map's exit and overrides arrivalX/arrivalY in exits. |
+| ground, overlay | Только тайлы graph с индексами до 254: значение карты занимает байт |
+| decorations | Добавление, удаление, перемещение и порядок тайловых объектов graph; координата — левый верх в пикселях карты. Новое неизвестное поле — 0016000000000000, самое частое наблюдаемое значение; смысл неизвестен. До 1000 записей, включая сырые. |
+| objects | Добавление, удаление, перемещение и смена тайла; до 1000 объектов. Сохранение привязывает к мелкой шахматной сетке 58×16. Порядок старых слотов сохраняется, новые добавляются в конец. Новые flags/frame/frameTime равны нулю, огонь выключен. |
+| lights | Рисование, замена и стирание масок lights. Файл сохраняется рядом с целевой картой, с её номером и прежним регистром имени; мелкие значения вычисляются. Изначально отсутствующий LIGHTS.N не создаётся. |
+| foot, foot-arrows | Только собственные тайлы. Стирание очищает четыре мелкие клетки. Меняются лишь затронутые клетки и биты слоя: младшая тетрада 0xF/0 для foot, 0x40 для foot-arrows. 160 неотображаемых краевых клеток сохраняются. Правки объектов не перерисовывают проходимость. |
+| characters | Перемещение, направление, копирование и удаление по правилам ниже |
+| groups | Перемещение и размер прямоугольников появления и удержания; удаление запрещено |
+| loot, exits | Добавление, удаление, перемещение, правки; размер зон перехода. Старые записи сохраняют порядок, новые добавляются в конец; повтор слота означает новую запись. Новому выходу нужен targetMap, новому тайнику назначаются нулевое золото и пустые предметы. Пределы на все карты: 500 тайников, 250 выходов. |
+| arrivals, villages, start | Перемещение и направление. Точка arrivals меняет выход другой карты и имеет приоритет над arrivalX/arrivalY в exits. |
 
-Objects' shadows/flames, rotated character images and names refresh on reopen.
-Tiled places characters above all objects; unlike the game/Python render, a
-house cannot occlude a character in that layer arrangement.
+Тени и огонь объектов, повёрнутые изображения персонажей и имена обновляются
+при повторном открытии. Tiled рисует персонажей поверх объектов: дом не может
+перекрыть персонажа, как это происходит в игре и рендере Python.
 
-### Character copies and fields
+<a id="character-copies-and-fields"></a>
 
-Duplicate a character object with Ctrl+D. The first occurrence of a character
-index is the original; later occurrences create copies with independent
-properties/items, no enemy and no dialog. A lone NPC with reserve one gets its
-own group; other copies append to the existing group. The tile must come from
-that game.K group's characters.K tileset. Deletion shifts group members and
-removes an emptied lone-NPC group. Village workers (elder, healer, trader,
-smith, commander) cannot be deleted. mobs is derived/locked and ignored on save.
+### Копии персонажей и поля
 
-After a roster addition/deletion, reopen before saving again: record indices
-have shifted. Both Save and Save As otherwise reject the stale map.
+Ctrl+D дублирует объект персонажа. Копия получает собственную запись,
+свойства и предметы без врага и диалога. Одиночный NPC с резервом один получает
+отдельную группу; остальные копии добавляются в существующую. Тайл должен
+принадлежать characters.K соответствующей game.K. Удаление сдвигает участников
+и удаляет опустевшую группу одиночного NPC. Работников деревни — старосту,
+лекаря, торговца, кузнеца, командира — удалять нельзя. mobs — вычисляемый,
+заблокированный слой, при сохранении игнорируется.
 
-| Property | Accepted value |
+После добавления или удаления персонажа переоткройте карту перед следующим
+сохранением: индексы записей сдвинулись. Иначе Save и Save As отклонят устаревшую карту.
+
+| Свойство | Допустимое значение |
 |---|---|
-| classId | Human 0x00–0x3F with occupation bits 0–5; monsters 0x41–0x50; villagers 0x51–0x57; dead bit 0x80 forbidden |
+| classId | Люди 0x00–0x3F с битами занятия 0–5; монстры 0x41–0x50; жители 0x51–0x57; бит смерти 0x80 запрещён |
 | level | 0–255 |
-| nameId, nickId | 0–170 and 0–20; nickname zero means absent |
-| spriteSet | Humans 0–2; dynamic classes 0–29 |
-| gold, freePoints, experience | 32-bit integers |
-| Skills and attributes | 16-bit integers |
+| nameId, nickId | 0–170 и 0–20; нулевое прозвище означает отсутствие |
+| spriteSet | Люди 0–2; динамические классы 0–29 |
+| gold, freePoints, experience | 32-битные целые |
+| Навыки и характеристики | 16-битные целые |
 
-These class restrictions follow recognized data/source tables; behavior outside
-them in the original is a **hypothesis**. A class does not uniquely determine
-spriteSet: some classes use two/three sprites; objects 21 and 24–29 are absent
-from character records, so their game presentation is **unknown**. Changing
-class does not change palette 0xD8. Equipment/inventory references cannot be
-edited here: each item record has exactly one owner. Out-of-range fields fail
-save with a reason; mobs does not expose these editable properties.
+Ограничения классов следуют распознанным таблицам файлов и источника;
+поведение оригинала за их пределами — **гипотеза**. Класс не определяет
+spriteSet однозначно: у некоторых два/три спрайта. Объекты 21 и 24–29
+отсутствуют в записях персонажей, их представление в игре **неизвестно**.
+Смена класса не меняет палитру 0xD8. Ссылки на снаряжение/инвентарь здесь
+не редактируются: у записи предмета ровно один владелец. Неверные значения
+отклоняют сохранение с причиной; mobs не предоставляет этих редактируемых полей.
 
-### Shared state and tutorials
+<a id="shared-state-and-tutorials"></a>
 
-Save loads Game.K beside the target map, falling back to the opened map's
-directory, applies only this map's changes and writes beside the target.
-If Game.K changed since opening (for example another map was saved), reopen
-rather than overwrite shifted loot/exit indices. Re-saving your own unchanged
-record layout remains valid.
+### Общее состояние и обучение
 
-Tutorial.N uses Tlights.N and TGame.1, with only game.1 visible. Main maps use
-LIGHTS.N and Game.0–2. Saving a tutorial as Konung.N or the reverse is rejected
-so state from the two sources cannot mix. Technical behavior and recorded
-byte/pixel checks are in [extension internals](../development/tiled.md).
+Save загружает Game.K рядом с целевой картой, иначе — из каталога открытой
+карты, применяет только изменения текущей карты и записывает рядом с целью.
+Если Game.K изменился с открытия, например после сохранения другой карты,
+переоткройте карту: нельзя затирать сдвинувшиеся индексы тайников/переходов.
+Повтор собственных сохранений без изменения размещения записей допустим.
+
+Tutorial.N использует Tlights.N и TGame.1, видна только game.1. Основные карты
+используют LIGHTS.N и Game.0–2. Сохранение обучения как Konung.N и обратное
+преобразование запрещены, чтобы не смешивать источники состояния.
+Технические подробности и результаты побайтных/попиксельных проверок —
+в [устройстве расширения](../development/tiled.md).

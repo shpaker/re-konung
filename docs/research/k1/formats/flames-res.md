@@ -1,48 +1,48 @@
-# FLAMES.RES — flame frames
+<a id="flamesres--flame-frames"></a>
 
-1533070 bytes, identical in RUS and ENG: torches, forges and burning houses.
-Code: `konung/k1/flames_res.py` (`parse`, `to_rgba`).
+# FLAMES.RES — огни
 
-```sh
+Кадры огней: факелы, горны, горящие дома. 1533070 байт, одинаков в RUS и ENG. Код — `konung/k1/flames_res.py` (`parse`, `to_rgba`). Выгрузка кадров по видам огня:
+
+```bash
 uv run konung k1 flames original/k1/rus/game out/k1/flames
 ```
 
-**Confirmed:** both editions parse to EOF (`tests/k1/test_graphics.py`); frames
-align with burning houses on map 17 and the forge on map 1. Sources: Slavik
-`resources.cpp:424-441` (`LoadFlames`), `632-680` (`LoadFlameImage`), checked
-against our files and renders.
+**Статус:** раскладка **подтверждена**: разбор обоих изданий доходит ровно до конца файла (`tests/k1/test_graphics.py`), а огни на рендере стоят там, где горит. На карте 17 горят дома сожжённой деревни, на карте 1 — горн кузни. Источник: Slavik `resources.cpp:424-441` (`LoadFlames`) и `632-680` (`LoadFlameImage`), проверено на наших файлах.
 
-## Structure
+<a id="structure"></a>
 
-74 consecutive blocks, no file header.
+## Структура
 
-| Offset | Type | Meaning | Confidence |
+74 блока подряд, без заголовка:
+
+| Смещение | Тип | Смысл | Уверенность |
 |---|---|---|---|
-| 0 | u32 | Tag, always `0x05000000` | Meaning **unknown** |
-| 4 | s32 | Image byte length | **Confirmed** for all 74 blocks |
-| 8 | RL16 | [RLE image](rle.md), RGB555 | **Confirmed** |
+| 0 | u32 | метка, у всех `0x05000000` | смысл неизвестен |
+| 4 | s32 | размер картинки | подтверждено: у всех 74 блоков совпадает с длиной картинки |
+| 8 | | картинка RL16 ([rle.md](rle.md)), цвета RGB555 | подтверждено |
 
-Frames range from 38 × 31 to 256 × 195 pixels.
+Размеры кадров — от 38 × 31 до 256 × 195.
 
-## Transparency
+<a id="transparency"></a>
 
-The file has no alpha. Slavik derives `a = (2r + g + b) / 4` and multiplies color
-by it (`resources.cpp:660-670`). Dark pixels become almost transparent.
-`to_rgba` keeps the color and puts `a` into ordinary alpha. The original blend
-remains a **hypothesis**: Slavik's hardware path also uses `GL_SRC_ALPHA` with
-premultiplied color (`gfx.cpp:337-370`); this was not checked in the game.
+## Прозрачность
 
-## Animation
+Альфы в файле нет: её игра считает из яркости, `a = (2r + g + b) / 4`, и умножает на неё цвет (Slavik `resources.cpp:660-670`). Тёмные пиксели почти прозрачны, яркие — плотные, поэтому огонь светится.
 
-The [EXE table](executable.md) assigns inclusive frame ranges to seven flame
-kinds. A simple OBJECTS.RES object has up to 20 points, each carrying kind 0–6
-and the frame's top-left offset from the object ([objects](objects-res.md)).
-**By Slavik:** advance once per tick (`game.cpp:1587-1597`). The reference render
-places the first frame immediately above the object.
+`to_rgba` оставляет цвет как есть и кладёт `a` в альфу, то есть огонь смешивается обычной прозрачностью. Как именно смешивает игра — **гипотеза**: в аппаратном режиме Slavik рисует уже умноженный цвет ещё и с `GL_SRC_ALPHA` (`gfx.cpp:337-370`), в игре не сверено.
 
-## Open questions
+<a id="animation"></a>
 
-- **By Slavik**, map loading randomizes each initial frame (`game.cpp:815-823`).
-  The object's 20 flame bytes in Konung.N may preserve current frames; verify on data.
-- Objects with at least two flames omit shadows and darkening in Slavik
-  (`game.cpp:1333`, `1564-1584`). The reference render does not implement that case.
+## Анимации
+
+Какие кадры составляют анимацию огня какого вида, задаёт таблица в exe ([executable.md](executable.md)): 7 видов, у каждого свой диапазон кадров, оба конца включены.
+
+У простого объекта `Objects.res` до 20 точек огня: вид (0–6) и смещение левого верхнего угла кадра от позиции объекта ([objects-res.md](objects-res.md)). Кадр меняется каждый тик (Slavik `game.cpp:1587-1597`). Рендер рисует первый кадр анимации сразу поверх объекта.
+
+<a id="open-questions"></a>
+
+## Открытые вопросы
+
+- По Slavik, при загрузке карты начальный кадр каждого огня берётся случайно (`game.cpp:815-823`), а поле огней объекта в `Konung.N` (20 байт) — это, видимо, сохранённые текущие кадры. Проверить на данных.
+- Объекты с двумя огнями и больше, по Slavik, рисуются без тени и без затемнения (`game.cpp:1333`, `1564-1584`). Рендер это пока не учитывает.

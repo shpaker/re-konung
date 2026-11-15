@@ -1,62 +1,75 @@
-# Versions and releases
+<a id="versions-and-releases"></a>
 
-Version numbers and notes are computed by [git-cliff](https://github.com/orhun/git-cliff) (`cliff.toml`, invoked by
-uvx git-cliff). A tag and GitHub Release are created **only by a manual workflow
-run**, never automatically after a merge. Agents do not run it or create tags.
+# Версии и релизы
 
-## Publish a release
+Версию и примечания вычисляет [git-cliff](https://github.com/orhun/git-cliff)
+(`cliff.toml`, запуск через uvx git-cliff). Тег и GitHub Release создаются
+**только ручным запуском workflow**, не автоматически после слияния.
+Агенты не запускают его и не создают теги.
 
-The user opens GitHub Actions → **version** → Run workflow on main.
+<a id="publish-a-release"></a>
+
+## Публикация релиза
+
+Пользователь открывает GitHub Actions → **version** → Run workflow на main.
 `.github/workflows/version.yml`:
 
-1. Requires a green ci.yml run for that exact main commit.
-2. Stops with an explanation if the commit is tagged or there is nothing to release.
-3. Computes the version (`just next-version`), creates vX.Y.Z and pushes it.
-4. Calls release.yml: notes from `just changelog`, archive
-   `konung-tiled-vX.Y.Z.zip` from `just tiled-package`.
+1. Требует успешный запуск ci.yml для этого конкретного коммита main.
+2. Останавливается с объяснением, если коммит уже помечен тегом или выпускать нечего.
+3. Вычисляет версию (`just next-version`), создаёт vX.Y.Z и отправляет тег.
+4. Вызывает release.yml: примечания из `just changelog`, архив
+   `konung-tiled-vX.Y.Z.zip` из `just tiled-package`.
 
-The archive contains only our own extension code, never game resources.
+В архиве только наш код расширения, никаких игровых ресурсов.
 
-## How the version is computed
+<a id="how-the-version-is-computed"></a>
 
-A release is built from the PR commits since the last tag `vX.Y.Z`: each PR lands on `main` as one
-squash commit whose subject GitHub writes from the PR title with its number
-(`squash_merge_commit_title=PR_TITLE`, `squash_merge_commit_message=COMMIT_MESSAGES`), and `cliff.toml`
-counts a commit only when its subject carries that `(#N)` marker — so one PR is never counted twice and
-an ordinary commit inside its branch never counts at all. The body keeps the commit messages, so a
-`BREAKING CHANGE:` footer still raises the version. Merges into `main` are squash commits only: merge and
-rebase are off (a rebase has no commit carrying the PR number, so such a PR would miss the release).
+## Расчёт версии
 
-| PR title | Before 1.0 | After 1.0 |
+Релиз учитывает PR после последнего тега `vX.Y.Z`. Каждый PR попадает в main
+одним squash-коммитом; GitHub формирует тему из заголовка PR и номера
+(`squash_merge_commit_title=PR_TITLE`, `squash_merge_commit_message=COMMIT_MESSAGES`).
+`cliff.toml` считает только темы с маркером `(#N)`: один PR не учитывается
+дважды, обычный коммит внутри ветки не учитывается. Тело сохраняет сообщения
+коммитов, поэтому `BREAKING CHANGE:` по-прежнему повышает версию.
+В main допускается только squash: merge и rebase отключены; при rebase
+не было бы коммита с номером PR и изменение пропало бы из расчёта.
+
+| Заголовок PR | До 1.0 | После 1.0 |
 |---|---|---|
 | `feat` | minor | minor |
 | `fix`, `perf`, `refactor` | patch | patch |
-| Breaking (`feat!:`, `BREAKING CHANGE:`) | minor | major |
-| Only `chore`, `ci`, `docs`, `test`, `build`, `style` | No release | No release |
+| Несовместимость (`feat!:`, `BREAKING CHANGE:`) | minor | major |
+| Только `chore`, `ci`, `docs`, `test`, `build`, `style` | Без релиза | Без релиза |
 
-Before 2026-11-01 merges read «Merge pull request #N from <branch>» with the PR title in the body, so
-`commit_preprocessors` in `cliff.toml` lifts that title to the first line and the same `(#N)` rule still
-counts the old history. Until a dependent (stacked) PR's base is switched to `main`, its squash commit
-lands on the lower branch rather than `main`, so it does not match the rule and stays out of the release:
-its content reaches `main` through the lower PR's own squash commit.
+До 2026-11-01 тема слияния имела вид «Merge pull request #N from <branch>»,
+а заголовок PR находился в теле. `commit_preprocessors` в `cliff.toml` поднимает
+его в первую строку, и правило `(#N)` учитывает старую историю.
+Пока база зависимого PR не переключена на main, его squash попадает в нижнюю
+ветку. Самостоятельно в релиз он не входит: содержимое достигает main через
+squash нижнего PR.
 
-The initial version is v0.1.0. Inspect the next version without publishing:
+Начальная версия — v0.1.0. Посмотреть следующую без публикации:
 
 ```sh
 just next-version
 uvx git-cliff --unreleased
 ```
 
-## Version consumers
+<a id="version-consumers"></a>
 
-- Python hatch-vcs reads tags (`pyproject.toml`); between tags it yields
-  X.Y.Z.devN+g<sha>. Inspect with `uv run konung --version`.
-- The Tiled release archive includes konung/VERSION with the tag.
-- Agent plugin manifests are independent of release tags: Claude Code and
-  Codex omit a version and follow main commits; qwen-extension.json uses 0.0.0.
+## Где используется версия
 
-## Install the release extension
+- Python hatch-vcs читает теги (`pyproject.toml`); между тегами получается
+  X.Y.Z.devN+g<sha>. Проверка: `uv run konung --version`.
+- Архив расширения Tiled содержит konung/VERSION с тегом.
+- Манифесты плагинов агентов независимы от тегов: Claude Code и Codex
+  не задают версию и следуют коммитам main; qwen-extension.json использует 0.0.0.
 
-Extract konung-tiled-vX.Y.Z.zip into Tiled's extensions directory so it contains
+<a id="install-the-release-extension"></a>
+
+## Установка расширения из релиза
+
+Распакуйте konung-tiled-vX.Y.Z.zip в каталог расширений Tiled так, чтобы появился
 extensions/konung/konung.mjs (Windows: %LOCALAPPDATA%/Tiled/extensions).
-[The Tiled guide](../guides/tiled.md) lists platform paths and validation steps.
+Пути платформ и проверки — в [руководстве Tiled](../guides/tiled.md).

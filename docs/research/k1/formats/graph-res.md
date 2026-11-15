@@ -1,102 +1,99 @@
 # GRAPH.RES
 
-Palettes, cursors, ground/decorative tiles and character sprites; about 14.5 MB.
-Code: `konung/k1/graph_res.py`, `tiled/konung/lib/k1.mjs` (`parseGraph`).
+Палитры, курсоры, тайлы земли и декораций, спрайты персонажей. 14,5 МБ. Код — `konung/k1/graph_res.py`, `tiled/konung/lib/k1.mjs` (`parseGraph`). Выгрузка в PNG:
 
-```sh
+```bash
 uv run konung k1 tiles original/k1/rus/game/GRAPH.RES out/k1/tiles
 uv run konung k1 sprites original/k1/rus/game out/k1/sprites
 ```
 
-The second command exports each model, equipment and OBJECTS.RES dynamic
-object's first frame per animation and all eight directions.
+Вторая команда выгружает модели, снаряжение и динамические объекты `OBJECTS.RES`: на картинку — первый кадр каждой анимации по 8 направлениям.
 
-**Confirmed:** parsing reaches EOF in RUS game/, ENG game/ and the disc copy;
-tiles were inspected visually. Source: Slavik `resources.cpp` (`LoadGraphRes`),
-checked on our files.
+**Статус:** структура блоков **подтверждена** — разбор доходит ровно до конца файла во всех трёх копиях (RUS `game/`, ENG `game/`, диск). Тайлы проверены глазами. Источник: Slavik `resources.cpp` (`LoadGraphRes`), проверено на наших файлах.
 
-## Structure
+<a id="structure"></a>
 
-Little-endian; consecutive blocks.
+## Структура
 
-| Block | Size | Content |
+Всё little-endian. Блоки идут подряд.
+
+| Блок | Размер | Содержимое |
 |---|---|---|
-| Color bank | 65536 × u16 = 131072 bytes | RGB555; an image palette is 256 consecutive colors |
-| Cursors | 11 blocks | Block header plus 32×32 RL16 image |
-| Tiles | 1 block | Header, 512 directory entries, RL8 images |
-| Characters | 3 + 24 blocks | Three base models and 24 equipment sets |
+| Банк цветов | 65536 × u16 = 131072 байта | цвета RGB555; палитра картинки — 256 цветов подряд с заданного места |
+| Курсоры | 11 блоков | заголовок блока + картинка RL16 32×32 |
+| Тайлы | 1 блок | заголовок, таблица 512 записей, картинки RL8 |
+| Персонажи | 3 + 24 блока | 3 базовые модели и 24 вида снаряжения |
 
-### Block header
+<a id="block-header"></a>
 
-| Offset | Type | Meaning |
+### Заголовок блока
+
+| Смещение | Тип | Смысл |
 |---|---|---|
-| 0 | u32 | Tag: cursors 0x05000000, tiles 0x01000000, characters 0; purpose **unknown** |
-| 4 | u32 | Size |
+| 0 | u32 | метка: у курсоров `0x05000000`, у тайлов `0x01000000`, у персонажей 0. Смысл **неизвестен** |
+| 4 | u32 | размер |
 
-**Confirmed size origins:** after the header for cursors; after the directory
-for tiles (image data only); from block start for characters (including header).
+Размер считается от разного места — **подтверждено**:
+- у курсора — от конца заголовка;
+- у тайлов — от конца таблицы, то есть это размер картинок;
+- у блока персонажа — от начала блока, то есть вместе с заголовком.
 
-### Tile directory
+<a id="tile-directory"></a>
 
-512 × 8 bytes: s32 image offset from directory end, s32 palette **byte offset**
-from color-bank start (color index = value / 2). Either negative means empty.
-305 slots are filled (0–304): 221 tiles of 114×64 are ground rhombi (grass,
-sand, rock, flooring, water); the rest are logs, bushes, skeletons, cliffs and
-walls of varying sizes. Maps store the slot, plus one in their tile layers.
+### Таблица тайлов
 
-### Character block
+512 записей по 8 байт: s32 смещение картинки от конца таблицы, s32 смещение палитры **в байтах** от начала банка (номер цвета = значение / 2). Если любое из них < 0, слота нет.
 
-Three human models (`Character.sprite_set` in [Game.N](game-state.md)) and
-24 equipment sets. Code: `graph_res.read_sprites`, `konung/k1/characters.py`.
-**Confirmed on all 27 blocks of both editions:** every image decodes, the last
-ends at the block boundary, every animation frame has an image. Source:
-Slavik `resources.cpp:20-102` (`CharacterSprites::Load`).
+Занято 305 слотов (0–304):
+- 221 тайл 114×64 — ромбы земли (трава, песок, камень, настил, вода);
+- остальные — декорации разного размера: брёвна, кусты, скелеты, обрывы, стены.
 
-| Block offset | Size | Content |
+Номер тайла в карте — номер слота (в тайловых слоях карты — с единицы).
+
+<a id="character-block"></a>
+
+### Блок персонажа
+
+Три модели людей (номер — `Character.sprite_set` в [game-state.md](game-state.md)) и 24 набора снаряжения. Код — `graph_res.read_sprites`, `konung/k1/characters.py`.
+
+**Статус:** раскладка **подтверждена**. Во всех 27 блоках обоих изданий:
+- все картинки декодируются;
+- последняя кончается ровно на конце блока;
+- у каждого кадра анимации есть картинка.
+
+Источник — Slavik `resources.cpp:20-102` (`CharacterSprites::Load`), проверено на наших файлах.
+
+| Смещение от начала блока | Размер | Содержимое |
 |---|---|---|
-| 0 | 8 | Block header |
-| 8 | 80 × (s16 + 12 × s16) | Ten animations × eight directions: frame count and image indices |
-| 2088 | 80 × 12 × (s16, s16) | Equipment offset from character point per frame |
-| 5928 | 768 × (s32, s32) | Shadow/image offsets from data start; negative means absent, zero also means no shadow |
-| 12072 | 80 × 12 × (2 × s16, 2 × s16) | Per-frame shadow/image offsets from character point |
-| 19752 | | RL8 images and shadows |
+| 0 | 8 | заголовок блока |
+| 8 | 80 × (s16 + 12 × s16) | по анимации (10) и направлению (8): число кадров и номера картинок кадров |
+| 2088 | 80 × 12 × (s16, s16) | смещение снаряжения от точки персонажа на кадр |
+| 5928 | 768 × (s32, s32) | картинки: смещение тени и изображения от начала данных; < 0 — нет, у тени и 0 — нет |
+| 12072 | 80 × 12 × (2 × s16, 2 × s16) | смещения тени и изображения от точки персонажа на кадр |
+| 19752 | | картинки RL8 и тени |
 
-Animations 2 and 8 have seven frames; all others twelve. **Confirmed:** pairs
-0/6, 1/7, 2/8, 3/9 have matching counts in every block/direction
-(`animations_six_to_nine_mirror_zero_to_three`). States 6–9 are the variants
-without weapons in hands. Slavik selects by byte 0x03 bit 0x04
-(`game_play.cpp:305-308`, `2465-2468`, `1964-1967`, `3944-3947`), and maps
-6–9 to 0–3 for dynamic objects (`game_character.cpp:144-150`). Our file census
-finds the bit set exactly for states below 6; see [animation](../creatures/animation.md).
+У анимаций 2 и 8 по 7 кадров, у остальных — по 12. Анимации 6–9 — те же 0–3 без оружия в руках: **подтверждено**. Пару состояний игра выбирает по биту 0x04 байта 0x03 записи персонажа (`Marisa-Chan/Slavik/game_play.cpp:305-308`, `game_play.cpp:2465-2468`, `game_play.cpp:1964-1967`, `game_play.cpp:3944-3947`), а у динамических объектов сводит 6–9 к 0–3 (`game_character.cpp:144-150`). Наш замер: во всех 27 блоках число кадров у пар состояний 0 и 6, 1 и 7, 2 и 8, 3 и 9 совпадает по всем восьми направлениям (тест `animations_six_to_nine_mirror_zero_to_three`), а в записях персонажей бит 0x04 выставлен ровно у тех, у кого состояние меньше 6 ([анимации существ](../creatures/animation.md)).
 
-Frame composition (Slavik `game.cpp:1087-1110`, `game_character.cpp:131-241`),
-**confirmed by rendering**:
+Кадр на карте собирается так (Slavik `game.cpp:1087-1110`, `game_character.cpp:131-241`), **подтверждено** рендером:
+1. Модель рисуется с палитрой персонажа: поле 0xD8 записи персонажа / 2 — начало палитры в банке цветов. Точка персонажа — в [game-state.md](game-state.md), картинка — со смещением изображения кадра.
+2. Поверх модели — снаряжение. Слоты `Character.equipment` перебираются в порядке для направления персонажа. Для каждого надетого предмета берётся набор из таблицы снаряжения exe по его `info_id` ([executable.md](executable.md)).
+3. Кадр набора — с тем же номером анимации, направления и кадра. Ставится он в точку персонажа плюс смещение снаряжения кадра модели и плюс смещение изображения кадра набора.
+4. Палитра набора — своя для каждого набора. В данных exe её нет, поэтому номера взяты из Slavik `resources.cpp:15`. Номер × 256 — начало палитры.
 
-1. Draw the base with the character's palette: field 0xD8 / 2 indexes the color
-   bank. Position comes from [Game.N coordinates](game-state.md#coordinates)
-   plus the frame's image offset.
-2. Iterate Character.equipment in direction order. Item.info_id selects the
-   equipment set through the [EXE table](executable.md).
-3. Use the same animation, direction and frame. Add the base frame's equipment
-   offset and the equipment frame's image offset to the character point.
-4. Equipment uses its own palette. Its indices were not found in EXE data;
-   they come from Slavik `resources.cpp:15`. Index × 256 gives the bank position.
+Анимация — последовательность кадров анимации состояния персонажа для его направления. По Slavik (`game_play.cpp:3729`), кадр меняется на каждом тике игры, тик — 60 мс (`game.h:30`). Это **гипотеза**: в игре не сверено. Код — `characters.animation`, `characters.frame_count`.
 
-**By Slavik**, `game_play.cpp:3729` advances one frame per 60 ms tick
-(`game.h:30`); direct in-game timing was not checked in this format study.
-Code: `characters.animation`, `characters.frame_count`. Later behavioral
-measurements and play modes are in [creature research](../creatures/animation.md).
+Персонажи с битом 0x40 в классе (монстры, а ещё женщины и дети) рисуются не моделью, а динамическим объектом `OBJECTS.RES` ([objects-res.md](objects-res.md)), без снаряжения.
 
-Class bit 0x40 selects an OBJECTS.RES dynamic sprite (monsters, women, children),
-without equipment. Slavik's armed path uses different slot-order tables and
-sometimes equipment set + 1 (`game_character.cpp:167-169`). The reference
-composition currently uses the basic order; that implementation limitation is
-separate from the recorded weapon-bit census. An earlier claim that only
-dynamic sprites carry the bit contradicted that census and is not retained.
+По Slavik, путь с оружием в руках использует другой порядок слотов и иногда
+соседний набор снаряжения (номер + 1, `game_character.cpp:167-169`). Эталонная
+сборка пока использует основной порядок. Это ограничение реализации не следует
+смешивать с результатом подсчёта бита оружия: прежнее утверждение, что он есть
+только у динамических спрайтов, противоречило этому подсчёту и исправлено.
+Подробности — в [анимации существ](../creatures/animation.md).
 
-## Open questions
+<a id="open-questions"></a>
 
-- Some decorations (skeletons, pots, columns) appear purple: copies of the same
-  images with another palette. Whether the game changes the palette offset or
-  substitutes colors dynamically is **unknown**.
-- RUS game/GRAPH.RES is 22 bytes larger: one cursor differs; the rest matches.
+## Открытые вопросы
+
+- Часть декораций (скелеты, кувшины, колонны) выходит фиолетовой — копии тех же картинок с другой палитрой. Нужно понять, как их использует игра: другая палитра по смещению или подмена цвета на лету.
+- В RUS `game/GRAPH.RES` на 22 байта больше: отличается один курсор, остальное совпадает.

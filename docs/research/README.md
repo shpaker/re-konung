@@ -1,19 +1,21 @@
-# Research
+<a id="research"></a>
 
-This section describes the original games, not planned engine features.
-Every claim retains its source, checked editions and confidence. **Confirmed**
-means our own check supports it; **hypothesis** and **unknown** remain explicit.
-Claims supported only by Slavik or another external source say so. Unknown rules
-are not implemented as guesses. Follow the
-[reverse-engineering loop](../../.claude/skills/konung-reverse-format/SKILL.md).
+# Исследования
 
-- [Games and editions](series.md): project coverage and the shared-engine hypothesis.
-- [Gameplay comparison](comparison.md): K1, K2 and K2.5, with evidence per claim.
-- [Sources](sources.md): external references and their limitations.
-- [Disc images](disc-images.md): the MDS/MDF structure and checked editions.
-- [K1 research](k1/README.md): format status and recovered rules.
+Этот раздел описывает оригинальные игры, а не будущие возможности движка.
+У каждого утверждения сохраняются источник, проверенные издания и уверенность.
+**Подтверждено** означает, что есть наша собственная проверка; **гипотеза** и
+**неизвестно** обозначаются явно. Сведения только из Slavik или другого внешнего
+источника помечаются отдельно. Неизвестные правила не реализуются по догадке.
+Порядок работы задаёт [цикл исследования](../../.claude/skills/konung-reverse-format/SKILL.md).
 
-Use [game-file preparation](../guides/game-files.md) for extraction commands.
-Record original facts here, implementation decisions in
-[development](../development/README.md), and intentional divergences briefly
-beside the facts they change, with a link to the implementation topic.
+- [Серия и издания](series.md): границы проекта и гипотеза общего движка.
+- [Сравнение механик](comparison.md): K1, K2 и K2.5, с основаниями каждого утверждения.
+- [Источники](sources.md): внешние материалы и их ограничения.
+- [Образы дисков](disc-images.md): устройство MDS/MDF и проверенные издания.
+- [Исследования K1](k1/README.md): состояние форматов и восстановленные правила.
+
+Команды извлечения находятся в [подготовке файлов игры](../guides/game-files.md).
+Факты оригинала записываются здесь, решения реализации — в
+[разработке](../development/README.md). Намеренные отличия кратко отмечаются
+рядом с исходным фактом и снабжаются ссылкой на страницу реализации.

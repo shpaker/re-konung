@@ -1,12 +1,12 @@
 # k1-data
 
-K1 binary formats and repository access, without Bevy or game rules.
+Бинарные форматы K1 и доступ к файлам без Bevy и игровых правил.
 
-- repo::GameDir handles case-insensitive file discovery; parsers consume bytes separately.
-- Maps, light and starting states support byte-exact writing; graphics and EXE tables are read-only.
-- game_edit preserves dense roster reserves and cross-references.
-- Unknown bytes are preserved. Python is authoritative on format disagreements.
+- repo::GameDir ищет файлы без учёта регистра; парсеры отдельно принимают байты.
+- Карты, размещение света и начальные состояния поддерживают побайтную запись; графика и таблицы EXE только читаются.
+- game_edit сохраняет резервы плотного списка существ и перекрёстные ссылки.
+- Неизвестные байты сохраняются; при расхождении форматов приоритет у Python.
 
-Details: [topic documentation](../../../../docs/research/k1/README.md).
-Checks: `just cargo-test`, `just cargo-lint`. Pure logic tests need no window/GPU;
-real-data cases use local original/ and skip when absent.
+Подробности: [тематическая документация](../../../../docs/research/k1/README.md).
+Проверки: `just cargo-test`, `just cargo-lint`. Чистая логика не требует окна/GPU;
+проверки на игровых данных используют локальный original/ и пропускаются без него.

@@ -1,55 +1,66 @@
-# K1 editions
+<a id="k1-editions"></a>
 
-**Confirmed by comparing our unpacked copies:** RUS, 1C CD 1999
-(`original/k1/rus`) and ENG, Strategy First CD 2000 (`original/k1/eng`).
-[Game-file preparation](../../guides/game-files.md) owns extraction commands;
-[disc images](../disc-images.md) describes the container.
+# Издания K1
 
-## Disc contents
+**Подтверждено сравнением распакованных копий:** RUS, CD 1C 1999
+(`original/k1/rus`), и ENG, CD Strategy First 2000 (`original/k1/eng`).
+Команды извлечения — в [подготовке файлов](../../guides/game-files.md),
+контейнер — в [образах дисков](../disc-images.md).
 
-Both discs carry the installer, GRAPH.RES, LIGHTS.RES and Video/*.flm; the
-original reads these from disc. The rest of the installed game is in
-`inst/setup.dat`, a ZIP with 18 extra trailing bytes reported by 7-Zip.
+<a id="disc-contents"></a>
 
-The image-size difference comes from disc extras:
+## Содержимое дисков
 
-- RUS has a 130 MB poster.flm (ENG: 20 MB) and Allods 3/WAR demos in Demo/ (48 MB).
-- ENG has prolog.flm (69 MB), tutor.flm and DirectX 7 in inst/dx/.
-- ENG's data track is CD-XA and its image includes subchannels.
+На обоих дисках есть установщик, GRAPH.RES, LIGHTS.RES и Video/*.flm;
+оригинал читает их с диска. Остальная установленная игра лежит в
+`inst/setup.dat`: ZIP с 18 лишними байтами в конце, о которых сообщает 7-Zip.
 
-## Installed files
+Разница размеров образов объясняется дополнительным содержимым:
 
-| Property | RUS | ENG |
+- RUS: poster.flm 130 МБ (ENG: 20 МБ) и демоверсии «Аллодов 3»/WAR в Demo/ (48 МБ).
+- ENG: prolog.flm 69 МБ, tutor.flm и DirectX 7 в inst/dx/.
+- Дорожка данных ENG — CD-XA; образ содержит субканалы.
+
+<a id="installed-files"></a>
+
+## Установленные файлы
+
+| Свойство | RUS | ENG |
 |---|---|---|
-| Files | 119 | 134 |
-| Konung.N | 43 | 43, byte-identical |
-| LIGHTS.N | 40 | 40, byte-identical |
-| Objects.res, FLAMES.RES, LIGHTS.RES | Same in both editions | Same |
-| GRAPH.RES | One cursor differs, +22 bytes; the RUS disc carries ENG's version | Reference comparison |
-| Game.0/1/2 | Different | See below |
-| SOUNDS.RES, GAME.RES, MAPS.RES, Sounds_.res, playavi.dll, Uninstall.exe | Different | Different |
-| Interface | *R.RES, Russian | *E.RES, English; *T.RES, unknown third language (MENU, INTR, QUEST) |
-| ENG-only | — | TUTORIAL.EXE, tutorial.4/5, TLIGHTS.4/5, TGame.1; LAN_KONG.EXE, Lanusers.dat, SERVER, Servers.cfg; SAVITEMS.DAT; KONUNG.EXE under that name |
-| RUS-only | CLIENT.EXE; konung.res, a PE file apparently renamed from konung.exe | — |
+| Файлов | 119 | 134 |
+| Konung.N | 43 | 43, побайтно одинаковые |
+| LIGHTS.N | 40 | 40, побайтно одинаковые |
+| Objects.res, FLAMES.RES, LIGHTS.RES | Одинаковы в обоих изданиях | Одинаковы |
+| GRAPH.RES | Отличается один курсор, +22 байта; на диске RUS лежит версия ENG | Сравнение эталона |
+| Game.0/1/2 | Различаются | См. ниже |
+| SOUNDS.RES, GAME.RES, MAPS.RES, Sounds_.res, playavi.dll, Uninstall.exe | Различаются | Различаются |
+| Интерфейс | *R.RES, русский | *E.RES, английский; *T.RES, неизвестный третий язык (MENU, INTR, QUEST) |
+| Только ENG | — | TUTORIAL.EXE, tutorial.4/5, TLIGHTS.4/5, TGame.1; LAN_KONG.EXE, Lanusers.dat, SERVER, Servers.cfg; SAVITEMS.DAT; KONUNG.EXE под этим именем |
+| Только RUS | CLIENT.EXE; konung.res — PE-файл, предположительно переименованный konung.exe | — |
 
-The maps are interchangeable. ENG adds the tutorial and network content;
-RUS is the original 1999 edition. Full file sizes: [inventory](inventory.md).
+Карты взаимозаменяемы. ENG добавляет обучение и сетевое содержимое;
+RUS — исходное издание 1999 года. Все размеры — в [перечне файлов](inventory.md).
 
-## Differences in Game.0/1/2
+<a id="differences-in-game012"></a>
 
-**Confirmed over both unpacked editions:** files have the same length and differ
-in about 10–11.5 thousand bytes, only in characters (attributes/equipment) and
-items/loot. Groups, exits and villages match byte for byte. ENG has more filled
-item slots: 1448 versus 1405 in Game.1. State content is compared per edition.
+## Различия Game.0/1/2
 
-Without creatures, draw lists match on all 43 maps. With creatures they differ
-on 16 maps. On 14 the check counters also differ (pieces, visible pieces,
-textures, animations, frames); maps 2 and 12 preserve every counter but differ
-in equipment selection and one pixel of placement. The difference is worn
-equipment, so scene baselines are per edition and counters alone miss two maps.
+**Подтверждено на обоих распакованных изданиях:** длина одинакова, различаются
+около 10–11,5 тысяч байт только в персонажах (характеристики/снаряжение),
+предметах и тайниках. Отряды, выходы и деревни совпадают побайтно.
+В ENG больше заполненных предметов: 1448 против 1405 в Game.1.
+Содержимое состояния сравнивается отдельно для каждого издания.
 
-## Not examined
+Без существ списки отрисовки совпадают на всех 43 картах. С существами
+различаются на 16. На 14 различаются и счётчики проверки: части, видимые части,
+текстуры, анимации, кадры. Карты 2 и 12 сохраняют все счётчики, но различаются
+снаряжением и одним пикселем размещения. Причина — надетое снаряжение:
+эталоны сцен нужны по изданиям, одни счётчики пропускают две карты.
 
-The collector's edition, GOG and RUS patches 01/02 are not available in the
-checked set. OGG music in MUSICS.RES and their HD-patch compatibility remain
-external reports rather than conclusions from our files.
+<a id="not-examined"></a>
+
+## Не исследовано
+
+В проверенном наборе нет коллекционного издания, GOG и патчей RUS 01/02.
+OGG в MUSICS.RES и совместимость этих изданий с HD-патчами остаются
+сообщениями внешних источников, а не выводами из наших файлов.

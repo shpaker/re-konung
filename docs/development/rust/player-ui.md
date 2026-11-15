@@ -1,120 +1,128 @@
-# Player application and UI
+<a id="player-application-and-ui"></a>
 
-## UI showcase (`kn-ui`)
+# Приложение игры и интерфейс
 
-`just ui-showcase` opens a live catalog of the design system: the palette,
-spacing and typography tokens, the konung theme on every Feathers control, the
-bundled PT Sans faces and the `widgets` helpers. It is the quickest check of
-what a change to the theme or the tokens does — the viewer and the player run
-the same `KonungUiPlugin`. The recipe runs the `showcase` example of `kn-ui`
-on the `dev-runtime` profile (`cargo run --profile dev-runtime
---manifest-path crates/Cargo.toml -p kn-ui --example showcase`), without the
-`dynamic` feature: the example links Bevy statically.
+<a id="ui-showcase-kn-ui"></a>
 
-## kn-ui: fonts and theme
+## Каталог UI (`kn-ui`)
 
-Two decisions that are not visible from the outside:
+`just ui-showcase` открывает живой каталог дизайн-системы: палитру, отступы,
+типографику, тему konung на элементах Feathers, встроенные PT Sans и помощники
+`widgets`. Это быстрый способ увидеть результат правок темы/токенов:
+игра и просмотрщик используют один `KonungUiPlugin`. Рецепт запускает
+пример `showcase` крейта `kn-ui` с профилем `dev-runtime`
+(`cargo run --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-ui --example showcase`)
+без `dynamic`: Bevy линкуется статически.
 
-- Fonts are not themeable in Feathers 0.20 — `ThemeProps` carries colors
-  only, and every control hardcodes `InheritableFont` with the embedded
-  FiraSans path. So `KonungUiPlugin` embeds PT Sans (full Cyrillic and Latin,
-  `assets/fonts/OFL.txt`), the `widgets` helpers patch `InheritableFont`
-  over each control root they build, and the plugin's normalization system
-  rewrites every added `InheritableFont` handle to PT Sans — every
-  `InheritableFont` is a `PropagateOver<TextFont>` barrier, so composites'
-  interiors (the select's trigger and options, the slider's readout) are out
-  of reach of root patches and are covered by that system instead.
-- The theme is `create_dark_theme()` with the semantic colors remapped onto
-  the konung palette; identity beyond colors — radii, row heights, paddings —
-  is not fightable inside Feathers and comes from the kn-ui tokens applied in
-  our own BSN styles.
+<a id="kn-ui-fonts-and-theme"></a>
 
-## Player application flow (`kn-app`, `kn-fe-player`)
+## kn-ui: шрифты и тема
 
-The [product principles](../design.md) govern the UI. Original creation rules
-are [research](../../research/k1/new-game.md); this page owns runtime contracts.
+Два неочевидных решения:
 
-The player is an MVU loop over a pure core. `kn-app::AppController` holds the
-whole application state (`Screen`, applied settings, the settings draft, the
-last session error) and reduces queued typed `Action`s into it, returning
-`Effect`s; the frontend (`flow.rs`) wires that into `Update` as one chained
-pipeline per frame: `app_flush` (drain actions → effects) → `apply_effects`
-(the only executor: session build, apply-and-persist settings, exit) →
-`app_flush` again (result actions; the reducer guarantees they emit no
-effects, so the chain cannot loop) → `sync_screens` (the view of the new
-screen). A session is never built at startup: the menu loads nothing, and
-New game opens HeroSelect; Begin emits `StartSession`, executed as
-`session::init` with the validated draft as an all-or-nothing build. `session_watch` reports `Succeeded` only
-when the simulation exists, the request is consumed and the map tree is in
-the world (`CreatureMotion::request` is a queue, not a build). A failure
-tears the half-built session down (`session::teardown`, idempotent) and the
-menu shows the typed reason until the next attempt. Both long effects —
-`StartSession` and `ApplyAndPersist` — execute synchronously on the main
-thread inside `apply_effects`: the loading screen is a static line shown
-between frames, not a progress indicator, and no async machinery exists
-behind it; making the build asynchronous is a candidate future issue, not a
-plan. `kn-player` boots
-settings-first (typed load errors, a bad file left untouched), then the game
-and the hero, and `--new-game` seeds the flow before the first frame. The
-idle pipeline is two exclusive world systems over an empty queue — the flush
-allocates only when effects exist; no per-frame cost is claimed beyond that
-qualitative statement, and a measurement lands when a screen does work worth
-measuring.
+- В Feathers 0.20 шрифты не задаются темой: `ThemeProps` содержит только цвета,
+  а контролы жёстко задают `InheritableFont` со встроенным FiraSans.
+  `KonungUiPlugin` встраивает PT Sans с кириллицей/латиницей (`assets/fonts/OFL.txt`),
+  помощники `widgets` меняют `InheritableFont` корней, а система нормализации
+  заменяет каждый добавленный дескриптор на PT Sans. Каждый `InheritableFont` —
+  барьер `PropagateOver<TextFont>`, поэтому корневой замены недостаточно для
+  внутренностей select, его вариантов и числового поля slider; их покрывает система.
+- Тема основана на `create_dark_theme()` с заменой смысловых цветов палитрой
+  konung. Скругления, высоты строк и отступы задаются токенами kn-ui в наших
+  стилях BSN, а не через внутреннее устройство Feathers.
 
-## Runtime and interface contracts
+<a id="player-application-flow-kn-app-kn-fe-player"></a>
 
-The session effect carries the complete draft. The prepared state is shared by
-scene assembly, animation loading and simulation; leaving or failing the session
-removes it. Tests cover 144 hero/class/specialization combinations across both
-editions, nondefault allocation, the remaining balance, equipment identity,
-unchanged NPCs and original item bytes, and the absence of added placement
-failures. Disk files are never written. Item comparisons use serialized bytes
-because unused floating fields can contain NaN.
+## Поток приложения (`kn-app`, `kn-fe-player`)
 
-The entire portrait card is a button, with original selected/unselected images.
-Tests activate the actual controls and check attribute refunds, spending,
-class reset and keyboard focus restoration across view rebuilds. The centered
-page has three columns: portrait selection; model, biography and constructor
-choices; then attributes and all derived statistics. Cards reserve their full portrait and caption height;
-the bundled Cyrillic font is also applied inside the card. Neutral buttons use
-light text and outlined raised surfaces; only amber primary buttons use dark
-text. The separate footer keeps Back left and Begin right. Escape cancels;
-Enter/Space activate the focused control. Scroll position survives edits, and
-narrow windows wrap columns inside the scrollable body.
+Интерфейс подчиняется [принципам продукта](../design.md). Исходные правила
+создания — в [исследованиях](../../research/k1/new-game.md); здесь контракты выполнения.
 
-## Allocation UX
+Игра — MVU-цикл над чистым ядром. `kn-app::AppController` хранит `Screen`,
+применённые настройки, черновик и последнюю ошибку сессии; типизированные `Action`
+сворачиваются в состояние и `Effect`. Во фронтенде (`flow.rs`) цепочка `Update`:
+`app_flush` (очередь действий → эффекты) → `apply_effects` (единственный
+исполнитель: сборка сессии, применение/запись настроек, выход) → снова
+`app_flush` (результаты не порождают эффекты, поэтому обратного цикла нет) →
+`sync_screens` (представление нового экрана).
 
-**Intentional presentation difference:** compact rows expose both actions and
-prices without hiding information in hover text. Buttons contain only minus or
-plus; adjacent localized captions name the spending/refund and explain minimum,
-maximum or insufficient funds. `Allocation::change` quotes the existing K1 cost
-function even when an increase is unaffordable; the frontend never duplicates
-price bands or trusts its own balance. Occupation controls the cost bands;
-combat and secondary specializations do not change them in the confirmed rules.
+При старте сессия не строится: меню не загружает мир, «Новая игра» открывает
+HeroSelect, «Начать» выдаёт `StartSession`. `session::init` получает проверенный
+черновик и строит сессию целиком либо отказывает. `session_watch` сообщает
+`Succeeded` только когда есть симуляция, запрос потреблён и дерево карты
+присутствует в мире: `CreatureMotion::request` — очередь, не готовая сборка.
+Ошибка идемпотентно убирает частичную сессию через `session::teardown`;
+меню показывает типизированную причину до следующей попытки.
 
-All four rows remain together. Their current value shares a line with its name;
-changed rows show a quiet highlight and the current occupation's initial value.
-Free points appear above the rows and in the fixed Back/Begin footer, together
-with the original unspent-point behavior. A class-change warning is always
-visible, and an actual reset displays a brief inline result, without a dialog.
-No separate reset button is added: selecting the current occupation retains the
-existing original reset behavior.
+`StartSession` и `ApplyAndPersist` исполняются синхронно на главном потоке
+в `apply_effects`. Экран загрузки — статическая строка между кадрами, без
+асинхронного прогресса. Асинхронная сборка — возможная будущая задача, не план.
+`kn-player` сначала загружает настройки (типизированные ошибки, повреждённый
+файл не трогается), затем игру и героя; `--new-game` задаёт начальный поток
+до первого кадра. В простое — две exclusive world systems над пустой очередью;
+flush выделяет память только при эффектах. Численный покадровый замер пока
+не заявлен: он нужен, когда экран выполняет работу, которую стоит измерять.
 
-The creation root supplies a Bevy tab group. Attribute and statistic descriptions
-can receive keyboard focus; focused controls expose the same original hints as
-hovered controls. Popup bounds reserve the footer area. Tests exercise Bevy tab
-navigation, focus restoration, visible prices, reset feedback and rejected
-unaffordable activation, alongside the conserved-budget tests.
+<a id="runtime-and-interface-contracts"></a>
 
-## Reusable attribute view
+## Контракты сессии и интерфейса
 
-`kn-fe-player::widgets::attributes` owns the shared four-row presentation.
-`AttributeMode::ReadOnly` takes runtime values without allocation controls,
-baselines, costs or change observers; `Editable` adds caller-supplied action
-scenes and class baselines. The creation screen adapts its validated draft to
-this widget, while a future in-game character panel can supply current values
-directly. The widget imports neither the creation reducer nor K1 allocation
-rules, and its inspection test intentionally uses values above creation limits.
-This extracts a reusable view; it does not add an in-game character panel yet.
+Эффект сессии передаёт весь черновик. Подготовленное состояние общее для
+сборки сцены, загрузки анимаций и симуляции; выход или ошибка удаляет его.
+Тесты покрывают 144 сочетания героя/класса/специализаций на обоих изданиях,
+нестандартное распределение, остаток очков, идентичность снаряжения,
+неизменность NPC и исходных байтов предметов, отсутствие новых отказов размещения.
+Файлы на диске не пишутся. Предметы сравниваются сериализованными байтами:
+неиспользуемые float-поля могут содержать NaN.
 
-Manual acceptance and outstanding platform checks: [macOS testing](../macos-testing.md).
+Вся карточка портрета — кнопка с исходными выделенным/обычным изображениями.
+Тесты активируют настоящие контролы: возврат/трата, сброс класса,
+восстановление фокуса после пересборки. Центрированная страница имеет три
+колонки: портреты; модель, биография и выборы; характеристики и производные
+показатели. Карточки резервируют полную высоту портрета и подписи,
+внутри тоже используется кириллический шрифт. Нейтральные кнопки имеют светлый
+текст и приподнятую поверхность с контуром; тёмный текст — только на янтарных
+основных кнопках. В отдельном подвале Назад слева, Начать справа.
+Escape отменяет; Enter/Space активирует фокус. Правки сохраняют прокрутку,
+узкое окно переносит колонки внутри прокручиваемой области.
+
+<a id="allocation-ux"></a>
+
+## Распределение характеристик в интерфейсе
+
+**Намеренное отличие представления:** компактные строки показывают действия
+и цены без сокрытия в hover. Кнопки содержат только минус/плюс; рядом
+локализованные подписи цены/возврата и причины: минимум, максимум,
+недостаток очков. `Allocation::change` возвращает цену существующей функции K1
+даже при недоступном увеличении; фронтенд не дублирует диапазоны и не доверяет
+собственному балансу. Цены определяет занятие, не боевая/вторичная специализация.
+
+Все четыре строки находятся рядом. Значение в одной строке с названием;
+изменённая строка ненавязчиво выделяется и показывает исходное значение занятия.
+Баланс виден над строками и в закреплённом подвале вместе с пояснением переноса
+остатка в игру. Предупреждение о сбросе при смене класса видно всегда,
+выполненный сброс даёт краткий результат без диалога. Отдельной кнопки сброса
+нет: повторный выбор текущего занятия сохраняет исходное поведение сброса.
+
+Корень создания задаёт Bevy tab group. Описания характеристик/показателей
+принимают клавиатурный фокус и показывают те же исходные подсказки, что hover.
+Границы всплывающих окон оставляют место подвалу. Тестируются tab-навигация,
+восстановление фокуса, видимые цены, результат сброса, отказ недоступного
+увеличения и сохранение бюджета.
+
+<a id="reusable-attribute-view"></a>
+
+## Повторно используемое представление характеристик
+
+`kn-fe-player::widgets::attributes` содержит общие четыре строки.
+`AttributeMode::ReadOnly` принимает текущие значения без управления очками,
+базовых значений, цен и обработчиков изменений; `Editable` добавляет
+переданные вызывающим кодом сцены действий и базовые значения класса.
+Экран создания адаптирует проверенный черновик к этому виджету;
+будущая игровая панель сможет передавать значения напрямую.
+Виджет не импортирует reducer создания или правила распределения K1;
+тест просмотра намеренно задаёт значения выше пределов создания.
+Это выделение общего представления, не готовая игровая панель.
+
+Ручная приёмка и незавершённые платформенные проверки —
+в [проверках macOS](../macos-testing.md).

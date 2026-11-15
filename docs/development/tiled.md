@@ -1,128 +1,144 @@
-# Tiled extension internals
+<a id="tiled-extension-internals"></a>
 
-[User guide](../guides/tiled.md) · [K1 formats](../research/k1/README.md#format-status)
+# Устройство расширения Tiled
 
-`tiled/konung/lib/k1.mjs` parses without the Tiled API; konung.mjs constructs
-the map. Python wins disagreements. Map/state writing retains all unknown bytes
-and is checked byte for byte across every available edition.
+[Руководство](../guides/tiled.md) · [Форматы K1](../research/k1/README.md#format-status)
 
-## Map representation
+`tiled/konung/lib/k1.mjs` разбирает данные без API Tiled; konung.mjs строит
+карту. При расхождении прав Python. Запись карты/состояния сохраняет
+неизвестные байты и проверяется побайтно на всех доступных изданиях.
 
-| Tiled element | Contract |
+<a id="map-representation"></a>
+
+## Представление карты
+
+| Элемент Tiled | Контракт |
 |---|---|
-| Orientation | Staggered Y, odd rows shifted |
-| Dimensions | 80×160; Tiled tile 116×64, pitch 116×32. The game's 114×64 rhombus aligns from the cell's bottom-left. |
-| Map foot | Original 51200 walkability bytes in hex, overlaid by edits; do not edit the property |
-| mapNumber | Opened map number used for Game.N objects even when Save As uses another number |
-| tutorial | Tutorial source flag selecting Tlights.N/TGame.N; do not edit |
-| rawDecorations | Space-separated slot:record, 16-byte hex records for tiles ≥512. Not drawable; retained in their own slots. Empty on game maps, one slot-994 record on both tutorials. Deleting this property data deletes those records. |
-| mapName | EXE map name, display-only. Absent without EXE and on tutorials; not read on save. |
-| graph tileset | Image collection indexed by GRAPH.RES slot, top-left object alignment |
-| ground / overlay | Ground and upper tile layer |
-| decorations | graph tile objects, in draw/slot order, with slot and unknown. Four non-114×64 tile-layer images lead the layer via cellLayer/cellX/cellY, preserving the game's top rather than Tiled's bottom alignment. |
-| objects tileset/layer | All 463 simple objects. Tile objectId, offsetX/Y; placed slot, flags, frame, frameTime, flames, unknown. Bottom-sorted. Objects 341,342,343,355,451,452 animate; appended frame tiles keep objectId. |
-| shadows | Derived black object masks, opacity 0.4; locked, ignored on save |
-| flames tileset/layer | All 74 FLAMES.RES frames (frame), seven kinds with animation on their first tile (kind). Above objects, derived/locked, linked by object slot; refreshes on reopen. Absent without FLAMES.RES or EXE. |
-| game.K | Starting state for hero K: 0 Wolf, 1 Dragomir, 2 Mikhail. game.0 shown by default; others hidden. checksum records the opened Game.K, not editable. |
-| foot / foot-arrows | Hidden layers above everything: red blocked cells / blue arrow-stop cells (**hypothesis** for 0x40). Fifteen mask tiles encode the four fine cells per rhombus: top 1, left 2, right 4, bottom 8. Empty means none. |
-| characters.K / character-shadows.K | Per-character composite images/animations. Every tile/frame carries character and the shared frame envelope's offsetX/Y. |
+| Ориентация | Staggered Y, нечётные строки сдвинуты |
+| Размеры | 80×160; тайл Tiled 116×64, шаг 116×32. Ромб игры 114×64 выравнивается от нижнего левого угла клетки. |
+| Свойство foot карты | Исходные 51200 байт проходимости в hex с наложением правок; не редактировать вручную |
+| mapNumber | Номер открытой карты для объектов Game.N, даже если Save As задаёт другой номер |
+| tutorial | Признак источника Tlights.N/TGame.N; не редактировать |
+| rawDecorations | Через пробел slot:record, 16-байтные hex-записи тайлов ≥512. Нерисуемые, сохраняются в своих слотах. На игровых картах пусто, в обоих обучениях одна запись слота 994. Удаление данных свойства удаляет записи. |
+| mapName | Имя из EXE, только показ. Отсутствует без EXE и в обучении; при сохранении не читается. |
+| Тайлсет graph | Коллекция изображений по слотам GRAPH.RES, привязка объектов к верхнему левому углу |
+| ground / overlay | Земля и верхний тайловый слой |
+| decorations | Тайловые объекты graph в порядке рисования/слотов, со slot и unknown. Четыре изображения тайловых слоёв размером не 114×64 идут первыми через cellLayer/cellX/cellY, сохраняя верхнюю привязку игры вместо нижней Tiled. |
+| Тайлсет/слой objects | Все 463 простых объекта. У тайла objectId, offsetX/Y; у поставленного объекта slot, flags, frame, frameTime, flames, unknown. Сортировка по низу. Объекты 341,342,343,355,451,452 анимируются; добавленные тайлы кадров сохраняют objectId. |
+| shadows | Производные чёрные маски объектов, opacity 0.4; заблокированы, при записи игнорируются |
+| Тайлсет/слой flames | Все 74 кадра FLAMES.RES (frame), семь видов с анимацией на первом тайле (kind). Над объектами, вычисляемые/заблокированные, связаны со слотом объекта; обновляются при открытии. Без FLAMES.RES или EXE отсутствуют. |
+| game.K | Стартовое состояние героя K: 0 Волк, 1 Драгомир, 2 Михаил. По умолчанию виден game.0; остальные скрыты. checksum хранит открытый Game.K, редактировать нельзя. |
+| foot / foot-arrows | Скрытые верхние слои: красные непроходимые / синие останавливающие стрелы клетки (0x40 — **гипотеза**). 15 масок кодируют четыре мелкие клетки ромба: верх 1, лево 2, право 4, низ 8. Пусто — ни одной. |
+| characters.K / character-shadows.K | Составные изображения/анимации персонажей. Каждый тайл/кадр содержит character и offsetX/Y общей рамки кадров. |
 
-## State-group layers
+<a id="state-group-layers"></a>
 
-Inside game.K, bottom to top. Positions are fine-grid points; rectangles follow
-cell edges and include both boundaries.
+## Слои группы состояния
 
-| Layer | Representation | Properties |
+Внутри game.K снизу вверх. Точки заданы в мелкой сетке; прямоугольники
+следуют краям клеток и включают обе границы.
+
+| Слой | Представление | Свойства |
 |---|---|---|
-| shadows | Derived character shadows, locked/ignored on save | — |
-| groups | Spawn/leash rectangles | group, area, kind, size, maxSize |
-| exits | Transition zones | slot, targetMap, arrivalX/Y, direction, unknown |
-| loot | Cache points | slot, gold (negative hidden), items (22 indices / 44-byte hex), record (whole record hex), itemNames (EXE names separated by semicolon; read-only/absent without EXE) |
-| arrivals | Entry points from other maps | slot (exit index), fromMap, direction |
-| villages | Elder/healer/trader/smith/commander workplaces | village, job, direction |
-| start | Hero start on 1/4/7, tutorial on Tutorial.4 | direction |
-| mobs | Roaming group display, first member at spawn center; actual game scatters them; locked/ignored on save | — |
-| characters | NPCs/villagers at file cells, EXE names or c<index> | character, group, classId, level, direction, nameId, nickId, spriteSet, gold, freePoints, experience; fencing/trading/accuracy/carpentry/medicine/identification/smithing/armor/poison; agility/agilityBase/charisma/charismaBase/health/strength/strengthBase/stamina/staminaBase |
+| shadows | Вычисленные тени персонажей, заблокированы/не записываются | — |
+| groups | Прямоугольники появления и удержания | group, area, kind, size, maxSize |
+| exits | Зоны перехода | slot, targetMap, arrivalX/Y, direction, unknown |
+| loot | Тайники | slot, gold (отрицательное — скрыт), items (22 индекса / 44 байта hex), record (вся запись hex), itemNames (имена EXE через точку с запятой; только чтение, нет без EXE) |
+| arrivals | Точки входа с других карт | slot (индекс выхода), fromMap, direction |
+| villages | Рабочие места старосты/лекаря/торговца/кузнеца/командира | village, job, direction |
+| start | Старт героя на 1/4/7, обучения — Tutorial.4 | direction |
+| mobs | Показ бродячей группы, первый участник в центре появления; игра рассеивает группу; заблокирован/не записывается | — |
+| characters | NPC/жители в клетках файла, имя из EXE или c<index> | character, group, classId, level, direction, nameId, nickId, spriteSet, gold, freePoints, experience; fencing/trading/accuracy/carpentry/medicine/identification/smithing/armor/poison; agility/agilityBase/charisma/charismaBase/health/strength/strengthBase/stamina/staminaBase |
 
-LIGHTS.N is the hidden lights tile layer immediately above ground/overlay and
-below decorations/objects. Its tileset displays 19 LIGHTS.RES masks in warm
-yellow, brightness mapped to alpha. Tile index is mask index, file value one
-higher. This is a placement hint for tile light, not the full ambient fade.
-Absent LIGHTS.N (maps 6/8/46) or LIGHTS.RES means no layer.
+LIGHTS.N представлен скрытым тайловым слоем lights сразу над ground/overlay,
+под декорациями/объектами. Тайлсет показывает 19 масок LIGHTS.RES тёплым жёлтым,
+яркость переведена в alpha. Индекс тайла — индекс маски, значение файла на один
+больше. Это подсказка размещения света, не полное фоновое освещение.
+Без LIGHTS.N (карты 6/8/46) или LIGHTS.RES слоя нет.
 
-## Tutorial source selection
+<a id="tutorial-source-selection"></a>
 
-**Confirmed by our executable-string inspection:** TUTORIAL.EXE shares GRAPH.RES,
-Objects.res, LIGHTS.RES and FLAMES.RES with the main game. Equipment/draw-order/
-flame tables parsed from KONUNG.EXE and TUTORIAL.EXE compare equal. The extension
-reads them from KONUNG.EXE. k1.fileSet (Python map_file.file_set) selects by the
-opened map's case-insensitive name:
+## Выбор источника обучения
 
-| Map | Light | State |
+**Подтверждено нашим чтением строк EXE:** TUTORIAL.EXE разделяет с игрой
+GRAPH.RES, Objects.res, LIGHTS.RES и FLAMES.RES. Таблицы снаряжения,
+порядка рисования и огня из KONUNG.EXE/TUTORIAL.EXE совпадают.
+Расширение читает KONUNG.EXE. k1.fileSet (Python map_file.file_set) выбирает
+по имени открытой карты без учёта регистра:
+
+| Карта | Свет | Состояние |
 |---|---|---|
-| Tutorial.N | Tlights.N | TGame.K; ENG has TGame.1 only |
-| Other / Konung.N | LIGHTS.N | Game.0–2, never TGame.K |
+| Tutorial.N | Tlights.N | TGame.K; в ENG есть только TGame.1 |
+| Прочие / Konung.N | LIGHTS.N | Game.0–2, никогда TGame.K |
 
-Save uses the same source, retaining existing filename case; new tutorial light
-is named Tlights.N. Cross-source Save As is refused. Tutorial hero/start
-interpretation remains the [Game.N hypothesis](../research/k1/formats/game-state.md#file-selection).
+Сохранение использует тот же источник и регистр существующего имени;
+новое имя света обучения — Tlights.N. Save As между источниками запрещён.
+Трактовка героя/старта обучения остаётся
+[гипотезой Game.N](../research/k1/formats/game-state.md#file-selection).
 
-## Animation
+<a id="animation"></a>
 
-Tiled's shared animation clock runs six animated map objects at
-frame_time × 60 ms (180–540 ms), seven flame kinds at 5–14 frames of 60 ms,
-and character state/direction sequences at 60 ms. The tick/frame sources are
-Slavik game.h:30, game_play.cpp:1003-1017 and 3729; direct original-game timing
-was not checked in this extension study and remains **hypothesis**.
+## Анимация
 
-Each sequence occupies the union of its frame rectangles because Tiled draws
-frames from one point. Tile offsetX/Y holds that envelope's offset; serialization
-is unaffected. Matching objects animate in sync; stored initial frame indices
-are not shown. Rotating a character refreshes its image on reopen.
+Общие часы Tiled проигрывают шесть объектов карты с frame_time × 60 мс
+(180–540 мс), семь видов огня по 5–14 кадров по 60 мс и последовательности
+состояния/направления персонажа по 60 мс. Источники тика/кадра — Slavik
+ game.h:30, game_play.cpp:1003-1017 и 3729. Непосредственный тайминг оригинала
+в исследовании расширения не проверялся и остаётся **гипотезой**.
 
-## Recorded verification
+Последовательность занимает объединение прямоугольников кадров: Tiled рисует
+их из одной точки. offsetX/Y тайла задаёт смещение общей рамки;
+сериализация не меняется. Одинаковые объекты анимируются синхронно;
+записанный начальный индекс кадра не показывается. Поворот персонажа обновляет
+изображение после повторного открытия.
 
-These are historical local checks, not new runs made by the documentation move.
+<a id="recorded-verification"></a>
 
-- All 43 maps of both editions open/save byte-identically, including all Game.N;
-  this remained true after animation/flames, walkability, light, character
-  fields and roster editing were added. Raw decorations are empty on game maps.
-- Map 1 tile/object/decor edits are read by Python as exactly the intended edits.
-  The animated map opened in about 2 s; warrior, ant and object 451 frame PNGs
-  were visually checked for stable envelopes; map 17 flames align with houses.
-- Map 1 RUS game.0: moved/turned NPC, expanded exit, removed/added loot and moved
-  arrival changed only the expected state. Konung.1, items, Game.1/2 stayed.
-  Stale external state and forbidden worker deletion fail with a reason;
-  repeated own saves without roster edits succeed.
-- Walkability: map 1's foot tile count matches Python. Filling one cell,
-  erasing another and setting an arrow mark changes exactly nine foot bytes,
-  leaving other map/state bytes alone. Renders differ only at one-pixel
-  rhombus borders and edge cells versus `konung k1 map --foot`.
-- Lighting: all 40 LIGHTS.N preserve bytes and filename case; absent light files
-  for 6/8/46 stay absent. Moving one mask changes two tile bytes and eight fine
-  bytes, not Konung.N. Tiled versus Python `--lights` differs by at most one
-  intensity unit where the underlying background matches.
-- Tiled 1.12 `tiled.exe --evaluate`, map 17: moving the mask from column 34,
-  row 25 to its right neighbor produces exactly Python serialize_lights bytes
-  (two/eight), leaves Konung.17/Game.N unchanged, reopens with 103 lit tiles.
-  Asset.save()/map.save() are editor-only and did nothing under --evaluate in
-  that check; the recorded CLI format API was mapFormatForFile → read → write.
-- Tutorial.4/5 each expose game.1, Tlights.N and one raw slot 994. Their map,
-  light and TGame.1 round-trip byte-identically with filename case retained;
-  Python tests/k1/test_maps.py and test_game_state.py cover the same files.
-- Name checks on all 43 maps/editions matched Python character_name/item_name:
-  1271 character names, 1132 loot item-name lists and map names.
-- Character-field edit on map 1 changed only the selected NPC's level, nickname,
-  gold, fencing and base stamina in Game.0. Invalid sprite/name indices and
-  fractional gold were rejected without writes; Konung.1/Game.1/2 stayed.
-- Map 1 game.0 roster copies/removals (villager and NPC, including separate NPC
-  copy) matched Python game_edit byte for byte and passed _check_layout.
-  Worker removal and another save after roster-index changes were refused.
-- Edited files have not been launched in the original game.
+## Зафиксированные проверки
 
-## Reference image comparison
+Это исторические локальные результаты, не новые прогоны при переносе документации.
 
-Map 1's Tiled render differs from Python by at most two intensity units from
-shadow blending rounding. Characters/equipment/monsters match `--game 0`,
-except Tiled's fixed layer stack cannot place map objects over creatures.
-[Agent workflow](agents.md#tiled-inspection) explains full-size captures.
+- Все 43 карты обоих изданий открываются/сохраняются побайтно, включая Game.N.
+  Это сохранялось после анимации, огня, проходимости, света, полей персонажа
+  и правок состава. На игровых картах сырых декораций нет.
+- Изменения тайлов/объектов/декораций карты 1 читаются Python точно как задумано.
+  Анимированная карта открывалась за ~2 с; PNG кадров воина, муравья, объекта 451
+  проверены на стабильную рамку; огонь карты 17 совмещён с домами.
+- Карта 1 RUS game.0: сдвиг/поворот NPC, расширение выхода, замена тайника
+  и перемещение прибытия меняли только нужное состояние; Konung.1, предметы,
+  Game.1/2 не менялись. Внешняя правка состояния и удаление работника
+  отклоняются с причиной; повторные свои сохранения без правок состава работают.
+- Проходимость карты 1 совпадает с Python по количеству foot-тайлов.
+  Заполнение клетки, стирание другой и стрелочная отметка меняют ровно девять
+  foot-байтов, не прочие данные. Отличия от `konung k1 map --foot` — только
+  однопиксельные края ромбов и краевые клетки.
+- Все 40 LIGHTS.N сохраняют байты и регистр имени; для 6/8/46 не создаются.
+  Сдвиг маски меняет два тайловых и восемь мелких байтов, не Konung.N.
+  Tiled и Python `--lights` различаются максимум на единицу интенсивности
+  там, где совпадает фон.
+- Tiled 1.12 `tiled.exe --evaluate`, карта 17: перенос маски из столбца 34,
+  строки 25 вправо даёт ровно serialize_lights Python (два/восемь байтов),
+  не меняет Konung.17/Game.N, повторно открывает 103 освещённых тайла.
+  Asset.save()/map.save() в том прогоне под --evaluate ничего не делали:
+  они редакторные. Записанный путь CLI: mapFormatForFile → read → write.
+- Tutorial.4/5 показывают game.1, Tlights.N и сырой слот 994. Карты, свет,
+  TGame.1 проходят побайтно с сохранением регистра; те же файлы покрыты
+  tests/k1/test_maps.py и test_game_state.py Python.
+- Имена на всех 43 картах/изданиях совпали с character_name/item_name Python:
+  1271 имя персонажа, 1132 списка имён предметов тайников, имена карт.
+- Правка персонажа карты 1 меняла лишь его level, nickId, gold, fencing,
+  staminaBase в Game.0. Неверные индексы модели/имени и дробное золото
+  отклонялись без записи; Konung.1/Game.1/2 не менялись.
+- Копирование/удаление жителя и NPC в game.0 карты 1, включая отдельную
+  группу копии NPC, совпало с game_edit Python и прошло _check_layout.
+  Удаление работника и повторная запись после сдвига индексов отклонялись.
+- Изменённые файлы в оригинальной игре не запускались.
+
+<a id="reference-image-comparison"></a>
+
+## Сравнение эталонного изображения
+
+Рендер карты 1 Tiled отличается от Python не более чем на две единицы
+интенсивности из-за округления теней. Персонажи, снаряжение и монстры совпадают
+с `--game 0`, кроме невозможности перекрыть существ объектами при фиксированных
+слоях Tiled. Полноразмерные снимки — в [работе агентов](agents.md#tiled-inspection).

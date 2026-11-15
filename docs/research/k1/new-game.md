@@ -1,84 +1,90 @@
-# New-game rules
+<a id="new-game-rules"></a>
 
-## Attribute allocation
+# Правила новой игры
 
-**Confirmed by our experiment on both executables:** the original upgrade
-routine is at VA `0x410B08`. Its 13 price bands begin at file offset `0x411B0`
-in RUS `konung.res`, `0x423E8` in ENG `KONUNG.EXE`. Attribute progression begins
-at `0x412AC` / `0x424E4`, in class-major order: 104 bytes per class, 26 per
-attribute. The four attributes are agility, charisma, strength and endurance.
+<a id="attribute-allocation"></a>
 
-The menu uses level 10. The maximum lookup is `table + 2 * level - 1`, while
-the next-level minimum uses `table + 2 * level`. Thus the creation limits are
-95 for the class's main attribute and 37 for the other three, including the
-merchant's secondary attributes. Primary attributes: strength for warrior,
-agility for hunter, endurance for merchant, charisma for chief.
+## Распределение характеристик
 
-**Confirmed by emulation:** `tools/verify_new_game_rules.py` executes that
-original function on synthetic character records, without launching the game.
-It checks all four classes, four attributes, values 0–100 and five available
-point balances: **8080 calls per edition, 16160 total**, all agree with our
-price and limit rules. Reproduce from the repository root:
+**Подтверждено нашим экспериментом на обоих EXE:** функция повышения
+находится по VA `0x410B08`. Её 13 ценовых диапазонов начинаются со смещения
+`0x411B0` в RUS `konung.res`, `0x423E8` в ENG `KONUNG.EXE`.
+Таблица роста — `0x412AC` / `0x424E4`, сначала класс: 104 байта на класс,
+26 на характеристику. Характеристики: ловкость, обаяние, сила, выносливость.
+
+Меню использует уровень 10. Максимум читается как `table + 2 * level - 1`,
+минимум следующего уровня — `table + 2 * level`. Предел создания — 95 для
+основной характеристики класса и 37 для остальных трёх, в том числе у купца.
+Основная: сила воина, ловкость охотника, выносливость купца, обаяние вождя.
+
+**Подтверждено эмуляцией:** `tools/verify_new_game_rules.py` исполняет функцию
+оригинала на синтетических записях без запуска игры. Четыре класса, четыре
+характеристики, значения 0–100 и пять балансов очков: **8080 вызовов на издание,
+16160 всего**, все совпадают с нашими ценами и пределами. Воспроизведение
+из корня репозитория:
 
 ```sh
 uv run tools/verify_new_game_rules.py
 ```
 
-**Reference behavior:** the menu minus/plus branches in Slavik
+**По эталонному источнику:** ветки минус/плюс Slavik
 [`game_newgame.cpp:472–599`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_newgame.cpp#L472)
-refund the upgrade price at the decreased value, allow reduction to zero,
-and spend the price at the current value when incrementing. Selecting an
-occupation resets its attributes and free points; hero and specialization
-changes preserve allocation. Unspent points carry into the game.
+возвращают цену повышения на уменьшенном значении, позволяют уменьшать до нуля
+и тратят цену текущего значения при увеличении. Выбор занятия сбрасывает
+характеристики и свободные очки; герой и специализации сохраняют распределение.
+Неизрасходованные очки переходят в игру.
 
-Our implementation computes remaining points from the difference between the
-initial and current cumulative costs. This preserves the original outcomes
-without reproducing its temporary addition of 1000 points for a refund check.
-Invalid values and an overspent budget are rejected again when starting the
-session. The UI disables unavailable changes, displays each available change's
-cost/refund, and recomputes carrying capacity and party capacity immediately.
+Наша реализация вычисляет остаток по разнице накопленных стоимостей начальных
+и текущих значений: результат тот же без временного добавления 1000 очков
+для проверки возврата. При запуске сессии повторно отклоняются неверные
+значения и перерасход. Интерфейс блокирует недоступные изменения, показывает
+цену/возврат и сразу пересчитывает грузоподъёмность и размер отряда.
+Подробности интерфейса — в [разработке](../../development/rust/player-ui.md#allocation-ux).
 
-### Disagreement with Slavik
+<a id="disagreement-with-slavik"></a>
 
-**Confirmed external discrepancy:**
+### Расхождение со Slavik
+
+**Подтверждённое внешнее расхождение:**
 [`game_character.cpp:12–141`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game_character.cpp#L12)
-uses `[Level][1]` instead of the original `[Level - 1][1]` maximum and has a
-medium progression row for the merchant's secondary attributes that is absent
-from both original executables. Compare the table test and emulator above to
-that function. The original data and executed routine are authoritative for
-our implementation; the reference repository remains unmodified.
+использует максимум `[Level][1]` вместо исходного `[Level - 1][1]`, а также
+среднюю строку роста для вторичных характеристик купца, которой нет в обоих
+оригинальных EXE. Сравните функцию с тестом таблицы и эмулятором выше.
+Для реализации авторитетны данные и исполненная функция оригинала;
+эталонный репозиторий не изменялся.
 
-## Equipment and preview
+<a id="equipment-and-preview"></a>
 
-**Confirmed over all six Game.N files:** the player record's equipment is
-`[0, 0, 1, 0, 0, 0]`, with the weapon reference in slot 2. The item's identity,
-properties, inventory, accessories and wielding state remain those of the
-selected file. No demonstration items are inserted or substituted.
+## Снаряжение и предпросмотр
 
-**Reference behavior:** Slavik
+**Подтверждено по всем шести Game.N:** снаряжение игрока —
+`[0, 0, 1, 0, 0, 0]`, ссылка на оружие в слоте 2. Предмет, свойства, инвентарь,
+украшения и состояние оружия остаются из выбранного файла. Демонстрационные
+предметы не добавляются и не подменяются.
+
+**По эталонному источнику:** Slavik
 [`game.cpp:2433–2456`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L2433)
-loads Game.N, then copies the chosen attributes, skills, free points, name,
-model, palette and class, setting the playable level to 1. It does not copy the
-menu's demonstration equipment or item table. Previously our preview applied
-demonstration slot numbers to the unrelated Game.N item table, showing equipment
-that belonged to neither the original menu nor the playable character.
+загружает Game.N, затем переносит выбранные характеристики, навыки, свободные
+очки, имя, модель, палитру и класс, задавая игровой уровень 1.
+Демонстрационное снаряжение и таблица предметов меню не переносятся.
+Раньше наш предпросмотр применял демонстрационные номера слотов к посторонней
+таблице Game.N и показывал снаряжение, которого не было ни у меню оригинала,
+ни у игрового персонажа.
 
-**Intentional presentation difference:** our preview shows the actual starting
-equipment, using the same composition path as the configured session. It shows
-playable level 1 rather than the internal allocation level 10. This makes the
-preview truthful without changing the starting loadout. Both editions' previews
-are rendered locally by:
+**Намеренное отличие представления:** предпросмотр показывает настоящее
+стартовое снаряжение тем же путём сборки, что и подготовленная сессия,
+и игровой уровень 1 вместо внутреннего уровня распределения 10.
+Это делает показ правдивым, не меняя стартовый набор. Локальный рендер обоих изданий:
 
 ```sh
 cargo run --release --manifest-path crates/Cargo.toml -p kn-game --example inspect_new_game
 ```
 
-Outputs are local RGBA files and sizes under `out/new-game/`. No game-derived
-image is distributed. Our local inspection covered all six previews; the test
-compares each preview's pixels with the configured session's pixels.
+RGBA и размеры сохраняются в `out/new-game/`, производные изображения
+не распространяются. Локально просмотрены все шесть вариантов; тест сравнивает
+пиксели предпросмотра с пикселями подготовленной сессии.
 
-**Confirmed representation:** a character's palette is a byte offset into
-256-color palettes. Reference indices 74, 33, 39 need multiplication by 512,
-not by two. Sources: `k1-data/src/characters.rs`,
-[formats/graph-res.md](formats/graph-res.md), and
-Slavik [`resources.cpp:13`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/resources.cpp#L13).
+**Подтверждённое представление:** палитра персонажа — байтовое смещение
+в наборе 256-цветных палитр. Индексы 74, 33, 39 умножаются на 512, не на два.
+Источники: `k1-data/src/characters.rs`, [GRAPH.RES](formats/graph-res.md)
+и Slavik [`resources.cpp:13`](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/resources.cpp#L13).

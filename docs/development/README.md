@@ -1,20 +1,23 @@
-# Development
+<a id="development"></a>
 
-[Documentation](../README.md) · [Architecture](../../ARCHITECTURE.md) ·
-[Contribution rules](../../CONTRIBUTING.md)
+# Разработка
 
-| Task | Document |
+[Документация](../README.md) · [Архитектура](../../ARCHITECTURE.md) ·
+[Правила сотрудничества](../../CONTRIBUTING.md)
+
+| Задача | Документ |
 |---|---|
-| Decide UX, controls or presentation | [Product principles](design.md) |
-| Build, launch or understand CI costs | [Builds and CI](building.md) |
-| Run checks and verify reference parity | [Testing](testing.md) |
-| Package and interactively test on macOS | [macOS testing](macos-testing.md) |
-| Work through agents and shared skills | [Agent workflow](agents.md) |
-| Understand publishing and version calculation | [Releases](releases.md) |
-| Change the Tiled extension | [Extension internals](tiled.md) |
-| Change the Rust implementation | [Rust topics](rust/README.md) |
+| Выбрать UX, управление или способ отображения | [Принципы продукта](design.md) |
+| Собрать, запустить или разобраться в затратах CI | [Сборка и CI](building.md) |
+| Проверить изменения и соответствие эталону | [Проверки](testing.md) |
+| Подготовить приложение и проверить его на macOS | [Проверки macOS](macos-testing.md) |
+| Работать через агентов и общие навыки | [Работа агентов](agents.md) |
+| Разобраться в публикации и расчёте версии | [Релизы](releases.md) |
+| Изменить расширение Tiled | [Устройство расширения](tiled.md) |
+| Изменить реализацию на Rust | [Раздел Rust](rust/README.md) |
 
-The architecture is the canonical component/dependency model. These pages own
-implementation decisions and reproducible measurements. Original rules and
-format evidence belong in [research](../research/README.md); end-user steps in
-[guides](../README.md#use-the-tools). New notes extend the relevant topic.
+Архитектура — единственный основной документ о компонентах и зависимостях.
+Этот раздел хранит решения реализации и воспроизводимые замеры.
+Факты об оригинале и доказательства устройства форматов относятся к
+[исследованиям](../research/README.md), команды пользователя — к
+[руководствам](../README.md#use-the-tools). Новые знания дополняют тематическую страницу.

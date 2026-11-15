@@ -1,241 +1,219 @@
-# Creature decisions and orders
+<a id="creature-decisions-and-orders"></a>
 
-[Research and confidence](README.md). Animation-state details are in
-[animation](animation.md); hit, death and target-selection gaps in [combat](combat.md).
+# Решения и приказы существ
 
-## Order and presentation flags
+[Исследования и уверенность](README.md). Состояния — в [анимации](animation.md);
+удар, смерть и пробелы выбора цели — в [исследовании боя](combat.md).
 
-Character byte 0x02 combines player orders and the need for a behavior decision.
-The table is a **Slavik source reading**, with file census below.
+<a id="order-and-presentation-flags"></a>
 
-| Bit | Meaning | Source |
+## Флаги приказов и отображения
+
+Байт персонажа 0x02 совмещает приказы игрока и запрос решения поведения.
+Таблица — **чтение Slavik**, ниже отдельно дан подсчёт файлов.
+
+| Бит | Смысл | Источник |
 |---|---|---|
-| 0x01 | Attack | game_play.cpp:550,2489,3289; cleared 3335 |
-| 0x02 | Follow leader | Set by game_input.cpp:395-397; cleared game_play.cpp:969,2994 |
-| 0x04 | Shooting with bow/arrows | game_play.cpp:2421-2431,3918-3954; cleared 2953,3912. Usage confirmed as shooting, although the clone gives it no name. |
-| 0x08 | Move | game_input.cpp:395 and game_play.cpp:1943 set 0x48; cleared 826,3550 |
-| 0x20 | Player-squad follower | Nonleader, same group, no orders; game_play.cpp:302-303 |
-| 0x40 | Needs behavior decision | Set at game_play.cpp:300,831,2458,3051,3149; cleared on decision at 1962,3949 |
+| 0x01 | Атака | game_play.cpp:550,2489,3289; сброс 3335 |
+| 0x02 | Следовать за лидером | game_input.cpp:395-397; сброс game_play.cpp:969,2994 |
+| 0x04 | Стрельба луком/стрелами | game_play.cpp:2421-2431,3918-3954; сброс 2953,3912. Использование для стрельбы подтверждено, хотя клон не даёт имени. |
+| 0x08 | Перемещение | game_input.cpp:395 и game_play.cpp:1943 ставят 0x48; сброс 826,3550 |
+| 0x20 | Ведомый отряда игрока | Не лидер, та же группа, нет приказов; game_play.cpp:302-303 |
+| 0x40 | Нужно решение поведения | Установка game_play.cpp:300,831,2458,3051,3149; сброс при решении 1962,3949 |
 
-The low nibble contains orders: `(field & 0xf) == 0` means none
-(game_play.cpp:302,774; game_pathfind.cpp:37); `&= 0xf0` clears them
-(game_play.cpp:220,269).
+Приказы в младшей тетраде: `(field & 0xf) == 0` — нет приказов
+(game_play.cpp:302,774; game_pathfind.cpp:37); `&= 0xf0` очищает
+их (game_play.cpp:220,269).
 
-Byte 0x03:
+Байт 0x03:
 
-| Bit | Meaning | Source |
+| Бит | Смысл | Источник |
 |---|---|---|
-| 0x04 | Weapons in hands; selects state pairs and equipment tables | game_character.cpp:167-169; without it use the last eight EXE slot-order rows, EqLookUp1 |
-| 0x40 | Pure move, no attack/pickup on arrival | game_play.cpp:812-824 |
-| 0x80 | Dynamic sprite not loaded | Set game.cpp:687,744; cleared with frame recompute at 1036-1042; while set image is treated as one pixel, game_character.cpp:157-160 |
+| 0x04 | Оружие в руках, выбор пары состояний и таблиц снаряжения | game_character.cpp:167-169; без бита — последние восемь строк порядка EXE, EqLookUp1 |
+| 0x40 | Чистое движение без атаки/подбора при прибытии | game_play.cpp:812-824 |
+| 0x80 | Динамический спрайт ещё не загружен | Установка game.cpp:687,744; сброс с пересчётом кадра 1036-1042; пока установлен, изображение считается одним пикселем, game_character.cpp:157-160 |
 
-**Our census:** byte 0x02 is 0x40 in 3176 records or 0x60 in three; byte 0x03
-is 0x04 in 2547 or zero in 632. Order bits 0x01/02/04/08 and presentation bits
-0x40/80 are absent in starting files; their runtime use is not a file default.
+**Наш подсчёт:** 0x02 равен 0x40 в 3176 записях, 0x60 в трёх;
+0x03 равен 0x04 в 2547, нулю в 632. Приказы 0x01/02/04/08 и флаги
+отображения 0x40/80 отсутствуют на старте; рабочее применение не является
+значением по умолчанию файла.
 
-## Squad AI state — group byte 0x1D
+<a id="squad-ai-state--group-byte-0x1d"></a>
 
-**By Slavik:** loaded by game_state.cpp:230; roaming kinds 0x41–0x50 recompute
-every 16 ticks (game_play.cpp:1623-1638, `_counter & 0xf == 0`). The scan at
-1024-1062 returns 1 if a player-group member is inside the spawn rectangle,
-0x20 if an own member is outside, otherwise zero. Village elders update on
-the pass offset by seven (1696,1533-1561). Other groups retain the byte; the UI
-reads only `unk4 & 1` for work/hints (game_character.cpp:755,757).
+## Состояние ИИ отряда — байт группы 0x1D
 
-**Our census:** zero in three groups, 0x80 in 569. No observed reference-code
-writer sets 0x80; it occurs in villager 0x80–0x82 and NPC 0x53 groups that are
-not periodically recomputed. Its meaning is **unknown**; its low bit behaves
-as zero. File state is a starting snapshot, not a persistent behavior setting.
+**По Slavik:** загружается game_state.cpp:230. Бродячие виды 0x41–0x50
+пересчитываются каждые 16 тиков (game_play.cpp:1623-1638, `_counter & 0xf == 0`).
+Сканирование 1024-1062 возвращает 1 при участнике игрока внутри прямоугольника
+появления, 0x20 при своём участнике снаружи, иначе ноль. Старосты обновляются
+со сдвигом семь (1696,1533-1561). Остальные сохраняют байт;
+UI читает только `unk4 & 1` для работы/подсказок (game_character.cpp:755,757).
 
-### The villager decision (confirmed 2026-11-03)
+**Наш подсчёт:** ноль у трёх групп, 0x80 у 569. В просмотренном коде
+нет записи 0x80; оно встречается у жителей 0x80–0x82 и NPC 0x53,
+которые периодически не пересчитываются. Смысл **неизвестен**, младший бит
+работает как ноль. Файл — снимок старта, не постоянная настройка поведения.
 
-Confirmed against the reference and implemented with tests
-(`k1-game/src/rules.rs`, `villager_decision`; synthetic cases and both
-editions of `Game.0`–`Game.2`, `k1-game/tests/original_rules.rs`). The game
-calls the peaceful decision for members of a villager squad — group kind
-0x80–0x82, dispatch at `Marisa-Chan/Slavik/game_play.cpp:737-757` — through
-`FUN_00416934` (`game_play.cpp:2288-2385`), and only when the character needs
-a decision: flag 0x40 of byte 0x02 is set on arrival and cleared once a
-decision was made (`game_play.cpp:2834-2846`, `3477-3489`). A dead character
-(class bit 0x80, state 3 or 9) and a walking one take no decision. The order
-of the branches matters:
+<a id="the-villager-decision-confirmed-2026-11-03"></a>
 
-1. **Woman (class 0x51) and child (0x52)**: one roll of `rand() % 100`; below
-   75 the creature stands, otherwise it walks (branch 5) — a quarter walks
-   (`game_play.cpp:2294-2309`).
-2. **Static work from bits 3–5 of the class**: `job = (class >> 3) & 7` names
-   a village slot; a village has exactly five slots and index 0 is the elder
-   (`game.h:702`, and our check: every village in the files carries five job
-   records, `docs/research/k1/formats/game-state.md`). An empty slot
-   (`Jobs[job].CharID == 0`) is passed over; the original also clears the work
-   bits in memory (`game_play.cpp:2340`), we do not touch the record — the
-   branch depends only on data that never changes mid-run, so the next tick
-   takes the same path (our difference). A filled slot sends every *other*
-   creature of the village to it (`game_play.cpp:2323-2338`): unless the
-   creature stands on one of the eight neighbours of the place's cell (the
-   direction lookup `FUN_0041165c`, `game_play.cpp:1973-1983`; standing on the
-   place itself is not adjacency), it is sent to the first free neighbour of
-   the place in direction order 0..7 (`FUN_00410ffc`,
-   `game_play.cpp:1985-1992`); once adjacent, it faces the place's direction
-   byte, and once facing — it stands. The branch never falls through.
-   - **Our measurement**: no creature of the shipped starting data reaches
-     this branch — of the villager classes 1, 2, 3, 5, 0x45, 0x51, 0x52 the
-     first five carry zero work bits and 0x51/0x52 leave through the woman and
-     child branch first. The branch is covered by synthetic tests only.
-   - Bits naming slot 5, 6 or 7 read past the five-slot array in the original
-     (`std::array<Job, 5>`); with us they are no static work either way (our
-     difference).
-   - When no neighbour of the place is free, `FUN_00410ffc` returns `-1`,
-     which the original treats as success and walks the creature to an
-     uninitialized point (`game_play.cpp:2327-2331`); we give no order (our
-     difference).
-   - The original's free-neighbour test checks terrain only; we also require
-     that nobody stands there (our difference).
-   - The original turns by one direction per tick (`FUN_004391bc`,
-     `game_play.cpp:1995-2013`, listed under the deliberate-limit differences); our
-     `Decision::Turn` faces the creature in one step.
-3. **The dynamic workplace**: the village slot whose `CharID` equals the
-   creature's record number — `GetVillageCharacterJob`
-   (`game_village.cpp:522-536`) scans the five slots in order and returns the
-   first match as `i + 1`. Standing on the place's cell: face the place's
-   direction when the facing differs, else stand; anywhere else: move exactly
-   onto the place's cell (`game_play.cpp:2354-2381`).
-   - **Our measurement**: `Job.character` is the 0-based record number
-     (the village of map 19 points at records 181–185, and group 19 starts at
-     character 181), and `0` marks the empty slot — the very marker the rules
-     test — so the player's hero, record 0, never owns an open slot. In the
-     starting data every job holder stands exactly on its place's cell, in
-     state 6, and already faces the place's direction: over 41 maps ×
-     `Game.0`–`Game.2` of both editions the rules turn nobody
-     (`k1-game/tests/original_rules.rs`), so the turn path is covered by the
-     synthetic tests alone.
-4. **No work at all**: one roll of `rand() % 100`; below 50 the creature
-   stands — half walk (`game_play.cpp:2346-2348`).
-5. **The walk**: a free cell strictly inside the squad's spawn area
-   (`left < x < right`, `top < y < bottom`), up to ten attempts; no attempt
-   lands free, or the area has no interior, and there is no order.
-   - The original does not pick inside the area at all: it offsets from the
-     character's own cell by at most `ViewTiles * 2`, and `ViewTiles` is the
-     viewport size in tiles (`game_play.cpp:1889-1949`, `game.cpp:921-922`).
-     Behavior must not depend on the window size, so we pick uniformly inside
-     the spawn area, drawing `x` and then `y` per attempt (our difference).
-6. The original's first decision for a villager with a weapon in hands is
-   putting it away (bit 0x04 of byte 0x03 → state 6, `game_play.cpp:2312-2317`).
-   That is an animation-state change, not a movement; the rules layer owns no
-   animation state, and we do not implement it.
+### Решение жителя (подтверждено 2026-11-03)
 
-**Our measurement** of the village shape, both editions: one village per map,
-15 villages on 15 distinct maps; `village.elder_group` is the squad slot, and
-it is the map's only villager squad — every villager of a map is a member of
-it (map 19 → squad slot 19, kind 0x80, 19 members). The earlier note that
-among workplaces `character` is filled only for the elder is wrong: map 19
-fills all five slots, map 14 only the elder.
+Сверено с источником, реализовано в `k1-game/src/rules.rs::villager_decision`,
+проверено синтетикой и Game.0–Game.2 обоих изданий (`original_rules.rs`).
+Мирное решение вызывается для групп 0x80–0x82
+(`Marisa-Chan/Slavik/game_play.cpp:737-757`) через `FUN_00416934`
+(2288-2385), только при запросе решения: бит 0x40 байта 0x02 ставится
+при прибытии и снимается после решения (2834-2846,3477-3489).
+Мёртвые (класс 0x80, состояние 3/9) и идущие решений не принимают.
+Порядок веток существенен:
 
-### The group state of a roaming squad (confirmed 2026-11-03)
+1. **Женщина 0x51 и ребёнок 0x52:** `rand() % 100`; <75 стоят,
+   иначе гуляют по ветке 5. Вероятность прогулки — четверть (2294-2309).
+2. **Работа из битов 3–5 класса:** `job = (class >> 3) & 7` выбирает
+   слот деревни. Слотов ровно пять, 0 — староста (game.h:702 и наша проверка
+   всех записей деревень; `docs/research/k1/formats/game-state.md`).
+   Пустой `Jobs[job].CharID == 0` пропускается. Оригинал также очищает
+   биты работы (2340); мы запись не меняем, поскольку эти данные неизменны
+   в прогоне и следующий тик пойдёт тем же путём — наше отличие.
+   Занятый слот посылает *другого* жителя к месту (2323-2338).
+   Если он не в одном из восьми соседей (`FUN_0041165c`,1973-1983;
+   сама клетка места не считается соседней), выбирается первый свободный
+   сосед в порядке 0..7 (`FUN_00410ffc`,1985-1992). У соседа поворачивается
+   по direction места; уже повёрнутый стоит. Дальше ветка не проходит.
+   - **Наш замер:** стартовые записи до этой ветки не доходят:
+     у классов 1,2,3,5,0x45 биты работы нулевые, 0x51/0x52 выходят раньше.
+     Ветка покрыта только синтетикой.
+   - Индексы 5/6/7 выходят за исходный `std::array<Job, 5>`; у нас
+     означают отсутствие статической работы — намеренное отличие.
+   - Нет свободного соседа: `FUN_00410ffc` возвращает −1, оригинал
+     принимает это за успех и идёт к неинициализированной точке (2327-2331).
+     Мы не выдаём приказ.
+   - Исходная проверка соседа учитывает только землю; наша — ещё занятость.
+   - Исходный поворот по одному направлению за тик (`FUN_004391bc`,1995-2013),
+     наш `Decision::Turn` поворачивает сразу.
+3. **Собственное рабочее место:** `CharID` слота равен номеру персонажа.
+   `GetVillageCharacterJob` (game_village.cpp:522-536) проверяет пять слотов
+   по порядку, возвращает первый как `i + 1`. На клетке места — повернуться
+   по direction или стоять; иначе идти точно на клетку (2354-2381).
+   - **Наш замер:** `Job.character` — индекс с нуля: деревня карты 19
+     ссылается на 181–185, группа 19 начинается с 181. Ноль — пустой слот,
+     герой с индексом 0 не владеет пустыми местами. Все держатели уже стоят
+     на своих клетках в состоянии 6 и нужном направлении: на 41 карте ×
+     Game.0–Game.2 обоих изданий никто не поворачивается (`original_rules.rs`).
+     Поворот здесь проверен синтетикой.
+4. **Без работы:** `rand() % 100`; <50 стоят, половина гуляет (2346-2348).
+5. **Прогулка:** свободная клетка строго внутри области появления,
+   `left < x < right`, `top < y < bottom`, до десяти попыток.
+   Нет свободной или нет внутренности — нет приказа.
+   Оригинал выбирает смещение от текущей клетки до `ViewTiles * 2`,
+   где ViewTiles — размер окна в тайлах (1889-1949, game.cpp:921-922).
+   Наше поведение не зависит от окна: равномерно выбираем внутри области,
+   сначала x, затем y на попытку — намеренное отличие.
+6. Первое решение жителя с оружием — убрать его (бит 0x04 байта 0x03 →
+   состояние 6, 2312-2317). Это смена анимации, не движение;
+   слой правил не владеет анимационным состоянием и этого не реализует.
 
-Confirmed and implemented with tests (`k1-game/src/rules.rs`, `group_states`;
-synthetic cases and both editions). For a roaming squad (group kind 0x41–0x50,
-`FUN_00412c30`, `game_play.cpp:1024-1062`):
+**Наш замер деревень, оба издания:** по одной на карту, 15 деревень
+на 15 разных картах. village.elder_group — слот единственного отряда жителей
+карты, все жители входят в него: карта 19 → слот 19, вид 0x80, 19 участников.
+Старое утверждение, что заполнено только место старосты, неверно:
+карта 19 заполняет все пять, карта 14 — только старосту.
 
-1. any alive member of the player squad inside the squad's spawn area, bounds
-   included (`game_play.cpp:1028-1042`) — state 1: combat mode; the game also
-   writes the player squad's number into the squad record at the same moment
-   (`game_play.cpp:1038`, byte 0x1A);
-2. else any alive member of the squad itself standing outside the area —
-   state 0x20: the strayed members return, «The monster decision» below;
-3. else state 0, calm.
+<a id="the-group-state-of-a-roaming-squad-confirmed-2026-11-03"></a>
 
-«Alive» is the original's own test: class bit 0x80 clear, state neither 3 nor
-9. Every other squad — villagers, the player squad, lone NPCs — takes no
-recomputed state and reads calm. The byte stored in the file (0x1D,
-`ai_state`) is never read: the game zeroes it for roaming squads on map load
-(`game.cpp:645`), and in the shipped files it is the unknown 0x80 for every
-squad (Squad AI state above).
+### Состояние бродячего отряда (подтверждено 2026-11-03)
 
-Deliberate differences from the original:
+Реализация и тесты: `k1-game/src/rules.rs::group_states`, синтетика и оба
+издания. Для видов 0x41–0x50, `FUN_00412c30`, game_play.cpp:1024-1062:
 
-- the state is recomputed every tick, not every 16 (`game_play.cpp:1623-1638`
-  — a cost cap of 1999, listed under the deliberate-limit differences);
-- the original's "outside" test for its own members is tangled by `&&`/`||`
-  precedence into `y < top` alone (`game_play.cpp:1050-1052`); we use the
-  plain negation of the inclusive inside test;
-- the elder squad's byte is set in the village pass from village flags and the
-  player's weapons (`FUN_00416700`, `game_play.cpp:1516-1562`, `4451`), not
-  from positions. Until the village rules are recovered, a villager squad is
-  calm with us — our villagers never turn hostile; this is an open question,
-  not confirmed behavior (see the unknown rules).
+1. Живой участник игрока внутри области появления, включая границы
+   (1028-1042): состояние 1, бой. Одновременно номер группы игрока
+   записывается в 0x1A (1038).
+2. Иначе свой живой участник снаружи: 0x20, отставшие возвращаются.
+3. Иначе 0, покой.
 
-### The monster decision (the return is confirmed; combat is not 2026-11-03)
+Живой — без бита класса 0x80, не состояние 3/9. Жители, игрок и NPC
+не пересчитываются и в нашей модели спокойны. Файловый 0x1D `ai_state`
+не читается: оригинал обнуляет бродячие группы при загрузке (game.cpp:645),
+а до загрузки в них хранится неизвестное 0x80.
 
-Confirmed and implemented for the return — `FUN_00412e00`
-(`game_play.cpp:3156-3181`, `3286`, `3337-3392`), tested at the synthetic and
-real-data level. The dispatch gives it to members of a roaming squad (group
-kind bit 0x40, `game_play.cpp:737-745`); classes 0x51, 0x52 and 0x53 return
-from the decision untouched (`game_play.cpp:3163-3164`). Dead and walking
-characters take no decision, as with villagers. By the squad state:
+Намеренные отличия:
 
-- **Calm (0)**: stand. The original only resets the animation state
-  (`game_play.cpp:3166-3177`).
-- **Player inside (1)**: combat — target choice, attack and shooting are not
-  reverse-engineered, so no order is given rather than one invented
-  (`game_play.cpp:3179-3283`).
-- **Strayed (0x20)**: a creature already inside the spawn area, bounds
-  included, stands. Outside, it returns: take the centre
-  `((left + right) / 2, (top + bottom) / 2)`, with `rh = bottom - top - 1`
-  and `rw = right - left - 1`; one coin `rand() % 2` picks *subtract* (0) or
-  *add* (1) for both axes together; then `rand() % (rh / 4)` to `y`, then
-  `rand() % (rw / 4)` to `x`, each drawn only when its divisor reaches two
-  (`game_play.cpp:3353-3375` — the draw order is the coin, then `y`, then
-  `x`, and we keep it for reproducibility). From that point the area is
-  scanned over at most `rh * rw` cells: the first cell with empty foot
-  terrain becomes the target; otherwise one step east with wraps — past
-  `right - 1` the row restarts at `left + 1`, past `bottom - 1` at `top + 1`
-  (`game_play.cpp:3377-3391`). Nothing free — stand.
-- Our difference: the original tests "inside the area" with `x >= r.top`
-  where `r.left` is meant — the reference itself marks it as an error
-  (`game_play.cpp:3339`); we use `r.left`. The original's scan checks terrain
-  only; our `Ground` also requires that nobody stands in the cell.
+- Пересчёт каждый тик вместо 16 (game_play.cpp:1623-1638), старого предела затрат.
+- Исходное условие «снаружи» из-за приоритета `&&`/`||` сводится к
+  `y < top` (1050-1052); у нас отрицание обычной включительной проверки внутри.
+- Состояние старосты задаётся деревенскими флагами и оружием игрока,
+  не позициями (`FUN_00416700`,1516-1562,4451). Пока эти правила
+  не восстановлены, жители у нас спокойны; это пробел, не факт оригинала.
 
-**Our measurement**, both editions: the cells of roaming members in the file
-are not where the game puts them — the map load re-places the squad ([load placement](placement.md#roaming-squad-placement-on-map-load)) — so recomputing from the file cells flags
-`MemberOutside` for thousands of squad members (2 123 across the runs of
-`original_rules.rs` per edition), and every return order the rules give lands
-strictly inside the squad's spawn area and on a free cell; the test asserts
-that on all 41 maps per edition that carry creatures.
+<a id="the-monster-decision-the-return-is-confirmed-combat-is-not-2026-11-03"></a>
 
-## Creature names
+### Решение монстра: возврат подтверждён, бой нет (2026-11-03)
 
-Monster species uses `(class & 0x7F) − 0x41` in the EXE table; the first 20
-species names are filled. Our ENG census found a nonempty name for each placed
-monster. Humans, women and children use bytes 0xD4/0xD5, name plus optional
-space/nickname; zero nickname means name only. **Our census:** every Game.0–2
-has one unnamed class-0x51 villager (both indices zero), group 31, map 37.
-This is recorded data, not a parsing error. [EXE tables](../formats/executable.md#character-names).
+Возврат `FUN_00412e00` (game_play.cpp:3156-3181,3286,3337-3392)
+реализован и проверен синтетикой/файлами. Диспетчер вызывает его для бродячих
+(бит вида группы 0x40,737-745); классы 0x51/0x52/0x53 сразу возвращаются
+(3163-3164). Мёртвые и идущие решений не принимают. По состоянию отряда:
 
-## Hypotheses and unknown rules
+- **Покой 0:** стоять; оригинал лишь сбрасывает анимацию (3166-3177).
+- **Игрок внутри 1:** выбор цели, атака, стрельба не восстановлены;
+  приказа нет (3179-3283).
+- **Отставшие 0x20:** уже внутри включительной области — стоять.
+  Снаружи: центр `((left + right) / 2, (top + bottom) / 2)`,
+  `rh = bottom - top - 1`, `rw = right - left - 1`.
+  Одна монета `rand() % 2` задаёт минус 0 / плюс 1 сразу обеим осям;
+  затем `rand() % (rh / 4)` к y, `rand() % (rw / 4)` к x,
+  только если делитель ≥2 (3353-3375). Порядок монета,y,x сохранён.
+  От этой точки проверяется до `rh * rw` клеток: первая свободная
+  становится целью; иначе шаг восточнее с переходами за right−1 к left+1,
+  за bottom−1 к top+1 (3377-3391). Свободной нет — стоять.
+- Наше отличие: в исходной проверке внутри стоит `x >= r.top`
+  вместо r.left; источник сам отмечает ошибку (3339). Мы используем r.left.
+  Исходное сканирование проверяет землю, наше Ground также занятость.
 
-- Target group byte 0x1A may couple to AI state: game_play.cpp:1038 writes
-  the player group into unk3 alongside unk4=1. Later reads remain unchecked.
-- The leash rectangle (group 0x0A–0x16) appears to limit pursuit: squad-state
-  scan uses spwnTlRect (1026), but a walking attacker's keep/give-up test
-  drops an enemy outside someRect (3088-3105). **By Slavik**, not confirmed
-  against original behavior; target choice is [combat research](combat.md).
-- Weapon slot byte 0x12 cycles through 0,1,2 on attacks and is randomized at
-  spawn (game_play.cpp:3521-3531); the meaning of 0xFF is unverified.
-- Village hostility depends on elder flags and player weapons
-  (FUN_00416700, game_play.cpp:1516-1562), not yet recovered. Our villagers
-  remain calm; that is an explicit unknown rather than original behavior.
-- Cadence of expensive decisions: SkipBecauseOfHardCompute,
-  game_play.cpp:770,3485. Meaning of group AI state 0x80 and low kind bits
-  beyond the [known village sides](../formats/game-state.md#group--32-bytes).
-- Healer/smith/commander/tribute schedules: record timers exist, rules unknown.
+**Наш замер обоих изданий:** клетки файла не являются размещением игры
+([загрузка](placement.md#roaming-squad-placement-on-map-load)), поэтому пересчёт по ним даёт MemberOutside тысячам
+участников — 2 123 на издание в прогонах original_rules.rs.
+Все выданные цели строго внутри области и свободны; проверены 41 карта
+каждого издания с существами.
 
-## Deliberate differences from old technical limits
+<a id="creature-names"></a>
 
-We do not reproduce 32-step routes, one-direction-per-tick turning
-(game_play.cpp:3511-3515), one expensive decision per character/tick with a
-single-character-per-frame queue (HardComputeUnit,770-781), 16-tick group-state
-updates or walking skip-mask scheduling (all shipped masks zero). The recovered
-rules stay; their old computation budgets do not. See
-[product principles](../../../development/design.md) and
-[simulation decisions](../../../development/rust/simulation.md).
+## Имена существ
+
+Вид монстра индексирует EXE как `(class & 0x7F) − 0x41`; заполнены первые
+20 имён. Наш подсчёт ENG нашёл имя каждому размещённому монстру.
+Люди, женщины и дети используют 0xD4/0xD5: имя и необязательные пробел/прозвище.
+При нулевом прозвище — только имя. **Наш подсчёт:** каждый Game.0–2
+содержит одного безымянного жителя 0x51, оба индекса ноль, группа 31,
+карта 37. Это данные, не ошибка парсинга. См. [таблицы EXE](../formats/executable.md#character-names).
+
+<a id="hypotheses-and-unknown-rules"></a>
+
+## Гипотезы и неизвестные правила
+
+- Целевая группа 0x1A может быть связана с ИИ: game_play.cpp:1038
+  записывает группу игрока в unk3 вместе с unk4=1. Последующие чтения не изучены.
+- Прямоугольник удержания 0x0A–0x16, вероятно, ограничивает преследование:
+  сканирование использует spwnTlRect (1026), проверка идущего атакующего
+  отбрасывает цель вне someRect (3088-3105). **По Slavik**, без проверки
+  оригинала; выбор цели — [исследование боя](combat.md).
+- Слот оружия 0x12 перебирает 0,1,2 при атаках и случаен при появлении
+  (3521-3531); значение 0xFF не проверено.
+- Враждебность деревни зависит от флагов старосты и оружия игрока
+  (FUN_00416700,1516-1562), правила не восстановлены. Наши спокойные жители
+  отражают пробел, не исходное поведение.
+- Частота дорогих решений: SkipBecauseOfHardCompute,770,3485.
+  Смысл состояния 0x80 и младших битов вида за пределами [известных сторон деревень](../formats/game-state.md#group--32-bytes).
+- Расписания лекаря/кузнеца/командира/дани: таймеры в записях есть, правила неизвестны.
+
+<a id="deliberate-differences-from-old-technical-limits"></a>
+
+## Намеренные отличия от старых технических пределов
+
+Не воспроизводятся маршрут до 32 шагов, поворот на направление за тик
+(game_play.cpp:3511-3515), одно дорогое решение персонажа за тик с очередью
+одного персонажа за кадр (HardComputeUnit,770-781), обновление группы раз
+в 16 тиков и маски пропуска ходьбы (все поставляемые маски нулевые).
+Восстановленные правила остаются, старые вычислительные бюджеты — нет.
+См. [принципы продукта](../../../development/design.md) и [решения симуляции](../../../development/rust/simulation.md).

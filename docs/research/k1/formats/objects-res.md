@@ -1,57 +1,51 @@
 # OBJECTS.RES
 
-52 MB, identical in RUS and ENG. Map objects include trees, houses, fences and
-rocks. Code: `konung/k1/objects_res.py`, `tiled/konung/lib/k1.mjs`
-(`readSimpleObject`).
+Объекты карты: деревья, дома, частоколы, камни. 52 МБ, одинаков в RUS и ENG. Код — `konung/k1/objects_res.py`, `tiled/konung/lib/k1.mjs` (`readSimpleObject`).
 
-**Confirmed:** every simple object referenced by all 43 maps of both editions
-exists and renders in place; all 30 dynamic objects parse to their last byte
-and render on maps. Sources: Slavik `resources.cpp` (`LoadObjectsRes`,
-`SimpleObject::LoadInfo`, `DynamicObject::LoadInfo`), checked on our files.
+**Статус:** простые объекты **подтверждены** — все объекты, на которые ссылаются 43 карты обоих изданий, есть в файле и рисуются на своих местах (см. рендер карты). Динамические — **подтверждены**: все 30 разбираются до последнего байта и рисуются на карте. Источник: Slavik `resources.cpp` (`LoadObjectsRes`, `SimpleObject::LoadInfo`, `DynamicObject::LoadInfo`).
 
-## Structure
+<a id="structure"></a>
 
-| Offset | Type | Meaning |
+## Структура
+
+| Смещение | Тип | Смысл |
 |---|---|---|
-| 0 | 8 bytes | Skipped; purpose **unknown** |
-| 8 | 512 × (s32, s32) | Directory: offset from directory end, size; negative offset means empty |
-| 4104 | | Object data |
+| 0 | 8 байт | пропускается; смысл **неизвестен** |
+| 8 | 512 × (s32, s32) | каталог: смещение от конца каталога и размер; смещение < 0 — пусто |
+| 4104 | | данные объектов |
 
-Slots 0–29 are dynamic, 30–511 simple. A map object number is the simple-object
-index, or directory slot − 30. There are 30 + 463 occupied entries.
+Слоты 0–29 — динамические объекты, 30–511 — простые. В карте номер объекта — номер простого объекта, то есть слот − 30. Занято 30 + 463.
 
-## Simple object
+<a id="simple-object"></a>
 
-| Offset | Type | Meaning | Confidence |
+## Простой объект
+
+| Смещение | Тип | Смысл | Уверенность |
 |---|---|---|---|
-| 0 | u32 | Flags: 0, 1, 8, 9 | Meaning **unknown**; **by Slavik**, bit 8 raises the sorting bottom by one quarter of image height |
-| 4 | u32 | Block size | **Confirmed** |
-| 8 | s32 | Flame count, up to 20 | **By Slavik** |
-| 12 | u32 | Frame count, 1–6; 457 objects have one | **Confirmed** |
-| 16 | u32 | Always `0xFFFFFFFF` | **Unknown** |
-| 20 | u32 | Byte offset of the palette in GRAPH.RES | **Confirmed** |
-| 24 | s32 | Frame time | **By Slavik** |
-| 28 | 20 × (s8 id, s16 x, s16 y) | Flame kind 0–6 and frame corner relative to object | **Confirmed** by map 17's burning houses; [flames](flames-res.md) |
-| 128 | 8 × (s32, s32) | Shadow/image offsets from data start; negative means absent | **Confirmed** |
-| 192 | 8 × (2 × s16, 2 × s16) | Shadow/image offsets from object position | **Confirmed** |
-| 256 | | RL8 images and shadow masks | **Confirmed** |
+| 0 | u32 | флаги (встречаются 0, 1, 8, 9) | смысл неизвестен; по Slavik, с флагом 8 объект сортируется выше на четверть высоты |
+| 4 | u32 | размер блока | подтверждено |
+| 8 | s32 | число огней (до 20) | по Slavik |
+| 12 | u32 | число кадров (1–6; у 457 объектов — 1) | подтверждено |
+| 16 | u32 | у всех `0xFFFFFFFF` | неизвестно |
+| 20 | u32 | смещение палитры в байтах в банке `GRAPH.RES` | подтверждено |
+| 24 | s32 | время кадра | по Slavik |
+| 28 | 20 × (s8 id, s16 x, s16 y) | огни: вид 0–6 и левый верхний угол кадра от позиции объекта ([flames-res.md](flames-res.md)) | подтверждено картинкой: на карте 17 огонь стоит на горящих домах |
+| 128 | 8 × (s32, s32) | смещения тени и картинки кадра от начала данных; < 0 — нет | подтверждено |
+| 192 | 8 × (2 × s16, 2 × s16) | смещение тени и картинки от позиции объекта | подтверждено |
+| 256 | | данные кадров: картинки RL8 и тени | подтверждено |
 
-## Dynamic objects
+<a id="dynamic-objects"></a>
 
-Monsters, village women and children use character class bit 0x40; the index is
-`Character.sprite_set` ([starting state](game-state.md)). `graph_res.read_sprites`
-uses the GRAPH.RES sprite structure without equipment offsets.
+## Динамические объекты
 
-| Block offset | Size | Content |
+Монстры, а также женщины и дети деревень: персонажи с битом 0x40 в классе, номер — `Character.sprite_set` ([game-state.md](game-state.md)). Код — `graph_res.read_sprites`, тот же разбор, что у спрайтов персонажей `GRAPH.RES`, только без смещений снаряжения.
+
+| Смещение от начала блока | Размер | Содержимое |
 |---|---|---|
-| 0 | 8 | u32 tag `0x02000000` (meaning **unknown**), u32 block size including header, equal to directory size |
-| 8 | 48 × (s16 + 18 × s16) | Six animations × eight directions: count and frame image indices |
-| 1832 | 512 × (s32, s32) | Shadow/image offsets from data start; negative means absent, zero also means no shadow |
-| 5928 | 48 × 18 × (2 × s16, 2 × s16) | Per-frame shadow/image offsets from character point |
-| 12840 | | RL8 images and shadows |
+| 0 | 8 | u32 метка (у всех `0x02000000`, смысл неизвестен), u32 размер блока от его начала — равен размеру в каталоге |
+| 8 | 48 × (s16 + 18 × s16) | по анимации (6) и направлению (8): число кадров и номера картинок |
+| 1832 | 512 × (s32, s32) | картинки: смещение тени и изображения от начала данных; < 0 — нет, у тени и 0 — нет |
+| 5928 | 48 × 18 × (2 × s16, 2 × s16) | смещения тени и изображения от точки персонажа на кадр |
+| 12840 | | картинки RL8 и тени |
 
-**Confirmed on both editions:** the last image ends at the block boundary and
-every animation frame has an image. Palette comes from character field 0xD8.
-Slavik maps states 6–9 to 0–3 (`game_character.cpp:144-150`), the variants
-without a weapon in hands; see [animation states](../creatures/animation.md).
-Slots 24–29 match slot 0's size and may be copies — **hypothesis**.
+**Подтверждено** на обоих изданиях: последняя картинка каждого объекта кончается ровно на конце блока, у каждого кадра есть картинка. Палитра — палитра персонажа (поле 0xD8). Состояния персонажа 6–9 игра сводит к анимациям 0–3 (`Marisa-Chan/Slavik/game_character.cpp:144-150`: `if (State > CHSTATE_5) State -= 6`), поэтому в блоке шесть последовательностей, а не десять: 6–9 — тот же вариант без оружия в руках, чем они отличаются — в [creatures.md](../creatures/README.md). Слоты 24–29 — того же размера, что слот 0, и, похоже, его копии — **гипотеза**.
