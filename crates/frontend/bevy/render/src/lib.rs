@@ -9,6 +9,7 @@ pub mod animation;
 pub mod camera;
 pub mod creature_animation;
 pub mod creatures;
+pub mod debug_replay;
 pub mod lighting;
 pub mod picking;
 pub mod scene;
@@ -36,6 +37,7 @@ pub use creatures::{
     DepthMap, LayerAnimation, LayerData, SpawnedCreature, clear_creatures, creature_layer_step,
     despawn_creature, spawn_creature, update_creature_depth,
 };
+pub use debug_replay::DebugReplay;
 pub use lighting::{
     FineLightGrid, KonungLightMaterial, KonungLightingPlugin, LightingMaterials, LightingState,
     SurfaceLighting, light_mask_image, piece_surface_lighting, surface_lighting,

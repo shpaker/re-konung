@@ -24,6 +24,16 @@ impl StepDurations {
         StepDurations { rows }
     }
 
+    /// Registers pace against the actual world-assigned id, including gaps
+    /// left by removed runtime actors. Existing rows remain untouched.
+    pub fn set_row(&mut self, creature: CreatureId, row: [u32; DIRECTION_COUNT]) {
+        let index = creature.raw() as usize;
+        if self.rows.len() <= index {
+            self.rows.resize(index + 1, [0; DIRECTION_COUNT]);
+        }
+        self.rows[index] = row;
+    }
+
     pub fn len(&self) -> usize {
         self.rows.len()
     }

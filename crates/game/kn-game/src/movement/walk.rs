@@ -108,6 +108,26 @@ impl Walker {
         self.goal
     }
 
+    /// Remaining route cells, including an in-flight destination even if a
+    /// stop order already cleared the queued route.
+    pub fn remaining_cells(&self) -> Vec<Cell> {
+        let mut cell = self.cell;
+        let mut cells = Vec::with_capacity(self.route.len().max(1));
+        for direction in &self.route {
+            let Some(next) = cell.neighbour(*direction) else {
+                break;
+            };
+            cells.push(next);
+            cell = next;
+        }
+        if cells.is_empty()
+            && let Some(step) = self.step
+        {
+            cells.push(step.to);
+        }
+        cells
+    }
+
     pub fn route_len(&self) -> usize {
         self.route.len()
     }

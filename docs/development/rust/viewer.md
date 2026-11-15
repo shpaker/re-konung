@@ -271,3 +271,97 @@ successfully and produced a visually checked, nonblack 2560×1600 PNG at 1:1.
 Images, session tokens and response evidence stay local under
 `out/viewer-workspace-verification/` and are not committed. An earlier black
 baseline capture was not reproduced in the later check; no cause was established.
+
+## Debug-player journal and render bridge
+
+The development viewer opts into `DebugReplay`; ordinary renderer consumers
+retain the existing simulation path. Each successful map load creates a new
+map-local journal and resolves the actual source hero profile. Profile failure
+only disables placement. The runtime actor registers through the simulation's
+world actor API, so route requests, occupancy, group evaluation and directional
+pace use the same rules as ordinary actors. It has a code-native marker rather
+than a copied character sprite and is excluded from ordinary creature picking.
+
+Commands are recorded after logical tick T and before T+1, including failed
+attempts. Rewinding retains future entries until a new attempt branches history.
+The renderer honors journal `caught_up`, including pending same-tick commands;
+its per-frame work budget covers both commands and ticks. A replay mismatch is
+latched and synchronizes wrapper progress to the actual reached logical tick
+before reporting failure. It is never retried against a partially modified state.
+Position resets are journal events rather than new history origins: relative
+steps can cross them in either direction. They remove the debug actor while
+preserving logical time and animation. Special-animation resets retain the actor
+and ordinary walk/rest phases.
+
+The bridge observes step, direction and special-stage changes to reconstruct
+render animation origins. A rewind seeds the rebuilt tick-zero picture before
+advancing, preserving first-tick transitions. Anchor lookup is built once per
+creature sync and reused by all body/shadow layers. Synthetic production-system
+regressions compare uninterrupted and replayed clip frames/transforms, natural
+special completion, walking special-reset behavior, reset boundaries, and
+mismatched replay progress.
+
+The visual layers and shell state use the same scoped `DebugSnapshot`. Signed
+raw group corners are retained; only the spawn rectangle receives a confirmed
+role label. Geometry entities are pooled. A toggle-only update changes
+visibility; cached frames do not reinsert sprite/text geometry. Missing simulation
+hides the pool. Marker, overlay and selection geometry still synchronize during
+capture after input and time are frozen, so saved pixels match the frozen state.
+Empty or entirely black readback returns `capture_failed` before either output
+file is written. Window focus/visibility and last observed occlusion are exposed
+as diagnostics, without claiming they prove render availability.
+
+### Local debug-player verification
+
+The integrated runtime retained exact `check --all` JSON equality for 43 RUS
+maps, 43 ENG maps and two ENG tutorial maps. Native ENG map 17 placement at
+(44,48) followed by a move request to (42,46) produced a real route without a
+teleport. While paused, group 162 preview changed before its used state; one
+simulation tick applied that evaluation. Sixteen endpoint acceptance checks
+compared live and headless snapshots across resets, rewinds, failed history
+branches and the final state; all matched. A restarted native session produced
+a visually inspected nonblack 2560×1600 workspace capture whose paired JSON
+exactly matched the capture response state. The earlier session's
+black readbacks remain an unresolved diagnostic observation, not an established
+platform cause or a claimed restart-based product fix. Evidence remains local
+under `out/debug-player-verification/`.
+
+The debug workspace was checked at 1280×800, 1024×720 and 960×640. At the
+smallest size, actual pointer clicks reached Scope All and Remove; removal kept
+selection 1416 and tick 1 while showing used group state 1 against preview 0.
+Opaque body picking selected creature 1416, while a transparent point inside its
+quad, a label point and an outside point cleared selection. Capturing during
+playback restored its prior play state, and a write failure returned a structured
+error. These are behavioral checks rather than performance measurements.
+
+### Debug-overlay CPU costs
+
+Measured locally on Apple M4 Pro/macOS in optimized `dev-runtime`, using actual
+ENG map 17 after 600 simulation ticks, with the temporary player present and
+All scope (29 creature snapshots, seven group records). Each row is the mean of
+2,000 calls in a headless ECS world; no GPU, font layout or window composition is
+included. The pure geometry row rebuilds all overlay primitives, whereas cached
+draw includes snapshot generation/comparison but reuses existing geometry.
+
+| Operation | Mean per call |
+|---|---:|
+| Core `debug_snapshot` | 2.134 µs |
+| Full scoped geometry build | 6.541 µs |
+| Cached draw with player and overlays | 3.053 µs |
+| Toggle-only draw, including visibility writes | 6.537 µs |
+| Debug read-projection JSON | 36.073 µs |
+
+Geometry construction cost was about three times the neighboring core snapshot
+operation; JSON serialization cost more than either geometry path. These are
+CPU microbenchmarks, not whole-frame or Inspector performance claims. Cached
+sprite/text geometry is updated only when its facts or scale change. Animation
+anchor lookup is linear in creature records plus rendered layers, rather than a
+roster search per layer. Scene-build and texture-cache preservation on toggles
+and actor removal is also covered by synthetic production-system tests.
+
+```sh
+GAME_DIR="$PWD/original/k1/eng/game" MAP=17 cargo test \
+  --manifest-path crates/Cargo.toml --profile dev-runtime \
+  -p kn-fe-viewer --features dynamic --lib \
+  debug::tests::measure_actual_map_overlay_cost -- --ignored --exact --nocapture
+```

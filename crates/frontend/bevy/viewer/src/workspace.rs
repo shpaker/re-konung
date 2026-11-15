@@ -1,6 +1,8 @@
 //! Contextual controls for the map workspace.
 use crate::{
-    action::{ActionQueue, InteractionMode, ReadProjection, ViewerAction, ViewerWorkspace},
+    action::{
+        ActionQueue, DebugScope, InteractionMode, ReadProjection, ViewerAction, ViewerWorkspace,
+    },
     *,
 };
 use bevy::{
@@ -31,6 +33,10 @@ enum ButtonAction {
     #[default]
     Select,
     Pan,
+    DebugPlayer,
+    RemovePlayer,
+    ScopeSelected,
+    ScopeAll,
     Fit,
     Retry,
     Play,
@@ -51,6 +57,9 @@ enum ToggleAction {
     Lights,
     Markers,
     ConstantDay,
+    DebugRoutes,
+    DebugStates,
+    DebugRectangles,
 }
 #[derive(Component, Clone, Default)]
 struct MapFilter;
@@ -96,6 +105,18 @@ struct SelectLabel;
 struct PanLabel;
 #[derive(Component, Clone, Default)]
 struct ModeHint;
+#[derive(Component, Clone, Default)]
+struct DebugPlayerLabel;
+#[derive(Component, Clone, Default)]
+struct RemovePlayerButton;
+#[derive(Component, Clone, Default)]
+struct SelectedScopeLabel;
+#[derive(Component, Clone, Default)]
+struct AllScopeLabel;
+#[derive(Component, Clone, Default)]
+struct DebugScopeHint;
+#[derive(Component, Clone, Default)]
+struct DebugProfileError;
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<Filtered>()
@@ -106,6 +127,7 @@ pub(crate) fn install(app: &mut App) {
                 freeze_text_inputs,
                 sync_inputs,
                 sync_toggles,
+                sync_debug_controls,
                 sync_speed,
                 publish_viewport.before(kn_render::CameraApply),
             ),
@@ -174,10 +196,18 @@ fn setup(mut commands: Commands, viewer: Res<Viewer>, fonts: Res<kn_ui::KonungFo
                     --
                     @FeathersButton { @caption: bsn! { @caption("[ ] Pan") PanLabel } } ButtonAction::Pan on(press)
                     --
+                    @FeathersButton { @caption: bsn! { @caption("[ ] Player") DebugPlayerLabel } } ButtonAction::DebugPlayer on(press)
+                    --
+                    @FeathersButton { @caption: bsn! { @caption("Remove") } } Node { display: Display::None } RemovePlayerButton ButtonAction::RemovePlayer on(press)
+                    --
                     @FeathersButton { @caption: bsn! { @caption("Fit (Home)") } } ButtonAction::Fit on(press)
                     --
                     @caption("Click a creature to inspect.") ModeHint
                     TextFont { font: bevy::text::FontSourceTemplate::Handle({fonts.regular.clone()}), font_size: kn_ui::typo::BODY }
+                    --
+                    @caption("") Node { width: percent(100), flex_shrink: 0.0 } DebugProfileError
+                    TextFont { font: bevy::text::FontSourceTemplate::Handle({fonts.regular.clone()}), font_size: kn_ui::typo::CAPTION }
+                    TextColor(kn_ui::palette::DANGER)
                 ]
                 --
                 Node { flex_grow: 1.0, min_width: px(0), min_height: px(0) } WorkspaceViewport
@@ -279,6 +309,31 @@ fn setup(mut commands: Commands, viewer: Res<Viewer>, fonts: Res<kn_ui::KonungFo
                 @FeathersCheckbox { @caption: bsn! { @caption("Lights") } } ToggleAction::Lights on(toggle)
                 --
                 @FeathersCheckbox { @caption: bsn! { @caption("Waypoints") } } ToggleAction::Markers on(toggle)
+                --
+                @caption("SIMULATION DEBUG")
+                TextFont { font: bevy::text::FontSourceTemplate::Handle({fonts.regular.clone()}), font_size: kn_ui::typo::BODY }
+                --
+                @FeathersCheckbox { @caption: bsn! { @caption("Routes & targets") } } ToggleAction::DebugRoutes on(toggle)
+                --
+                @FeathersCheckbox { @caption: bsn! { @caption("Group states") } } ToggleAction::DebugStates on(toggle)
+                --
+                @FeathersCheckbox { @caption: bsn! { @caption("Group rectangles") } } ToggleAction::DebugRectangles on(toggle)
+                --
+                @caption("Scope")
+                TextFont { font: bevy::text::FontSourceTemplate::Handle({fonts.regular.clone()}), font_size: kn_ui::typo::CAPTION }
+                --
+                Node { flex_direction: FlexDirection::Row, column_gap: SPACE_4 } Children[
+                    @FeathersButton { @caption: bsn! { @caption("[x] Selected") SelectedScopeLabel } } ButtonAction::ScopeSelected on(press)
+                    --
+                    @FeathersButton { @caption: bsn! { @caption("[ ] All") AllScopeLabel } } ButtonAction::ScopeAll on(press)
+                ]
+                --
+                @caption("") DebugScopeHint
+                TextFont { font: bevy::text::FontSourceTemplate::Handle({fonts.regular.clone()}), font_size: kn_ui::typo::CAPTION }
+                --
+                @caption("Rectangles: spawn area and second rectangle (raw data).")
+                Node { width: px(220) }
+                TextFont { font: bevy::text::FontSourceTemplate::Handle({fonts.regular.clone()}), font_size: kn_ui::typo::CAPTION }
             ]
         ]
     });
@@ -316,6 +371,16 @@ fn press(
         ButtonAction::Pan => ViewerAction::Mode {
             mode: InteractionMode::Pan,
         },
+        ButtonAction::DebugPlayer => ViewerAction::Mode {
+            mode: InteractionMode::DebugPlayer,
+        },
+        ButtonAction::RemovePlayer => ViewerAction::DebugRemove {},
+        ButtonAction::ScopeSelected => ViewerAction::DebugScope {
+            scope: DebugScope::Selected,
+        },
+        ButtonAction::ScopeAll => ViewerAction::DebugScope {
+            scope: DebugScope::All,
+        },
         ButtonAction::Fit => ViewerAction::FitMap {},
         ButtonAction::Retry => ViewerAction::RetryMap {},
         ButtonAction::Play => ViewerAction::TogglePlayback {},
@@ -345,13 +410,33 @@ fn toggle(
         ToggleAction::ConstantDay => ViewerAction::ConstantDay {
             enabled: event.value,
         },
+        ToggleAction::DebugRoutes => {
+            for layer in ["routes", "targets"] {
+                queue.0.push_back(ViewerAction::DebugDisplay {
+                    layer: layer.into(),
+                    visible: event.value,
+                });
+            }
+            return;
+        }
+        ToggleAction::DebugStates => ViewerAction::DebugDisplay {
+            layer: "group_states".into(),
+            visible: event.value,
+        },
+        ToggleAction::DebugRectangles => ViewerAction::DebugDisplay {
+            layer: "regions".into(),
+            visible: event.value,
+        },
         other => ViewerAction::Display {
             layer: match other {
                 ToggleAction::Characters => "characters",
                 ToggleAction::Foot => "foot",
                 ToggleAction::Lights => "lights",
                 ToggleAction::Markers => "markers",
-                ToggleAction::ConstantDay => unreachable!(),
+                ToggleAction::ConstantDay
+                | ToggleAction::DebugRoutes
+                | ToggleAction::DebugStates
+                | ToggleAction::DebugRectangles => unreachable!(),
             }
             .into(),
             visible: event.value,
@@ -744,10 +829,13 @@ fn sync_workspace(
         .into();
     }
     if let Ok(mut t) = text.p6().single_mut() {
-        **t = if workspace.mode == InteractionMode::Select {
-            "Click a creature to inspect."
-        } else {
-            "Drag to move the map."
+        **t = match workspace.mode {
+            InteractionMode::Select => "Click a creature to inspect.",
+            InteractionMode::Pan => "Drag to move the map.",
+            InteractionMode::DebugPlayer if data["debug_player"].is_null() => {
+                "Click a free walkable cell to place the debug player."
+            }
+            InteractionMode::DebugPlayer => "Click a destination to move the debug player.",
         }
         .into();
     }
@@ -808,6 +896,7 @@ fn publish_viewport(
 fn sync_toggles(
     mut commands: Commands,
     viewer: Res<Viewer>,
+    workspace: Res<ViewerWorkspace>,
     controls: Query<(Entity, &ToggleAction, Has<Checked>)>,
 ) {
     for (entity, control, checked) in &controls {
@@ -817,10 +906,79 @@ fn sync_toggles(
             ToggleAction::Lights => viewer.overlays[1],
             ToggleAction::Markers => viewer.overlays[2],
             ToggleAction::ConstantDay => viewer.constant_day,
+            ToggleAction::DebugRoutes => workspace.debug_overlays[0] && workspace.debug_overlays[1],
+            ToggleAction::DebugStates => workspace.debug_overlays[2],
+            ToggleAction::DebugRectangles => workspace.debug_overlays[3],
         };
         if checked != want {
             kn_ui::sync_checked(&mut commands, entity, want);
         }
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn sync_debug_controls(
+    workspace: Res<ViewerWorkspace>,
+    projection: Res<ReadProjection>,
+    mut text: ParamSet<(
+        Query<&mut Text, With<DebugPlayerLabel>>,
+        Query<&mut Text, With<SelectedScopeLabel>>,
+        Query<&mut Text, With<AllScopeLabel>>,
+        Query<&mut Text, With<DebugScopeHint>>,
+        Query<&mut Text, With<DebugProfileError>>,
+    )>,
+    mut remove: Query<&mut Node, With<RemovePlayerButton>>,
+) {
+    if let Ok(mut label) = text.p0().single_mut() {
+        **label = if workspace.mode == InteractionMode::DebugPlayer {
+            "[x] Player"
+        } else {
+            "[ ] Player"
+        }
+        .into();
+    }
+    if let Ok(mut label) = text.p1().single_mut() {
+        **label = if workspace.debug_scope == DebugScope::Selected {
+            "[x] Selected"
+        } else {
+            "[ ] Selected"
+        }
+        .into();
+    }
+    if let Ok(mut label) = text.p2().single_mut() {
+        **label = if workspace.debug_scope == DebugScope::All {
+            "[x] All"
+        } else {
+            "[ ] All"
+        }
+        .into();
+    }
+    if let Ok(mut hint) = text.p3().single_mut() {
+        **hint = if workspace.debug_scope == DebugScope::Selected
+            && workspace.selected_creature.is_none()
+        {
+            "Select a creature for squad details, or choose All."
+        } else {
+            ""
+        }
+        .into();
+    }
+    if let Ok(mut error) = text.p4().single_mut() {
+        **error = if workspace.mode == InteractionMode::DebugPlayer {
+            projection.0["debug"]["profile_error"]
+                .as_str()
+                .map(|message| format!("Player unavailable: {message}"))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+    }
+    if let Ok(mut node) = remove.single_mut() {
+        node.display = if projection.0["debug_player"].is_null() {
+            Display::None
+        } else {
+            Display::Flex
+        };
     }
 }
 
@@ -1121,6 +1279,10 @@ mod layout_tests {
                 inside(display_bounds, window),
                 "display disclosure outside window: {display_bounds:?}"
             );
+            assert!(
+                display_bounds.max.y <= bottom_bounds.min.y + 0.5,
+                "display disclosure overlaps transport: {display_bounds:?} vs {bottom_bounds:?}"
+            );
             for label in [
                 "Play / Pause (Space)",
                 "- tick (,)",
@@ -1207,6 +1369,73 @@ mod layout_tests {
         assert!(app.world().get::<ScrollPosition>(scroll).unwrap().y > 0.0);
     }
     #[test]
+    fn debug_controls_follow_player_and_scope_without_clearing_selection() {
+        let mut app = app(1024, 720);
+        {
+            let mut workspace = app.world_mut().resource_mut::<ViewerWorkspace>();
+            workspace.mode = InteractionMode::DebugPlayer;
+            workspace.selected_creature = Some(4);
+            workspace.debug_scope = DebugScope::Selected;
+        }
+        app.update();
+        let hint = only::<ModeHint>(&mut app);
+        assert_eq!(
+            app.world().get::<Text>(hint).unwrap().0,
+            "Click a free walkable cell to place the debug player."
+        );
+        app.world_mut().resource_mut::<ReadProjection>().0["debug"] =
+            json!({"profile_error":"No start profile"});
+        app.update();
+        let error = only::<DebugProfileError>(&mut app);
+        assert_eq!(
+            app.world().get::<Text>(error).unwrap().0,
+            "Player unavailable: No start profile"
+        );
+        app.world_mut().resource_mut::<ReadProjection>().0["debug"]["profile_error"] =
+            serde_json::Value::Null;
+        let remove = only::<RemovePlayerButton>(&mut app);
+        assert_eq!(
+            app.world().get::<Node>(remove).unwrap().display,
+            Display::None
+        );
+        app.world_mut().resource_mut::<ReadProjection>().0["debug_player"] =
+            json!({"cell":[12, 7], "pixel":[0, 0]});
+        app.update();
+        assert_eq!(
+            app.world().get::<Text>(hint).unwrap().0,
+            "Click a destination to move the debug player."
+        );
+        assert_eq!(
+            app.world().get::<Node>(remove).unwrap().display,
+            Display::Flex
+        );
+        app.world_mut().resource_mut::<ReadProjection>().0["debug_player"] =
+            serde_json::Value::Null;
+        app.update();
+        assert_eq!(
+            app.world().resource::<ViewerWorkspace>().selected_creature,
+            Some(4)
+        );
+        assert_eq!(
+            app.world().get::<Node>(remove).unwrap().display,
+            Display::None
+        );
+        app.world_mut()
+            .resource_mut::<ViewerWorkspace>()
+            .selected_creature = None;
+        app.update();
+        let scope_hint = only::<DebugScopeHint>(&mut app);
+        assert_eq!(
+            app.world().get::<Text>(scope_hint).unwrap().0,
+            "Select a creature for squad details, or choose All."
+        );
+        app.world_mut()
+            .resource_mut::<ViewerWorkspace>()
+            .debug_scope = DebugScope::All;
+        app.update();
+        assert!(app.world().get::<Text>(scope_hint).unwrap().0.is_empty());
+    }
+    #[test]
     fn keyboard_focus_reveals_bottom_display_control_without_fighting_pointer_scroll() {
         use bevy::input_focus::{FocusCause, InputFocus, InputFocusVisible};
         for (width, height) in [(1024, 720), (960, 640)] {
@@ -1224,16 +1453,16 @@ mod layout_tests {
             }
             let target = app
                 .world_mut()
-                .query::<(Entity, &ToggleAction)>()
+                .query::<(Entity, &ButtonAction)>()
                 .iter(app.world())
-                .find(|(_, action)| matches!(action, ToggleAction::Markers))
+                .find(|(_, action)| matches!(action, ButtonAction::ScopeAll))
                 .unwrap()
                 .0;
             let before = bounds(app.world(), target);
             let viewport = bounds(app.world(), display);
             assert!(
                 before.max.y > viewport.max.y,
-                "control must start clipped: {before:?} {viewport:?}"
+                "scope control must start below the clipped viewport at {width}x{height}: {before:?} {viewport:?}"
             );
             app.world_mut()
                 .resource_mut::<InputFocus>()
@@ -1246,7 +1475,7 @@ mod layout_tests {
             let viewport = bounds(app.world(), display);
             assert!(
                 inside(after, viewport),
-                "keyboard focus did not reveal control: {after:?} {viewport:?}"
+                "keyboard focus did not reveal scope control: {after:?} {viewport:?}"
             );
             assert!(app.world().get::<ScrollPosition>(display).unwrap().y > 0.0);
             app.world_mut()

@@ -68,6 +68,14 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Replay a local runtime command script without a window or GPU.
+    DebugReplay {
+        #[arg(long)]
+        script: PathBuf,
+        #[arg(long, value_enum, default_value = "json")]
+        format: Format,
+    },
+
     /// Send one JSON action to a running viewer session.
     Control {
         #[arg(long)]

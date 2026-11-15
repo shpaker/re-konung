@@ -177,3 +177,81 @@ KonungLightingPlugin применяет KonungLightMaterial (MaterialExtension2d
 - **Результаты приказов обрабатываются.** Simulation::tick применяет решения через rules::FailedOrderCooldown: при постоянно недостижимых целях выполняется один поиск маршрута на WorldRules::repath_cooldown_ticks, а не каждый тик. Любой отказ кроме NoRoute сохраняется в Simulation::order_failures: правила выбирают только проверенные Ground::is_free ячейки, и иной отказ означает ошибку кода или данных. Отчёт без окна перечисляет ошибки и завершает запуск неуспешно (`a_driven_run_walks_a_villager_into_its_area_without_order_failures`, `an_unreachable_area_costs_throttled_searches_not_order_failures`). initial_pixels охватывает весь список, включая неразмещённых существ: они остаются видны на позиции загрузки. Это файловая позиция для неподвижных записей либо выбранная случайно для бродячего участника, которого затем отверг мир. spawn_failures/order_failures сообщают отказ пользователю (`an_unplaced_creature_is_reported_and_keeps_its_load_cell_for_the_renderer`).
 - **Отказы загрузки — данные; ошибки определяют код завершения.** Simulation::new вызывает placement::place_roaming до создания мира, поэтому CLI simulate, тесты и просмотрщик размещают бродячие отряды одинаково. Прежде CLI буквально использовал файловые ячейки и отвергал целые отряды как ImpassableCell. Теперь остаются отказы записей, для которых нет правила перемещения. Simulation::spawn_failures содержит причины по записям, например жителя в заблокированной ячейке; Simulation::load_trimmed — усечение GroupSize. Это свойства поставляемых файлов, отражаемые в отчёте как данные. Списки обоих изданий закреплены в apps/viewer/tests/original_simulate.rs и [исследовании отказов загрузки](../../research/k1/creatures/placement.md#load-time-refusals). Запуск неуспешен только при order_failures или ошибке построения. Simulation::goal_reaches считает прибытия по событиям Arrived и классифицирует цель геометрически как рабочее место или прогулку; категория не доказывает исходную ветвь решения. См. [достижение целей](../../research/k1/creatures/placement.md#goal-reach). Отчёт выводит счётчики; фиксированный seed воспроизводит их, что проверяется на обоих изданиях, а не только RUS, как раньше.
 - **Дороги не подтверждены.** В Konung.N нет отдельного слоя дорог; мелкая сетка содержит только is_blocked (`foot & 0x0F == 0x0F`). MapPassage равен строго !is_blocked, без предпочтений дороги или местности. passage_is_the_confirmed_foot_rule_only отвергает добавление неподтверждённого правила. Возможное предпочтение дорог оригинальным маршрутизатором не восстановлено и не выдумывается; см. [перемещение K1](../../research/k1/movement.md).
+
+## Runtime debug player and command history
+
+The debug player is a runtime tool, not a new game rule or a modification of
+`Game.N`. `Game::debug_player_profile` resolves the session's source and hero,
+then chooses the first living player-group member on that hero's start map with
+valid facing and all eight walk durations. Those durations are the raw walk-frame
+counts; missing rows return zero and make a candidate unavailable. The movement
+engine's unknown-id one-tick fallback is never used for this actor. Tests compare
+the profile against independently decoded raw counts for every available hero in
+both local editions (`original_debug_player.rs`).
+
+Placement, movement and removal use the existing `World` operations. Pace is
+registered against the actual returned `CreatureId`; removal leaves original
+record identities and every other actor's movement untouched. A separate runtime
+identity names the marker. The actor participates in the existing player-group
+live picture, so the already recovered squad-state calculation sees it. There is
+no added combat response: `PlayerInside` still means no new order, and does not
+stop an order already in flight. The original rules remain documented in
+[creature behavior](../../research/k1/creatures/behavior.md).
+
+`Simulation::debug_snapshot` exposes actual current steps, remaining route cells,
+requested and accepted targets, and signed group rectangles. A pending retarget
+may differ from the route endpoint while a step finishes. A stopped mid-step
+actor still exposes that step's destination. The second rectangle remains raw
+data with no inferred chase role. Squad diagnostics distinguish the exact
+pre-movement state used by the last decision pass from a recomputed preview after
+a paused command; the stored, unknown `ai_state` byte is not substituted.
+
+`DebugJournal` is a Bevy-free sidecar around an existing `Simulation`. It holds
+ordered logical tick/sequence entries and receives the same map/hero/seed factory
+from its consumer. Forward replay uses the existing simulation; a backward seek
+rebuilds once and continues in bounded calls. The supplied work limit counts both
+ticks and command applications, so even many same-tick commands can yield to the
+frontend. `caught_up` includes commands still waiting at the target boundary.
+
+Commands at tick T run after completed tick T and before evaluating T+1. Every
+dispatched attempt is journaled, including failures: a failed route search can
+change RNG, goal/search state and pending events. Any new dispatch after rewind
+truncates future commands before execution, even if that dispatch fails. Parsing
+or schema failures never enter the journal. Sequence exhaustion and a latched
+replay failure are pre-dispatch errors and leave the journal unchanged.
+
+Position reset is itself a command: it removes the runtime player and restores
+ordinary movement from the same factory while preserving logical tick and
+animation. Animation reset preserves the player and its movement. Both commands
+are replayed. Exported entries include observed outcomes; authored entries may
+omit them, in which case replay records the actual result. An absent/null script profile asks the consumer to resolve the actual game
+source; a supplied profile must match that source exactly and never controls
+pace. Profile/schema validation completes before any command dispatch. A known outcome
+mismatch latches an error before another replay or dispatch can compound a
+partially changed state. Recovery requires a fresh simulation/session and a new
+or reloaded journal.
+
+### Local command costs
+
+Synthetic measurements on Apple M4 Pro, `dev-runtime` (workspace opt-level 1,
+dependencies opt-level 3): minimum per-operation averages of five batches, 1,000
+iterations each, except 100 alternating route orders. The fixture contains two
+ordinary actors, an open region and an impassable dividing wall. It contains no
+game-derived fixture or resource data.
+
+| Operation | Time | Neighboring operation |
+|---|---:|---|
+| Journaled place/remove pair | 0.234 µs | Direct same-world pair: 0.255 µs |
+| Tick with debug player present | 0.714 µs | Same fixture without it: 0.452 µs |
+| Full debug snapshot | 0.690 µs | Same fixture's debug-player tick: 0.714 µs |
+| Journaled alternating route order | 26.69 µs | Same fixture's ordinary idle tick: 0.452 µs |
+
+The two placement measurements are the same order of cost; their small difference
+does not establish a negative journal overhead. The route order is about 59 times
+this deliberately simple idle tick, so route cost dominates recording an input.
+These are CPU microbenchmarks, not a frame budget or estimates for every map.
+
+```sh
+cargo test --manifest-path crates/Cargo.toml --profile dev-runtime \
+  -p kn-game --lib debug_command_costs -- --ignored --nocapture --test-threads=1
+```

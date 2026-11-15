@@ -778,6 +778,7 @@ pub fn prepare_creatures(
     mut report: ResMut<CreatureAnimReport>,
     mut spawns: ResMut<CreatureSpawns>,
     clock: Res<Clock>,
+    debug: Option<ResMut<crate::DebugReplay>>,
 ) {
     if !request.rebuild {
         return;
@@ -817,6 +818,9 @@ pub fn prepare_creatures(
     // and a later backward step from rewinding to absolute clock time (#68).
     sim.epoch = clock.ticks;
     sim.sim_ticks = 0;
+    if let Some(mut debug) = debug {
+        debug.start(&game.0, map_ref, request.seed, request.hero);
+    }
     let (built, built_report) = build_creature_anim(
         &game.0,
         map_ref,
@@ -930,6 +934,7 @@ pub fn advance_creature_sim(
     game: Res<GameResource>,
     clock: Res<Clock>,
     budget: Option<Res<SimulationCatchUpBudget>>,
+    debug: Option<ResMut<crate::DebugReplay>>,
 ) {
     if sim.sim.is_none() {
         sim.epoch = clock.ticks;
@@ -937,6 +942,10 @@ pub fn advance_creature_sim(
         return;
     }
     let target = clock.ticks.saturating_sub(sim.epoch);
+    if let Some(mut debug) = debug {
+        debug.advance(&mut sim, &game.0, target, budget.as_deref());
+        return;
+    }
     let hero = sim.hero;
     advance_to_target(&mut sim, target, budget.as_deref(), || {
         let map_ref = request
@@ -1075,6 +1084,7 @@ pub fn sync_creature_animation(
     mut anim: ResMut<CreatureAnim>,
     spawns: Res<CreatureSpawns>,
     clock: Res<Clock>,
+    debug: Option<Res<crate::DebugReplay>>,
     mut sprites: Query<(&CreatureSprite, &mut Animator, &Transform)>,
 ) {
     let Some(ref simulation) = sim.sim else {
@@ -1122,6 +1132,24 @@ pub fn sync_creature_animation(
         .iter()
         .map(|state| (state.id, state.step_elapsed))
         .collect();
+    let replay_anchors: HashMap<usize, u64> = debug
+        .as_ref()
+        .map(|debug| {
+            states
+                .iter()
+                .map(|state| {
+                    (
+                        state.id,
+                        sim.epoch.saturating_add(debug.animation_origin(
+                            state,
+                            simulation.creature_stage(state.id),
+                            simulation.tick_number(),
+                        )),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     for (tag, mut animator, _transform) in &mut sprites {
         let Some(creature) = anim.creatures.get(&tag.creature_id) else {
             continue;
@@ -1147,10 +1175,13 @@ pub fn sync_creature_animation(
         let (walking, direction) = facing.get(&tag.creature_id).copied().unwrap_or((false, 0));
         let clip = select_clip(layer, walking, direction, in_special);
         let Some(clip) = clip else { continue };
+        let replay_anchor = replay_anchors.get(&tag.creature_id).copied();
         if Arc::ptr_eq(&animator.sequence, &clip.sequence)
             && !(restep.contains(&tag.creature_id) && !in_special)
             && !stage_changes.contains(&tag.creature_id)
             && !special_resets.contains(&tag.creature_id)
+            && replay_anchor
+                .is_none_or(|anchor| animator.phase == clip.sequence.phase_at(clip.base, anchor))
         {
             // A step re-anchor is a walk-cycle concern; a state-4 creature
             // re-anchors only when its Arc changes (Special ↔ rest/walk) or
@@ -1175,7 +1206,9 @@ pub fn sync_creature_animation(
         // Anchor the swap so the current tick shows the correct frame: the
         // special opens on the tick its frame counter started, the walk opens
         // on the tick the step began (elapsed - 1 ago).
-        let step_start = if let Some(frame) = special_frame {
+        let step_start = if let Some(anchor) = replay_anchor {
+            anchor
+        } else if let Some(frame) = special_frame {
             clock.ticks.saturating_sub(u64::from(frame))
         } else {
             clock
