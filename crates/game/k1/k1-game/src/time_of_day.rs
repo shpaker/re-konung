@@ -3,22 +3,10 @@
 //! Evidence base: `docs/research/k1/lighting.md`. The cycle is the simulation's own tick
 //! modulo 21600; no independent clock exists here.
 //!
-//! The model reports the ambient triple the original's light routine builds for a
-//! cycle tick, ramp branches included, before the division by 100 on the way to the
-//! shader. The arithmetic is the original's, read from the binaries — not the clone's
-//! float reconstruction: the ramp halves the tick distance as an **integer** (the
-//! routine's `sar …,1` / `idiv` idiom) and packs the channels as bytes, so a channel
-//! that the clone would show as a half-integer is a whole integer here, and a ramp
-//! reaches its end value one tick later than the clone's floats would.
-//!
-//! What remains in the lighting ticket (#96) is applying the triple: the blend, the
-//! tile light, the two option switches and the per-map constant light. The windows
-//! whose value is the per-day night palette are reported as the darker palette: the
-//! original draws that choice as a coin flip at the cycle start, both palettes are dark,
-//! and so the missing flip moves no boundary.
-//!
-//! #96 adds [`NightPalette`] so callers can select the variant explicitly; the default
-//! still returns the deeper one to keep existing callers green.
+//! The model returns the original's packed, signed-byte ambient channels as
+//! floats for the renderer. Integer divisions and the binary64 constant pool
+//! were checked across all 21600 ticks and both palettes; see the lighting audit.
+//! Palette selection and surface composition live in `lighting`.
 
 /// Ticks in one full day/night cycle (confirmed: rus `0x5460` divisor).
 pub const CYCLE_TICKS: u64 = 21600;
@@ -90,7 +78,7 @@ pub struct GameTime {
     pub ambient: Ambient,
     /// The ground tile light of the phase — not the final on-screen state:
     /// whether a pixel is lit also depends on the two option switches and on
-    /// the per-map constant light, which the lighting tickets (#96, #97) apply.
+    /// the per-map constant light, applied by `lighting::params_for_map`.
     pub ground_window: bool,
     pub phase: DayPhase,
     pub clock_hour: u8,
@@ -114,30 +102,29 @@ fn half(t: f32) -> f32 {
     (t as i32 / 2) as f32
 }
 
-/// The ambient triple before the division by 100, for a cycle tick.
+/// The packed ambient channels for a cycle tick, using the Deep palette.
 ///
 /// Every branch — the ramp condition, the halving and the returned triple — mirrors
-/// a branch of the original's light routine as recorded, per build, in
-/// `docs/research/k1/time.md`. The ramp value `u` is the integer half of the distance
-/// from the window's start; the channels that the routine scales by the pool
-/// constants (`{0.4, 0.2, 1/3, 10.0, 0.66, -50.0, 0.5988, -60.0}`) are shown as the
-/// unrounded product — the original packs the channels as bytes before the shader
-/// divides them by 100, and #96 will pin the exact rounding and the two coefficients
-/// the pool leaves unresolved (`0.33` and `1/3`).
-///
-/// The two windows whose value is the per-day night palette are reported as the
-/// darker palette; see the module docs.
-///
-/// The ambient triple before the division by 100, for a cycle tick — using the
-/// darker night palette. This is what every existing caller gets and the value
-/// tested throughout the module so all existing tests stay green.
+/// a branch of the original routine. The return values are whole signed bytes,
+/// represented as floats for compatibility with the rendering interface.
 pub fn ambient_value(cycle_tick: u64) -> (f32, f32, f32) {
     ambient_value_with(cycle_tick, NightPalette::Deep)
 }
 
+// The pool's binary64 products fit exactly in x87's 64-bit significand here.
+// Evaluate that rational before truncation: rounding to f64/f32 first changes
+// bytes at integer boundaries (e.g. blue at tick 8154). All operands fit i64.
+fn packed_ramp(base: i64, half_ticks: f32, coefficient: f64) -> f32 {
+    let bits = coefficient.to_bits();
+    let mantissa = ((bits & ((1u64 << 52) - 1)) | (1u64 << 52)) as i64;
+    let shift = 1075 - ((bits >> 52) & 0x7ff);
+    let denominator = 1i64 << shift;
+    ((base * denominator + half_ticks as i64 * mantissa) / denominator) as f32
+}
+
 /// Variant of [`ambient_value`] that selects a specific night palette.
 ///
-/// When the palette is [`NightPalette::Green`] windows 8–10 (cycle ticks
+/// When the palette is [`NightPalette::Green`] windows 9–11 (cycle ticks
 /// 11880..11910, 11910..16155, 16155..16200) change as follows:
 /// - index 8: flat `(-60,-70,-70)` → ramp `t <= 40`:
 ///   `(-60, -70 + half(t), -70)`, else `(-60,-50,-70)`.
@@ -163,17 +150,21 @@ pub fn ambient_value_with(cycle_tick: u64, night: NightPalette) -> (f32, f32, f3
         3 | 4 => (0.0, 0.0, 0.0),
         5 if t(5) < 101.0 => {
             let u = half(t(5));
-            (0.2 * u, -0.4 * u, -u)
+            (packed_ramp(0, u, 0.2), packed_ramp(0, -u, 0.4), -u)
         }
         5 => (10.0, -20.0, -50.0),
         6 if t(6) < 61.0 => {
             let u = half(t(6));
-            (10.0 - 0.33 * u, -20.0 - u, -50.0 - 0.66 * u)
+            (
+                packed_ramp(10, -u, 1.0 / 3.0),
+                -20.0 - u,
+                packed_ramp(-50, -u, 2.0 / 3.0),
+            )
         }
         6 => (0.0, -50.0, -70.0),
         7 if t(7) < 121.0 => {
             let u = half(t(7));
-            (-u, -50.0 - u / 3.0, -70.0)
+            (-u, -50.0 - (u as i32 / 3) as f32, -70.0)
         }
         7 => (-60.0, -70.0, -70.0),
         // Window 9/10: the night palette. Index 8 is all-ramp for Green only;
@@ -203,7 +194,11 @@ pub fn ambient_value_with(cycle_tick: u64, night: NightPalette) -> (f32, f32, f3
         10 => (-60.0, -70.0, -70.0),
         11 if t(11) < 101.0 => {
             let u = half(t(11));
-            (0.5988 * u - 60.0, u / 5.0 - 70.0, u - 70.0)
+            (
+                packed_ramp(-60, u, 0.5988023952095808),
+                (u as i32 / 5) as f32 - 70.0,
+                u - 70.0,
+            )
         }
         11 => (-30.0, -60.0, -20.0),
         // The byte-packed branch read off the binaries (rus `0x4294D1`): the
@@ -286,6 +281,33 @@ pub fn game_time(tick: u64) -> GameTime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_packed_tick_matches_the_original_routine_trace() {
+        // FNV-1a of RGB signed bytes and the ground flag, in tick order.
+        // Reproduce from all three owned EXEs with tools/audit_k1_lighting.py.
+        for (palette, expected) in [
+            (NightPalette::Deep, 0x7a5fec352967bfcau64),
+            (NightPalette::Green, 0x378106d0cd8c6fa2u64),
+        ] {
+            let mut hash = 0xcbf29ce484222325u64;
+            for tick in 0..CYCLE_TICKS {
+                let (r, g, b) = ambient_value_with(tick, palette);
+                for byte in [
+                    r as i8 as u8,
+                    g as i8 as u8,
+                    b as i8 as u8,
+                    u8::from(ground_window(tick)),
+                ] {
+                    hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+                }
+            }
+            assert_eq!(hash, expected, "{palette:?}");
+        }
+        assert_eq!(ambient_value(8154), (1.0, -47.0, -67.0));
+        assert_eq!(ambient_value(16202), (-59.0, -70.0, -69.0));
+        assert_eq!(ambient_value(16210), (-57.0, -69.0, -65.0));
+    }
 
     /// The observable interval trace of one cycle: every tick at which
     /// `(ambient_kind, ground_window)` changes, and the state each window starts
@@ -370,7 +392,7 @@ mod tests {
         assert_eq!(ambient_kind(5400), Ambient::Neutral);
         assert_eq!(ambient_value(5401), (0.0, 0.0, 0.0));
         assert_eq!(ambient_kind(5401), Ambient::Neutral);
-        assert_eq!(ambient_value(5402), (0.2, -0.4, -1.0));
+        assert_eq!(ambient_value(5402), (0.0, 0.0, -1.0));
         assert_eq!(ambient_kind(5402), Ambient::Dark);
         assert_eq!(ambient_value(5501), (10.0, -20.0, -50.0));
         assert_eq!(ambient_kind(8099), Ambient::Dark);

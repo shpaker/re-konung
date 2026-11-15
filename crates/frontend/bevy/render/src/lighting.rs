@@ -1,28 +1,15 @@
 //! Ambient lighting of the whole scene: the sprite material extension, the
 //! time contract, the pool of materials and the per-surface rules.
 //!
-//! The fragment shader reproduces the original's per-channel blend (Slavik
-//! `gfx.cpp:56-84`); the CPU reference it must agree with is
-//! `k1_game::lighting::apply_channel`. The render layer stays K1-free: a
-//! frontend hands over ready-made uniform values ([`LightingState`]), the raw
-//! mask brightness bytes ([`LightingMaterials::new`]) and the map's fine light
-//! grid ([`FineLightGrid`]) — exactly the numbers the original passed to its
-//! shader, derived by the frontend from its own game layer.
+//! The material applies the original's palette arithmetic in display-encoded
+//! RGB, converting Bevy's linear texture sample to sRGB and back. Its CPU
+//! reference is `k1_game::lighting::apply_channel`; see the lighting audit.
+//! The renderer stays K1-free: frontends supply ready-made lighting parameters,
+//! mask bytes and the fine light grid.
 //!
-//! Surfaces and their confirmed rules (`k1_game::lighting::fades` is the
-//! authoritative encoding; [`surface_lighting`] applies it to scene pieces):
-//!
-//! - terrain and decorations fade only inside the ground-light window — their
-//!   material's blend is the ground ambient, zero outside the window, and a
-//!   zero blend is a no-op in the shader;
-//! - static objects fade with the plain ambient always, except self-lit
-//!   pieces (`Flames.size() >= 2`) and flames, which never fade
-//!   (`SetFade(false)`, game.cpp:1563-1580, game.cpp:1592-1593);
-//! - characters fade where their current cell's fine light value is 0, in and
-//!   out of the ground window alike (game.cpp:1611-1626); the material is
-//!   swapped on the creature's sprites as it moves ([`update_creature_lighting`]);
-//! - shadows never fade (`SetFade(false)` before `DrawShadow`, game.cpp:1300,
-//!   game.cpp:1348) and neither do the overlay groups.
+//! Terrain, decorations and ordinary objects always receive the ambient fade.
+//! The tile-light gate affects only terrain masks. Flames, self-lit objects,
+//! shadows and overlays do not fade; creatures use the fine grid at their cell.
 
 use std::collections::HashMap;
 
@@ -56,7 +43,7 @@ pub struct KonungLightMaterial {
     /// Ambient /100: negative darkens, positive fades toward white.
     #[uniform(20)]
     blend: Vec3,
-    /// Tile-light colour /200, added toward white where the mask is bright.
+    /// Positive light factors, added toward white where the mask is bright.
     /// Unused where the mask is zero — every plain ambient sprite.
     #[uniform(20)]
     light_color: Vec3,
@@ -116,7 +103,7 @@ pub struct LightingState {
     pub terrain_blend: Vec3,
     /// Ambient for objects and characters: the same phase value.
     pub ambient_blend: Vec3,
-    /// Tile-light colour /200, added toward white where a terrain mask is
+    /// Positive light factors, added toward white where a terrain mask is
     /// bright.
     pub light_color: Vec3,
     /// The ground-light window gate for the tile light: 1.0 while the window
@@ -242,7 +229,7 @@ impl Plugin for KonungLightingPlugin {
 }
 
 /// Pool of light materials: one per mask for the terrain, plus the two plain
-/// ones — terrain/decorations (ground-window blend) and objects/characters
+/// ones — terrain/decorations (ambient with optional masks) and objects/characters
 /// (plain ambient). Handles are shared by every sprite of the same kind, so a
 /// map costs 21 materials however many sprites it draws.
 #[derive(Resource)]
@@ -471,8 +458,9 @@ mod tests {
         assert!(wesl.contains("light_gain: f32"), "the uniform struct field");
         // The per-channel constants of the reference.
         assert!(wesl.contains(">= 0.01"));
-        assert!(wesl.contains("clamp(terrain_light.blend.r + lightning, -1.0, 0.0)"));
-        assert!(wesl.contains("clamp(terrain_light.blend.g + lightning, -1.0, 0.0)"));
+        assert!(wesl.contains("clamp(terrain_light.blend.rg + vec2<f32>(lightning)"));
+        assert!(wesl.contains("linear_rgb_to_srgb(sprite_color.rgb)"));
+        assert!(wesl.contains("srgb_to_linear_rgb(rgb)"));
         // Blue multiplies raw, without the light term.
         assert!(wesl.contains("rgb.b = rgb.b * (1.0 + terrain_light.blend.b)"));
     }

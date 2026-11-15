@@ -69,3 +69,31 @@ frame_scene берёт границы содержимого, а не всей �
 | Подсчёт панелью 12501 значений InheritedVisibility | 0,5 мкс/кадр |
 
 Прежнее переключение заново разбирало и строило сцену: около 30 мс за обновление (38–43 мс с рендерингом в #30). Сейчас переключение этого не делает; взамен открытие карты 17 стоит на 8 мс больше и сохраняет 12501 сущность вместо 7180. У скрытых групп ViewVisibility = false, они не извлекаются для рендеринга, но остаются в ECS. Панель считает спрайты, а не детей групп, чтобы исключить пустые кадры анимации; 0,5 мкс подсчёта дешевле переключения за 150 мкс.
+
+## Lighting audit measurements
+
+The [K1 lighting audit](../../research/k1/lighting-audit.md) corrects palette-space rendering,
+packed ramp arithmetic, integer ground-light levels and constant-map selection.
+Measurements on the same local Apple Silicon machine, 2026-11-15, using the existing
+release `lighting_cost` and `time_of_day_cost` tests (nanoseconds per call):
+
+| Operation | Before | After |
+|---|---:|---:|
+| Ambient triple over complete cycles | 2.20 | 2.29 |
+| Complete game-time readout | 5.35 | 5.36 |
+| Parameters plus three-channel application | 17.48 | 21.78 |
+| Night-palette selection | 1.08 | 1.03 |
+
+The added integer-half table factors cost about 4.3 ns in the combined CPU harness;
+this is about four fifths of one game-time readout, once per lighting update, not
+per sprite. The ramp correction adds no measurable whole-clock cost in this run.
+
+The actual GPU path was exercised with a synthetic pixel probe and before/after
+map captures. Two 600-frame `dev-runtime` viewer measurements per day/night case
+on RUS map 17 kept 12,487 sprites and 21 materials. Before: average 18.95–19.07 ms,
+p95 19.58–19.71 ms. After: average 3.28–19.06 ms, p95 17.49–19.70 ms. The large
+within-run/platform scheduling variation makes a GPU-cost delta **inconclusive**;
+these are diagnostic local measurements, not a replacement for the established
+release frame-time gate or evidence of a speedup. Raw logs are local under
+`out/lighting-audit`; the parallel session's unrelated changes are not attributed
+to this audit.

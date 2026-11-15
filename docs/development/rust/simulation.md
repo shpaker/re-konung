@@ -151,18 +151,22 @@ k1_game::time_of_day выводит время из Simulation::tick_number; ф�
 
 Модель сохраняет целое деление пополам. Окно 4 достигает нейтрального цвета на 3593 до конца ветви на 3595; окно 13 — на 19020 до конца ветви на 19021. Наблюдаемые изменения: 1802,3593,5402,8100,18900,19020; сравнительные тесты всё равно используют интервалы ветвей. Вещественное деление клона сдвинуло бы значения на тик раньше.
 
-k1_game::lighting предоставляет чистые params/channels/apply_channel/night_palette/light_color/fades и эталон CPU для шейдера. Подтверждённая байтовая арифметика fade_factor/fade_table_entry закреплена эталонными тестами. Красный окна 7 использует неподтверждённое 0.33 клона с указанием уверенности в ambient_value; рендеринг не закрывает этот исследовательский вопрос.
+`k1_game::lighting` exposes pure `params_for_map`, `channels`, `apply_channel`,
+`night_palette`, `light_color` and `fades`, with a CPU reference for the shader.
+The packed ramp model uses the binary64 pool values and integer dawn division;
+full-cycle tests cover both palettes. Sources, confidence and emulation limits
+are recorded in the [audit](../../research/k1/lighting-audit.md).
 
 KonungLightingPlugin применяет KonungLightMaterial (MaterialExtension2d), фрагмент WESL — shaders/terrain_light_material.wesl. LightingMaterials хранит 21 материал: 19 масок LIGHTS.RES и два варианта фонового цвета, для земли и обычных поверхностей. FineLightGrid предоставляет ячейки LIGHTS.N для света существ. Оба фронтенда записывают LightingState из тика симуляции либо явного --light-tick для снимка. Фоновое преобразование действует на все подлежащие ему поверхности; окно ограничивает добавку света тайлов. Ползунок и предустановки выбирают время, не границы фаз.
 
 Намеренные решения также отмечены рядом с [фактами оригинала](../../research/k1/lighting.md#deliberate-rendering-differences):
 
-- Последнее смешивание цвета выполняется в f32 над нормализованными 8-битными каналами текстур вместо целочисленных палитр 5/6 бит. Формулы, целые ступени, накопление f32 и усечение сохранены; разница ограничена квантизацией результата.
+- Lighting runs on display-encoded floats: sampled linear RGB is converted to sRGB before the palette formulas and back before tint/compositing. Intermediate 5/6-bit truncation is intentionally omitted; a universal quantization-step error bound is not established.
 - Один тик симуляции продвигает мир на тик. Оригинальные 1+speed проходов за кадр не воспроизводятся; будущая скорость должна менять темп тиков.
 - Будущий переход игрока между картами обязан переносить день сеанса. Карты просмотрщика — независимые сцены с новой симуляцией; это проверяет switching_to_another_map_recreates_the_day_with_the_new_simulation.
 - light_color(tick,seed) использует tick/16: один детерминированный цвет на блок из 16 тиков, 1350 смен за цикл. Это наше приближение вместо случайности каждой отрисовки, не наблюдение исходного периода.
 - night_palette(day,seed) смешивает день и seed через умножение на золотое сечение и финализатор splitmix64 (mix_day_seed), затем `% 100 < 90`: исходная вероятность 90 из 100 без расходования RNG симуляции и зависимости от частоты кадров.
-- params_gated(tick,seed,day_night) при выключении возвращает нейтральный фон и отсутствие света земли; счётчик продолжает идти. Настройки, начальное значение и сброс описаны в [просмотрщике](viewer.md#playback-and-lighting-controls). Обход постоянного света карты и отдельный переключатель световых эффектов отсутствуют.
+- `params_for_map(tick, seed, map, day_night, light_effects)` applies constant-map colors first, then the day/night gate, then the independent tile-light gate. Both frontends pass the selected map and keep light effects enabled; only Viewer exposes the day/night control. Neither option changes the simulation clock. Settings and reset behavior remain in [Viewer](viewer.md#playback-and-lighting-controls).
 
 Стоимость CPU выше относится к запросу/кадру, не пикселю. apply_channel на CPU служит эталоном шейдера. Модель света не пересчитывает, не сбрасывает и не кеширует день сеанса.
 
