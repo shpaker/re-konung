@@ -155,7 +155,7 @@ k1_game::time_of_day выводит время из Simulation::tick_number; ф�
 `night_palette`, `light_color` and `fades`, with a CPU reference for the shader.
 The packed ramp model uses the binary64 pool values and integer dawn division;
 full-cycle tests cover both palettes. Sources, confidence and emulation limits
-are recorded in the [audit](../../research/k1/lighting-audit.md).
+are recorded in the [audit](../../research/k1/lighting.md).
 
 KonungLightingPlugin применяет KonungLightMaterial (MaterialExtension2d), фрагмент WESL — shaders/terrain_light_material.wesl. LightingMaterials хранит 21 материал: 19 масок LIGHTS.RES и два варианта фонового цвета, для земли и обычных поверхностей. FineLightGrid предоставляет ячейки LIGHTS.N для света существ. Оба фронтенда записывают LightingState из тика симуляции либо явного --light-tick для снимка. Фоновое преобразование действует на все подлежащие ему поверхности; окно ограничивает добавку света тайлов. Ползунок и предустановки выбирают время, не границы фаз.
 

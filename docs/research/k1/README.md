@@ -12,7 +12,6 @@
 - [Существа](creatures/README.md): анимация, решения, размещение и бой.
 - [Новая игра](new-game.md): характеристики, очки, стартовое снаряжение и предпросмотр.
 - [Время](time.md) и [освещение](lighting.md): счётчики, интервалы, арифметика цвета и условия включения.
-- [Lighting audit](lighting-audit.md): original-binary evidence, corrections, render checks and remaining unknowns.
 
 <a id="format-status"></a>
 

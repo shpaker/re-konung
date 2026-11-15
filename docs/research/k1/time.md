@@ -22,7 +22,7 @@
 Каждый адрес прочитан в своей сборке, не перенесён автоматически.
 The lighting routines have matching control flow and constants, with per-build
 operands; they are not byte-identical. The complete packed traces agree under the
-[documented emulation assumptions](lighting-audit.md#original-evidence-and-reproduction).
+[documented emulation assumptions](lighting.md#original-evidence-and-reproduction).
 Глобальные `0x81xxxx`/`0x82xxxx` находятся в .bss: образ их не содержит,
 начальный ноль не доказывает ненулевые настройки, которые пишутся при выполнении.
 

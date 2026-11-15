@@ -5,7 +5,7 @@
 Original K1 lighting rules, sources and confidence. The counter and thresholds
 are described in [time.md](time.md); implementation contracts are in
 [simulation.md](../../development/rust/simulation.md#time-and-lighting-contracts).
-The [lighting audit](lighting-audit.md) records corrections and reproducible checks.
+The evidence and reproducible checks are recorded below.
 
 ## Sources and markers
 
@@ -288,7 +288,7 @@ reach that bypass — see the divergence bullet below).
 The packed channels and original coefficients are retained. Final lighting uses
 display-encoded floats, smooth mask sampling and Bevy's linear alpha compositing
 instead of intermediate 5/6-bit truncation. No universal one-quantization-step
-error bound is claimed. The [audit](lighting-audit.md#remaining-limits-and-intentional-differences)
+error bound is claimed. The [audit](lighting.md#remaining-limits-and-intentional-differences)
 separates these choices from confirmed rule errors and unresolved surface exceptions.
 
 Palette selection and flicker are deterministic functions of the simulation tick
@@ -296,3 +296,110 @@ and seed. The 16-tick flicker period is our approximation, not a recovered rule.
 Both frontends apply constant-map colors before the day/night gate; the separate
 light-effects model gate is implemented, with no additional menu control.
 See [implementation contracts](../../development/rust/simulation.md#time-and-lighting-contracts).
+
+## Original evidence and reproduction
+
+`uv run tools/audit_k1_lighting.py` loads the owner's binaries into an isolated x86
+emulator. It executes the lighting procedure at every cycle tick for each palette,
+compares with the Rust `lighting_trace` example, checks thresholds, tests the option
+bypass and all constant-color slots, and executes the map-flag writer for every slot.
+The script dependencies are isolated and pinned; nothing is added to game dependencies.
+No executable bytes or full traces are stored in the repository.
+
+| Build | lighting body VA | body exit VA | flag store VA | effective flag byte base |
+|---|---|---|---|---|
+| RUS `konung.res` | `0x428FEC` | `0x42952A` | `0x43AE0A` | `0x45AE2F` |
+| ENG `KONUNG.EXE` | `0x429164` | `0x4296A2` | `0x43B052` | `0x45AE67` |
+| ENG `TUTORIAL.EXE` | `0x429164` | `0x4296A2` | `0x43A422` | `0x45AE73` |
+
+**Confirmed:** the three traces agree. Before the corrections each had 160 mismatches
+out of 43,200 palette/tick states; afterwards each has zero. The complete trace
+(R, G, B as signed bytes, then ground flag, Deep before Green) has SHA-256
+`3fe6c2dafcb46ed813a7311c3fd38022d79094b1756c13ee6a0335a03c62d40b`.
+The ordinary Rust unit test pins separate FNV-1a checksums for both complete cycles,
+so CI covers every tick without distributing fixtures derived from game resources.
+
+**Emulation limitation:** random selection is replaced with a controlled result to
+exercise both branches. RUS runs its original rounding helper at `0x43EAAE`.
+The protected ENG/TUTORIAL helpers are not executable as stored on disk; their calls
+are intercepted with the RUS-confirmed chop semantics, letting the original `fistp`
+perform truncation. Those runs verify the intact light routines and pools under that
+explicit rounding assumption, not the protected loaders or a complete game session.
+The routines have matching control flow, not byte-identical per-build operands.
+
+The RUS 565 palette-table builder is also executed independently and its 25,600
+entries compared with the documented f32-accumulation/truncation arithmetic. The
+lit-path evidence comes from the original's pointer-table setup and pixel blit:
+nonzero mask bytes select the negative ambient table after the positive light table;
+zero-mask pixels and blue use the ordinary ambient transform. This is independent
+of the reference reimplementation's fragment shader.
+
+Slavik remains a read-only, unlicensed secondary reference. Its
+[light calculation](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/game.cpp#L1762)
+and [shader](https://github.com/Marisa-Chan/Slavik/blob/cf5a3320dc93859e3dc51f37ee823fed30f399b6/gfx.cpp#L56)
+are not authoritative for integer division, encoded color, or positive-ambient lit
+pixels. These discrepancies were reported in the chat; no change was made upstream
+and no reference code was copied.
+
+
+## Render and regression checks
+
+The synthetic probe exercises the actual material, shader, sRGB texture decoding
+and output encoding without game content:
+
+```sh
+cargo run --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-render \
+  --example lighting_probe -- out/lighting-audit/probe.png
+uv run python tools/check_lighting_probe.py out/lighting-audit/probe.png
+```
+
+All six RGB cases passed, within one 8-bit output step: unchanged gray, negative
+ambient, positive ambient, masked night, masked positive red, and masked neutral
+ambient. Expected/observed pixels are `(128,128,128)`, `(51,38,38)`, `(143,136,128)`,
+`(83,67,38)`, `(138,133,64)`, `(138,133,128)`. Alpha is passed through the lighting
+shader to Bevy's standard tint/discard/compositing path.
+
+Real-map before/after captures use identical map/tick/camera inputs and are kept only
+in `out/lighting-audit/{before,after}`. The capture command is:
+
+```sh
+cargo run --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-viewer -- \
+  --game-dir original/k1/rus/game --map 17 --light-tick 12000 \
+  --screenshot out/lighting-audit/after/rus-12000.png
+```
+
+The matrix includes both editions, map 17 through neutral/warm/dusk/local-light/
+dawn states, buildings on map 1, local light on map 19, fixed-color maps 42/44/45,
+and map 46 without a mask file. With seed 42, tick 12000 is the Green palette;
+tick 55200 is the Deep palette (day 2). Tick 33600 is another Green day, not a
+second palette. Live creatures/flames and diagnostic text are not frozen by
+`--light-tick`, so full-screen image equality is not an acceptance criterion.
+
+Rust tests cover the complete packed trace, boundary cases, separate gates,
+constant-map precedence, viewer map changes, material assignment and moving
+creatures. `just check` remains the complete repository gate. Performance measurements
+and their limitations are recorded in [rendering.md](../../development/rust/rendering.md#lighting-audit-measurements).
+
+## Remaining limits and intentional differences
+
+- **Unknown applicability:** RUS `0x4254A9..0x425514` chooses full-strength ground light
+  when a nonnull record at `[0x81D580]` selects a group whose final byte equals 1
+  (`[group * 32 + 0x67C0A6] >> 24`). Otherwise levels are integer-halved. The group
+  field is still unknown in the format description, and the active-record lifecycle
+  is not recovered. The normal half-strength path is implemented; no invented
+  meaning or guessed player bonus is attached to this exception.
+- **By Slavik:** per-draw random light ranges, and the object/flame/shadow/creature
+  exemptions above still need independent behavioral or binary confirmation.
+- **Unknown:** shipped option defaults, the narrative meaning of the two night
+  variants, exact save/map-activation lifecycle, and nighttime NPC schedules.
+- **Intentional:** per-day palette selection and flicker are deterministic functions
+  of seed/tick; flicker changes every 16 ticks. The clock is one simulation counter,
+  not the original per-frame speed multiplier. UI hour/phase names are conventions.
+- **Intentional precision differences:** display-encoded float lighting avoids the
+  original intermediate 5/6-bit truncation. Masks retain smooth sampling and an
+  8-bit normalized texture representation; filtered values below one percent use
+  the plain palette path. Bevy blends alpha in linear space. The earlier claim
+  that every resulting pixel differs by at most one original quantization step
+  was not established and is withdrawn, especially for the two-stage lit path.
+  The GPU probe verifies the chosen formulas, not universal screenshot identity
+  with the original framebuffer.

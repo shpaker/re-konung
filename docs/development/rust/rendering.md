@@ -72,7 +72,7 @@ frame_scene берёт границы содержимого, а не всей �
 
 ## Lighting audit measurements
 
-The [K1 lighting audit](../../research/k1/lighting-audit.md) corrects palette-space rendering,
+The [K1 lighting audit](../../research/k1/lighting.md) corrects palette-space rendering,
 packed ramp arithmetic, integer ground-light levels and constant-map selection.
 Measurements on the same local Apple Silicon machine, 2026-11-15, using the existing
 release `lighting_cost` and `time_of_day_cost` tests (nanoseconds per call):

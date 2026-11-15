@@ -1,5 +1,5 @@
 // K1 palette-space lighting; evidence and deliberate precision differences:
-// docs/research/k1/lighting-audit.md. `blend` is the signed ambient table factor,
+// docs/research/k1/lighting.md. `blend` is the signed ambient table factor,
 // `light_color` the positive factor of integer-halved flicker levels, and
 // `light_gain` gates only the tile mask. Bindings 0-2 belong to the sprite.
 
