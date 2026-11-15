@@ -15,7 +15,10 @@ pub mod rules;
 pub mod simulation;
 pub mod step_durations;
 
-pub use k1_game::new_game::{Allocation as NewGameAllocation, allocation as newgame_allocation};
+pub use k1_game::new_game::{
+    Allocation as NewGameAllocation, ChangeBlocked as NewGameChangeBlocked,
+    allocation as newgame_allocation,
+};
 
 use std::path::PathBuf;
 

@@ -22,7 +22,7 @@ use kn_render::GameResource;
 use kn_ui::{KonungFonts, palette, spacing, typo, widgets};
 
 use crate::flow::{AppFlow, AppliedSettings, ScreenRoot};
-use crate::i18n::{Text, t};
+use crate::i18n::{Text, points, t};
 use crate::screens;
 
 /// The width of the portrait-card column, and the natural size of the menu
@@ -31,7 +31,7 @@ const CARD_COLUMN_WIDTH: f32 = 148.0;
 const PORTRAIT_WIDTH: f32 = 76.0;
 const PORTRAIT_HEIGHT: f32 = 87.0;
 const DESCRIPTION_WIDTH: f32 = 280.0;
-const CREATION_WIDTH: f32 = 1120.0;
+const CREATION_WIDTH: f32 = 1040.0;
 
 /// Which preview and constructor draft the on-screen view was built for: a
 /// change in either means its captions are stale, and the view respawns
@@ -236,6 +236,8 @@ pub(crate) fn sync(world: &mut World) {
     {
         return;
     }
+    let allocation_reset = state.new_game_draft.class != built.draft.class
+        || (built.draft.attributes.is_some() && state.new_game_draft.attributes.is_none());
     let scroll_position = world
         .query_filtered::<&ScrollPosition, With<CreationContent>>()
         .iter(world)
@@ -259,6 +261,16 @@ pub(crate) fn sync(world: &mut World) {
         world.despawn(root);
     }
     spawn(world);
+    if allocation_reset {
+        let language = world.resource::<AppliedSettings>().0.language;
+        for (mut text, mut node) in world
+            .query_filtered::<(&mut bevy::ui::widget::Text, &mut Node), With<ClassResetNotice>>()
+            .iter_mut(world)
+        {
+            text.0 = t(language, Text::AllocationReset).to_string();
+            node.display = Display::Flex;
+        }
+    }
     if let Some(previous) = scroll_position {
         for mut position in world
             .query_filtered::<&mut ScrollPosition, With<CreationContent>>()
@@ -341,6 +353,7 @@ fn root(
         }
         BackgroundColor(palette::WINDOW_BG)
         ScreenRoot
+        bevy::input_focus::tab_navigation::TabGroup { modal: true }
         Children [
             Node {
                 width: percent(100),
@@ -370,12 +383,22 @@ fn root(
                 max_width: px(CREATION_WIDTH),
                 flex_direction: FlexDirection::Row,
                 justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Center,
+                column_gap: spacing::SPACE_16,
+                min_height: px(64),
                 padding: UiRect::all(px(12.0)),
                 flex_shrink: 0.0,
             }
             BackgroundColor(palette::SURFACE)
             Children [
                 {EntityScene(back_button(fonts, language))}
+                --
+                Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: spacing::SPACE_4, min_width: px(0) }
+                Children [
+                    {EntityScene(points_counter(fonts, language, draft))}
+                    --
+                    {EntityScene(screens::text(fonts.regular.clone(), typo::CAPTION, t(language, Text::UnspentPointsHelp)))}
+                ]
                 --
                 {EntityScene(begin_button(fonts, language, preview))}
             ]
@@ -414,14 +437,14 @@ fn dossier_row(
         Children [
             {EntityScene(card_column(cards))}
             --
-            {EntityScene(story_column(fonts, language, dossier, model))}
+            {EntityScene(story_column(fonts, language, dossier, model, draft))}
             --
             @widgets::panel(fonts, dossier_list)
             Node {
                 width: px(540),
-                flex_basis: px(440),
+                flex_basis: px(500),
                 flex_grow: 1.0,
-                min_width: px(440),
+                min_width: px(500),
                 max_width: percent(100),
                 padding: UiRect::all(px(16)),
                 row_gap: spacing::SPACE_16,
@@ -526,6 +549,7 @@ fn story_column(
     language: kn_settings::Language,
     dossier: Option<&HeroSummary>,
     model: Option<PortraitImage>,
+    draft: kn_app::NewGameDraft,
 ) -> impl Scene {
     let name = dossier.map_or(t(language, Text::HeroSlot(1)), |hero| hero.name.as_str());
     let story = dossier.map_or("", |hero| hero.description.as_str());
@@ -535,7 +559,7 @@ fn story_column(
             --
             Node {
                 width: percent(100),
-                height: px(164),
+                height: px(120),
                 flex_shrink: 0.0,
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
@@ -545,6 +569,8 @@ fn story_column(
             Children [{EntityScene(portrait_view(model))}]
             --
             {EntityScene(description(fonts, story))}
+            --
+            {EntityScene(constructor_choices(fonts, language, draft))}
         })
         Node {
             width: px(300),
@@ -572,8 +598,6 @@ fn dossier_list(
     };
     let class =
         kn_game::newgame_profile(draft.class, draft.attributes).expect("validated allocation");
-    let allocation =
-        kn_game::newgame_allocation(draft.class, draft.attributes).expect("validated allocation");
     let style = if draft.combat_style == 1 {
         kn_game::COMBAT_ACCURACY
     } else {
@@ -585,15 +609,16 @@ fn dossier_list(
         _ => kn_game::SECONDARY_DEFAULT,
     };
     let attributes: Box<dyn SceneList> = Box::new(bsn_list! {
-        {EntityScene(screens::text(fonts.bold.clone(), typo::BODY, t(language, Text::HeroAttributes)))}
+        Node { flex_direction: FlexDirection::Row, justify_content: JustifyContent::SpaceBetween }
+        Children [
+            {EntityScene(screens::text(fonts.bold.clone(), typo::TITLE, t(language, Text::HeroAttributes)))}
+            --
+            {EntityScene(points_counter(fonts, language, draft))}
+        ]
         --
-        {EntityScene(attribute_row(fonts, t(language, Text::LabelAgility), draft, 0, HINT_AGILITY))}
+        {EntityScene(screens::text(fonts.regular.clone(), typo::CAPTION, t(language, Text::AllocationHelp)))}
         --
-        {EntityScene(attribute_row(fonts, t(language, Text::LabelCharisma), draft, 1, HINT_CHARISMA))}
-        --
-        {EntityScene(attribute_row(fonts, t(language, Text::LabelStrength), draft, 2, HINT_STRENGTH))}
-        --
-        {EntityScene(attribute_row(fonts, t(language, Text::LabelEndurance), draft, 3, HINT_ENDURANCE))}
+        {EntityScene(allocation_attributes(fonts, language, draft))}
         --
         {EntityScene(row(fonts, t(language, Text::LabelHealth), &summary.health.to_string(), usize::MAX))}
         --
@@ -609,8 +634,7 @@ fn dossier_list(
         {EntityScene(row(fonts, t(language, Text::LabelExperience), &summary.experience.to_string(), usize::MAX))}
         --
         {EntityScene(row(fonts, t(language, Text::LabelGold), &summary.gold.to_string(), usize::MAX))}
-        --
-        {EntityScene(row(fonts, t(language, Text::LabelFreePoints), &allocation.free_points.to_string(), usize::MAX))}
+
     });
     let skills: Box<dyn SceneList> = Box::new(bsn_list! {
         {EntityScene(screens::text(fonts.bold.clone(), typo::BODY, t(language, Text::HeroSkills)))}
@@ -629,6 +653,46 @@ fn dossier_list(
         --
         {EntityScene(row(fonts, t(language, Text::LabelSmithery), &style.smithery.to_string(), HINT_SMITHERY))}
     });
+    Box::new(bsn_list! {
+        Node { flex_direction: FlexDirection::Column, row_gap: spacing::SPACE_4 }
+        Children [{attributes}]
+        --
+        {EntityScene(bsn! {
+            Node {
+                flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: spacing::SPACE_24,
+                row_gap: spacing::SPACE_16,
+                align_items: AlignItems::Start,
+            }
+            Children [
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: spacing::SPACE_24,
+                    flex_grow: 1.0,
+                    justify_content: JustifyContent::SpaceBetween,
+                }
+                Children [
+                    Node { flex_direction: FlexDirection::Column, row_gap: spacing::SPACE_4 }
+                    Children [{skills}]
+                    --
+                    Node { flex_direction: FlexDirection::Column, row_gap: spacing::SPACE_4 }
+                    Children [{others}]
+                ]
+            ]
+        })}
+
+    })
+}
+
+#[derive(Component, Default, Clone)]
+struct ClassResetNotice;
+
+fn constructor_choices(
+    fonts: &KonungFonts,
+    language: kn_settings::Language,
+    draft: kn_app::NewGameDraft,
+) -> impl Scene {
     let class_row = bsn! {
         Node {
             flex_direction: FlexDirection::Row,
@@ -704,46 +768,21 @@ fn dossier_list(
             {EntityScene(choice_button(fonts, t(language, Text::LabelMedicine), draft.secondary == 2, ConstructorKind::Secondary, 2, HINT_MEDICINE))}
         ]
     };
-    Box::new(bsn_list! {
-        {EntityScene(bsn! {
-            Node {
-                flex_direction: FlexDirection::Row,
-                flex_wrap: FlexWrap::Wrap,
-                column_gap: spacing::SPACE_24,
-                row_gap: spacing::SPACE_16,
-                align_items: AlignItems::Start,
-            }
-            Children [
-                {EntityScene(bsn! {
-                    Node {
-                        flex_direction: FlexDirection::Column,
-                        row_gap: spacing::SPACE_4,
-                    }
-                    Children [{attributes}]
-                })}
-                --
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: spacing::SPACE_16,
-                    flex_grow: 1.0,
-                }
-                Children [
-                    Node { flex_direction: FlexDirection::Column, row_gap: spacing::SPACE_4 }
-                    Children [{skills}]
-                    --
-                    Node { flex_direction: FlexDirection::Column, row_gap: spacing::SPACE_4 }
-                    Children [{others}]
-                ]
-            ]
-        })}
-        --
-        {EntityScene(class_row)}
-        --
-        {EntityScene(style_row)}
-        --
-        {EntityScene(secondary_row)}
-
-    })
+    bsn! {
+        Node { flex_direction: FlexDirection::Column, row_gap: spacing::SPACE_8 }
+        InheritableFont { font: {fonts.regular.clone()}, font_size: typo::CAPTION, weight: FontWeight::NORMAL }
+        Children [
+            {EntityScene(class_row)}
+            --
+            {EntityScene(screens::text(fonts.regular.clone(), typo::CAPTION, t(language, Text::ClassResetHelp)))}
+            --
+            @caption("") ClassResetNotice Node { display: Display::None } TextColor(palette::ACCENT)
+            --
+            {EntityScene(style_row)}
+            --
+            {EntityScene(secondary_row)}
+        ]
+    }
 }
 
 /// The hero's portrait at an explicit pixel box: the layout reserves the
@@ -813,6 +852,7 @@ fn row(fonts: &KonungFonts, label: &str, value: &str, hint_line: usize) -> impl 
         }
         HintSource(hint_line)
         Hovered
+        bevy::input_focus::tab_navigation::TabIndex(0)
         Children [
             @caption(label.as_str()) TextColor(palette::TEXT_MUTED)
             --
@@ -887,21 +927,27 @@ pub struct HintSource(pub usize);
 #[derive(Component)]
 pub struct HintPopup(pub usize);
 
-/// Shows the hint popup of the hovered element near the cursor; hides it
-/// when nothing is hovered. Screen-local, runs after the flow chain like
-/// the other sync systems.
+/// Keyboard focus takes precedence over hover, so hints never require a mouse.
+/// Runs after view rebuilds, when focus has been restored to the replacement control.
 pub(crate) fn hint_popup(world: &mut World) {
     let hint_lines = world
         .get_resource::<NewGameHints>()
         .map(|hints| hints.0.clone())
         .unwrap_or_default();
-    let current = {
+    let focused = world
+        .get_resource::<bevy::input_focus::InputFocusVisible>()
+        .filter(|visible| visible.0)
+        .and_then(|_| world.get_resource::<bevy::input_focus::InputFocus>())
+        .and_then(|focus| focus.get())
+        .and_then(|entity| world.get::<HintSource>(entity))
+        .map(|hint| hint.0);
+    let current = focused.or_else(|| {
         let mut query = world.query_filtered::<(&HintSource, &Hovered), ()>();
         query
             .iter(world)
             .find(|(_, hovered)| hovered.0)
             .map(|(source, _)| source.0)
-    };
+    });
     let cursor = world
         .query::<&Window>()
         .single(world)
@@ -928,7 +974,16 @@ pub(crate) fn hint_popup(world: &mut World) {
                 world.despawn(entity);
             }
             let text = hint_lines[line].clone();
-            spawn_hint_popup(world, &text, cursor.map(|c| (c.x, c.y)), line);
+            spawn_hint_popup(
+                world,
+                &text,
+                if focused.is_some() {
+                    None
+                } else {
+                    cursor.map(|c| (c.x, c.y))
+                },
+                line,
+            );
         }
     }
 }
@@ -937,7 +992,17 @@ pub(crate) fn hint_popup(world: &mut World) {
 /// point, when there is no window cursor — headless), non-pickable so it
 /// never blocks the row under it.
 pub fn spawn_hint_popup(world: &mut World, text: &str, at: Option<(f32, f32)>, line: usize) {
-    let (left, top) = at.map_or((240.0, 250.0), |(x, y)| (x + 16.0, y + 16.0));
+    let (width, height) = world
+        .query::<&Window>()
+        .single(world)
+        .map_or((1280.0, 832.0), |window| (window.width(), window.height()));
+    let popup_width = 320.0_f32.min((width - 48.0).max(0.0));
+    let (left, top) = at.map_or((24.0, 24.0), |(x, y)| {
+        (
+            (x + 16.0).min((width - popup_width - 24.0).max(0.0)),
+            (y + 16.0).min((height - 260.0).max(0.0)),
+        )
+    });
     let fonts = crate::screens::fonts(world);
     let text = text.to_string();
     // Plain Bevy UI, not a bsn scene: the popup spawns outside the flow
@@ -946,12 +1011,15 @@ pub fn spawn_hint_popup(world: &mut World, text: &str, at: Option<(f32, f32)>, l
     let entity = world
         .spawn((
             Name::new("hint popup"),
+            GlobalZIndex(10),
             HintPopup(line),
             Node {
                 position_type: PositionType::Absolute,
                 left: px(left),
                 top: px(top),
-                width: px(320.0),
+                width: px(popup_width),
+                max_height: px((height - top - 104.0).max(0.0)),
+                overflow: Overflow::scroll_y(),
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::all(px(10.0)),
                 border: UiRect::all(px(1.0)),
@@ -1046,52 +1114,118 @@ pub struct AttributeButton {
     pub delta: i16,
 }
 
-fn attribute_row(
+fn points_counter(
     fonts: &KonungFonts,
-    label: &str,
+    language: kn_settings::Language,
+    draft: kn_app::NewGameDraft,
+) -> impl Scene {
+    let allocation =
+        kn_game::newgame_allocation(draft.class, draft.attributes).expect("validated allocation");
+    let label = format!(
+        "{}: {}",
+        t(language, Text::LabelFreePoints),
+        allocation.free_points
+    );
+    bsn! {
+        Node
+        InheritableFont { font: {fonts.bold.clone()}, font_size: typo::TITLE, weight: FontWeight::NORMAL }
+        Children [@caption(label.as_str()) TextColor(palette::ACCENT)]
+    }
+}
+
+fn allocation_attributes(
+    fonts: &KonungFonts,
+    language: kn_settings::Language,
+    draft: kn_app::NewGameDraft,
+) -> impl Scene {
+    let allocation =
+        kn_game::newgame_allocation(draft.class, draft.attributes).expect("validated allocation");
+    let baseline = kn_game::newgame_allocation(draft.class, None)
+        .expect("valid class")
+        .values;
+    let hints = [HINT_AGILITY, HINT_CHARISMA, HINT_STRENGTH, HINT_ENDURANCE];
+    let actions = std::array::from_fn(|attribute| {
+        let hint = hints[attribute];
+        Box::new(bsn! {
+            Node { flex_direction: FlexDirection::Row, column_gap: spacing::SPACE_8, flex_grow: 1.0, min_width: px(0) }
+            HintSource(hint) Hovered
+            Children [
+                {EntityScene(attribute_action(fonts, language, draft, attribute, -1, hint))}
+                --
+                {EntityScene(attribute_action(fonts, language, draft, attribute, 1, hint))}
+            ]
+        }) as Box<dyn Scene>
+    });
+    crate::widgets::attributes::attributes(
+        fonts,
+        language,
+        allocation.values,
+        crate::widgets::attributes::AttributeMode::Editable { baseline, actions },
+    )
+}
+
+fn attribute_action(
+    fonts: &KonungFonts,
+    language: kn_settings::Language,
     draft: kn_app::NewGameDraft,
     attribute: usize,
+    delta: i16,
     hint: usize,
 ) -> impl Scene {
     let allocation =
         kn_game::newgame_allocation(draft.class, draft.attributes).expect("validated allocation");
-    bsn! {
-        Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: spacing::SPACE_8 }
-        Children [
-            {EntityScene(row(fonts, label, &allocation.values[attribute].to_string(), hint))}
-            --
-            {EntityScene(attribute_button(fonts, draft, attribute, -1))}
-            --
-            {EntityScene(attribute_button(fonts, draft, attribute, 1))}
-        ]
-    }
-}
-
-fn attribute_button(
-    fonts: &KonungFonts,
-    draft: kn_app::NewGameDraft,
-    attribute: usize,
-    delta: i16,
-) -> Box<dyn Scene> {
-    let allocation =
-        kn_game::newgame_allocation(draft.class, draft.attributes).expect("validated allocation");
-    let next = allocation.adjusted(draft.class, attribute, delta);
-    let label = match next {
-        Some(next) => format!(
-            "{} {}",
-            if delta < 0 { "−" } else { "+" },
-            (allocation.free_points - next.free_points).abs()
-        ),
-        None => if delta < 0 { "−" } else { "+" }.to_string(),
-    };
-    if next.is_some() {
+    let change = allocation
+        .change(draft.class, attribute, delta)
+        .expect("valid attribute change");
+    let action = t(
+        language,
+        if delta < 0 {
+            Text::Decrease
+        } else {
+            Text::Increase
+        },
+    );
+    let price = format!(
+        "{action}: {}{}",
+        if delta < 0 { "+" } else { "" },
+        points(language, change.cost.abs())
+    );
+    let reason = change
+        .blocked
+        .map(|reason| {
+            t(
+                language,
+                match reason {
+                    kn_game::NewGameChangeBlocked::Minimum => Text::AttributeMinimum,
+                    kn_game::NewGameChangeBlocked::Maximum => Text::AttributeMaximum,
+                    kn_game::NewGameChangeBlocked::InsufficientPoints => Text::InsufficientPoints,
+                },
+            )
+        })
+        .unwrap_or("");
+    let label = if delta < 0 { "−" } else { "+" };
+    let button: Box<dyn Scene> = if change.blocked.is_none() {
         Box::new(
-            bsn! { @widgets::menu_button(fonts, label.as_str()) Node { width: px(56) } AttributeButton { attribute, delta } on(adjust_attribute) },
+            bsn! { @widgets::menu_button(fonts, label) Node { width: px(32) } AttributeButton { attribute, delta } HintSource(hint) on(adjust_attribute) },
         )
     } else {
         Box::new(
-            bsn! { @widgets::menu_button(fonts, label.as_str()) Node { width: px(56) } AttributeButton { attribute, delta } bevy::ui::InteractionDisabled on(adjust_attribute) },
+            bsn! { @widgets::menu_button(fonts, label) Node { width: px(32) } AttributeButton { attribute, delta } HintSource(hint) bevy::ui::InteractionDisabled on(adjust_attribute) },
         )
+    };
+    bsn! {
+        Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: spacing::SPACE_8, flex_grow: 1.0, flex_basis: px(0), min_width: px(0) }
+        Children [
+            {EntityScene(button)}
+            --
+            Node { flex_direction: FlexDirection::Column, min_width: px(0) }
+            InheritableFont { font: {fonts.regular.clone()}, font_size: typo::CAPTION, weight: FontWeight::NORMAL }
+            Children [
+                @caption(price.as_str()) TextColor(palette::TEXT)
+                --
+                @caption(reason) TextColor(palette::TEXT_MUTED)
+            ]
+        ]
     }
 }
 

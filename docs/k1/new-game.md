@@ -100,8 +100,8 @@ because unused floating fields can contain NaN.
 The entire portrait card is a button, with original selected/unselected images.
 Tests activate the actual controls and check attribute refunds, spending,
 class reset and keyboard focus restoration across view rebuilds. The centered
-page has three columns: portrait selection, model and biography, then attributes
-and constructor choices. Cards reserve their full portrait and caption height;
+page has three columns: portrait selection; model, biography and constructor
+choices; then attributes and all derived statistics. Cards reserve their full portrait and caption height;
 the bundled Cyrillic font is also applied inside the card. Neutral buttons use
 light text and outlined raised surfaces; only amber primary buttons use dark
 text. The separate footer keeps Back left and Begin right. Escape cancels;
@@ -125,3 +125,51 @@ window confirmed separate portraits, Cyrillic captions, three centered columns
 and readable neutral buttons. Narrow-window scrolling and other DPI scales
 still need a completed pointer run: the attempted resize timed out, and the user
 subsequently took control of the window. No Windows pointer run was performed.
+
+### Allocation UX
+
+**Intentional presentation difference:** compact rows expose both actions and
+prices without hiding information in hover text. Buttons contain only minus or
+plus; adjacent localized captions name the spending/refund and explain minimum,
+maximum or insufficient funds. `Allocation::change` quotes the existing K1 cost
+function even when an increase is unaffordable; the frontend never duplicates
+price bands or trusts its own balance. Occupation controls the cost bands;
+combat and secondary specializations do not change them in the confirmed rules.
+
+All four rows remain together. Their current value shares a line with its name;
+changed rows show a quiet highlight and the current occupation's initial value.
+Free points appear above the rows and in the fixed Back/Begin footer, together
+with the original unspent-point behavior. A class-change warning is always
+visible, and an actual reset displays a brief inline result, without a dialog.
+No separate reset button is added: selecting the current occupation retains the
+existing original reset behavior.
+
+The creation root supplies a Bevy tab group. Attribute and statistic descriptions
+can receive keyboard focus; focused controls expose the same original hints as
+hovered controls. Popup bounds reserve the footer area. Tests exercise Bevy tab
+navigation, focus restoration, visible prices, reset feedback and rejected
+unaffordable activation, alongside the conserved-budget tests.
+
+Local pointer acceptance of the compact rows on macOS covered warrior strength
+15 → 14 → 13 → 12, yielding 5 → 10 → 12 free points and changing the next refund
+from 5 to 2. Increasing agility to 4 spent 2; reducing endurance to 9 refunded 5
+and immediately changed carry limit from 13.3 to 13.0. Both balance counters and
+changed-value highlights were inspected; all four attributes, other statistics
+and footer actions fit the default window without scrolling.
+
+A subsequent restart exposed a desktop-tool limitation: `getApp` and screenshots
+recognized the window, but coordinate clicks returned `noWindowsAvailable` even
+after rebinding and resetting the tool session. The final tab-group correction
+is therefore verified by the navigation test, not a completed native keyboard
+run. The earlier pointer acceptance above remains separate from that limitation.
+
+### Reusable attribute view
+
+`kn-fe-player::widgets::attributes` owns the shared four-row presentation.
+`AttributeMode::ReadOnly` takes runtime values without allocation controls,
+baselines, costs or change observers; `Editable` adds caller-supplied action
+scenes and class baselines. The creation screen adapts its validated draft to
+this widget, while a future in-game character panel can supply current values
+directly. The widget imports neither the creation reducer nor K1 allocation
+rules, and its inspection test intentionally uses values above creation limits.
+This extracts a reusable view; it does not add an in-game character panel yet.

@@ -12,6 +12,7 @@ pub mod i18n;
 pub mod session;
 
 pub mod screens;
+pub mod widgets;
 
 use std::path::PathBuf;
 

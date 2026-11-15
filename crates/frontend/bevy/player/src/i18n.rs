@@ -60,6 +60,17 @@ pub enum Text {
     LabelExperience,
     LabelGold,
     LabelFreePoints,
+    AllocationHelp,
+    Increase,
+    Decrease,
+    AttributeMinimum,
+    AttributeMaximum,
+    InsufficientPoints,
+    ClassResetHelp,
+    AllocationReset,
+    UnspentPointsHelp,
+    Baseline,
+
     Settings,
     Exit,
     Loading,
@@ -227,6 +238,52 @@ pub fn t(language: Language, text: Text) -> &'static str {
             Language::Russian => "Свободные очки",
             Language::English => "Free points",
         },
+        Text::AllocationHelp => match language {
+            Language::Russian => {
+                "Каждое нажатие изменяет характеристику на 1. Стоимость зависит от текущего значения."
+            }
+            Language::English => {
+                "Each click changes an attribute by 1. The cost depends on its current value."
+            }
+        },
+        Text::Increase => match language {
+            Language::Russian => "Повысить",
+            Language::English => "Increase",
+        },
+        Text::Decrease => match language {
+            Language::Russian => "Понизить",
+            Language::English => "Decrease",
+        },
+        Text::AttributeMinimum => match language {
+            Language::Russian => "Минимум характеристики",
+            Language::English => "Attribute minimum",
+        },
+        Text::AttributeMaximum => match language {
+            Language::Russian => "Максимум характеристики",
+            Language::English => "Attribute maximum",
+        },
+        Text::InsufficientPoints => match language {
+            Language::Russian => "Не хватает очков",
+            Language::English => "Not enough points",
+        },
+        Text::ClassResetHelp => match language {
+            Language::Russian => {
+                "Смена класса сбрасывает распределение к параметрам нового класса."
+            }
+            Language::English => "Changing class resets allocation to the new class defaults.",
+        },
+        Text::AllocationReset => match language {
+            Language::Russian => "Распределение сброшено к параметрам класса.",
+            Language::English => "Allocation reset to class defaults.",
+        },
+        Text::UnspentPointsHelp => match language {
+            Language::Russian => "Неиспользованные очки сохранятся в игре.",
+            Language::English => "Unspent points carry into the game.",
+        },
+        Text::Baseline => match language {
+            Language::Russian => "Исходное",
+            Language::English => "Default",
+        },
         Text::Settings => match language {
             Language::Russian => "Настройки",
             Language::English => "Settings",
@@ -283,6 +340,19 @@ pub fn t(language: Language, text: Text) -> &'static str {
     }
 }
 
+/// Localized point counts, including Russian singular and plural forms.
+pub fn points(language: Language, count: i32) -> String {
+    let noun = match language {
+        Language::English if count == 1 => "point",
+        Language::English => "points",
+        Language::Russian if (11..=14).contains(&(count % 100)) => "очков",
+        Language::Russian if count % 10 == 1 => "очко",
+        Language::Russian if (2..=4).contains(&(count % 10)) => "очка",
+        Language::Russian => "очков",
+    };
+    format!("{count} {noun}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,6 +394,16 @@ mod tests {
             Text::LabelExperience,
             Text::LabelGold,
             Text::LabelFreePoints,
+            Text::AllocationHelp,
+            Text::Increase,
+            Text::Decrease,
+            Text::AttributeMinimum,
+            Text::AttributeMaximum,
+            Text::InsufficientPoints,
+            Text::ClassResetHelp,
+            Text::AllocationReset,
+            Text::UnspentPointsHelp,
+            Text::Baseline,
             Text::Settings,
             Text::Exit,
             Text::Loading,

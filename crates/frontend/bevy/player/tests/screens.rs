@@ -500,6 +500,35 @@ fn attribute_buttons_refund_spend_reset_and_preserve_keyboard_focus() {
             .unwrap()
             .0
     };
+    let captions = strings(&mut app);
+    assert_eq!(
+        captions
+            .iter()
+            .filter(|text| text.as_str() == "Свободные очки: 0")
+            .count(),
+        2
+    );
+    assert!(captions.iter().any(|text| text == "Повысить: 2 очка"));
+    assert!(captions.iter().any(|text| text == "Понизить: +5 очков"));
+    assert!(captions.iter().any(|text| text == "Не хватает очков"));
+    assert!(
+        !captions
+            .iter()
+            .any(|text| text.starts_with("− ") || text.starts_with("+ "))
+    );
+    let unavailable = button(&mut app, 0, 1);
+    app.world_mut().trigger(bevy::ui_widgets::Activate {
+        entity: unavailable,
+    });
+    app.update();
+    assert_eq!(
+        app.world()
+            .resource::<AppFlow>()
+            .state()
+            .new_game_draft
+            .attributes,
+        None
+    );
     let minus = button(&mut app, 2, -1);
     app.world_mut()
         .insert_resource(InputFocus::from_entity(minus));
@@ -508,11 +537,50 @@ fn attribute_buttons_refund_spend_reset_and_preserve_keyboard_focus() {
     app.update();
     let draft = app.world().resource::<AppFlow>().state().new_game_draft;
     assert_eq!(draft.attributes, Some([3, 3, 14, 10]));
+    assert!(
+        strings(&mut app)
+            .iter()
+            .any(|text| text == "Свободные очки: 5")
+    );
+    assert!(strings(&mut app).iter().any(|text| text == "Исходное: 15"));
     let focused = app.world().resource::<InputFocus>().get().unwrap();
     assert_eq!(
         app.world().get::<AttributeButton>(focused).unwrap().delta,
         -1
     );
+    app.insert_resource(bevy::input_focus::InputFocusVisible(true));
+    app.update();
+    let hint = app
+        .world_mut()
+        .query::<&HintPopup>()
+        .iter(app.world())
+        .next()
+        .unwrap();
+    assert_eq!(
+        hint.0, 8,
+        "keyboard focus exposes the strength hint without hovering"
+    );
+    // This headless app omits the renderer's visibility propagation.
+    for mut visibility in app
+        .world_mut()
+        .query::<&mut InheritedVisibility>()
+        .iter_mut(app.world_mut())
+    {
+        *visibility = InheritedVisibility::VISIBLE;
+    }
+    let strength_plus = button(&mut app, 2, 1);
+    let mut navigation = bevy::ecs::system::SystemState::<
+        bevy::input_focus::tab_navigation::TabNavigation,
+    >::new(app.world_mut());
+    let next = navigation
+        .get(app.world())
+        .expect("tab navigation resources exist")
+        .navigate(
+            app.world().resource::<InputFocus>(),
+            bevy::input_focus::tab_navigation::NavAction::Next,
+        )
+        .expect("the creation screen provides a working tab group");
+    assert_eq!(next, strength_plus);
     let plus = button(&mut app, 0, 1);
     app.world_mut()
         .trigger(bevy::ui_widgets::Activate { entity: plus });
@@ -525,10 +593,33 @@ fn attribute_buttons_refund_spend_reset_and_preserve_keyboard_focus() {
             .free_points,
         3
     );
+    let before = app
+        .world()
+        .resource::<AppFlow>()
+        .state()
+        .new_game_draft
+        .attributes;
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::HeroSelect(HeroSelectAction::SetCombatStyle(1)));
+    app.update();
+    assert_eq!(
+        app.world()
+            .resource::<AppFlow>()
+            .state()
+            .new_game_draft
+            .attributes,
+        before
+    );
     app.world_mut()
         .resource_mut::<AppFlow>()
         .submit(Action::HeroSelect(HeroSelectAction::SetClass(1)));
     app.update();
+    assert!(
+        strings(&mut app)
+            .iter()
+            .any(|text| text == "Распределение сброшено к параметрам класса.")
+    );
     assert_eq!(
         app.world()
             .resource::<AppFlow>()
