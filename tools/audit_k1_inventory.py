@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pefile
-from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc
+from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_MODE_32, Uc
 from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EIP, UC_X86_REG_ESP
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -110,9 +110,10 @@ BUILDS = (
 
 
 class Probe:
-    def __init__(self, build, *, intact=False):
+    def __init__(self, build, *, intact=False, actor=ACTOR):
         self.build = build
         self.intact = intact
+        self.actor = actor
         executable = pefile.PE(str(ROOT / "original/k1" / build.path))
         image = executable.get_memory_mapped_image()
         self.machine = Uc(UC_ARCH_X86, UC_MODE_32)
@@ -179,12 +180,12 @@ class Probe:
         return self.machine.reg_read(UC_X86_REG_EAX)
 
     def reset(self, *, state=0, class_id=5):
-        self.machine.mem_write(ACTOR, bytes(256))
-        self.write(ACTOR, state, "B")
-        self.write(ACTOR + 4, class_id, "B")
+        self.machine.mem_write(self.actor, bytes(256))
+        self.write(self.actor, state, "B")
+        self.write(self.actor + 4, class_id, "B")
         for offset in (0x54, 0x58, 0x5E, 0x62):
-            self.write(ACTOR + offset, 20, "h")
-        self.write(SELECTED, ACTOR)
+            self.write(self.actor + offset, 20, "h")
+        self.write(SELECTED, self.actor)
         for address in (CURSOR, HELD, 0x81D638, 0x81D610, 0x81D600, 0x81D5AC):
             self.write(address, 0)
         self.machine.mem_write(BONUS + self.build.table_delta, bytes(16))
@@ -192,14 +193,14 @@ class Probe:
         for index in range(40):
             self.item(index, 0)
         self.write(0x81D624, 0)
-        self.write(0x81A814, ACTOR)
+        self.write(0x81A814, self.actor)
         self.idle_requests = 0
         self.carried_weight = self.held_weight = 0
         if self.intact:
             for offset in (0x56, 0x5A, 0x60, 0x64):
-                self.write(ACTOR + offset, 20, "h")
-            self.write(ACTOR + 0xD2, -1, "b")
-            self.write(ACTOR + 0xD3, -1, "b")
+                self.write(self.actor + offset, 20, "h")
+            self.write(self.actor + 0xD2, -1, "b")
+            self.write(self.actor + 0xD3, -1, "b")
             self.machine.mem_write(BONUS + self.build.table_delta, bytes(74 * 16))
 
     def item(self, index, kind, *, bonus=-1, info=0):
@@ -211,13 +212,13 @@ class Probe:
     def inventory(self, values=None):
         if values is not None:
             self.machine.mem_write(
-                ACTOR + 0x72, struct.pack("<32H", *(values + [0] * (32 - len(values))))
+                self.actor + 0x72, struct.pack("<32H", *(values + [0] * (32 - len(values))))
             )
-        return list(struct.unpack("<32H", self.machine.mem_read(ACTOR + 0x72, 64)))
+        return list(struct.unpack("<32H", self.machine.mem_read(self.actor + 0x72, 64)))
 
     def take(self, item_id, kind=32):
         self.call(self.build.cursor, ITEMS + 16 * item_id)
-        self.call(self.build.extract, ACTOR, kind, item_id)
+        self.call(self.build.extract, self.actor, kind, item_id)
 
     def bonus(self, index, *effects, requirement=(0, 0)):
         record = bytearray(16)
@@ -570,6 +571,98 @@ def intact_requirements(probe):
     return count + 1
 
 
+def remaining_requirements(probe):
+    """Exercise all remaining requirement selectors present in the owned bonus tables."""
+    count = 0
+    for kind in (2, 6):
+        for unidentified in (0, 1):
+            for charm in (19, 20, 21):
+                for threshold in (19, 20, 21):
+                    probe.reset()
+                    probe.write(ACTOR + 0x5A, charm, "h")
+                    probe.write(ACTOR + 0x58, 99, "h")
+                    probe.bonus(0, requirement=(1, threshold))
+                    candidate = probe.item(1, kind, bonus=0)
+                    probe.write(candidate + 14, unidentified, "B")
+                    assert probe.call(probe.build.requirement, ACTOR, candidate) == (
+                        charm >= threshold
+                    )
+                    assert probe.call(probe.build.attribute, ACTOR, 1) == charm
+                    assert probe.call(probe.build.attribute, ACTOR, 3) == charm
+                    count += 1
+
+            for health in (-17, -16, -15, -1, 0, 1, 15, 16, 17, 319, 320, 321, 335, 336):
+                for threshold in (1, 19, 20, 21):
+                    probe.reset()
+                    probe.write(ACTOR + 0x5C, health, "h")
+                    probe.bonus(0, requirement=(4, threshold))
+                    candidate = probe.item(1, kind, bonus=0)
+                    probe.write(candidate + 14, unidentified, "B")
+                    expected = (abs(health) // 16) * (1 if health >= 0 else -1)
+                    assert probe.call(probe.build.requirement, ACTOR, candidate) == (
+                        expected >= threshold
+                    )
+                    assert probe.call(probe.build.attribute, ACTOR, 4) == expected & 0xFFFFFFFF
+                    count += 1
+
+            for additive, bonus in ((1, 5), (0, 20), (0, 0)):
+                for support_unidentified in (0, 1):
+                    expected = 25 if support_unidentified or bonus == 0 else 25 * additive + bonus
+                    for threshold in (expected - 1, expected, expected + 1):
+                        probe.reset()
+                        probe.write(ACTOR + 0x4E, 10, "h")
+                        probe.bonus(0, requirement=(7, threshold))
+                        probe.bonus(1, (7, additive, bonus))
+                        armor = probe.item(2, 3, bonus=1, info=1)
+                        probe.write(armor + 14, support_unidentified, "B")
+                        probe.write(ACTOR + 0x6C, 2, "H")
+                        probe.write(
+                            EQUIPMENT_REQUIREMENT + probe.build.table_delta - 4 + 64, 15, "h"
+                        )
+                        candidate = probe.item(1, kind, bonus=0)
+                        probe.write(candidate + 14, unidentified, "B")
+                        assert probe.call(probe.build.requirement, ACTOR, candidate) == (
+                            expected >= threshold
+                        )
+                        assert probe.call(probe.build.attribute, ACTOR, 7) == expected
+                        count += 1
+    return count
+
+
+def negative_accessory_bonus(probe):
+    """Expose the helper's unchecked negative index, not an allowed gameplay rule."""
+    count = 0
+    prefix = BONUS + probe.build.table_delta - 16
+    reads = []
+
+    def observe_read(machine, access, address, size, value, data):
+        reads.append(address)
+
+    hook = probe.machine.hook_add(UC_HOOK_MEM_READ, observe_read, begin=prefix, end=prefix + 15)
+    try:
+        for kind, slot in ((6, 14), (7, 15), (7, 16), (8, 17), (8, 18)):
+            for unidentified in (0, 1):
+                for threshold in (19, 20, 21):
+                    probe.reset()
+                    probe.machine.mem_write(prefix, bytes(16))
+                    probe.write(prefix + 2, 5, "b")
+                    probe.write(prefix + 3, threshold, "b")
+                    candidate = probe.item(1, kind, bonus=-1)
+                    probe.write(candidate + 14, unidentified, "B")
+                    probe.inventory([1])
+                    probe.take(1)
+                    reads.clear()
+                    expected = threshold <= 20
+                    assert probe.call(probe.build.accessory, slot) == expected
+                    assert prefix + 3 in reads
+                    assert probe.read(ACTOR + 0xB2 + 2 * (slot - 14), "H") == expected
+                    assert probe.inventory()[0] == int(not expected)
+                    count += 1
+    finally:
+        probe.machine.hook_del(hook)
+    return count
+
+
 def intact_mass(probe):
     """Read masses from synthetic EXE tables; arrows use the raw integer quantity."""
     count = 0
@@ -687,12 +780,24 @@ def main():
             intact_mass=intact_mass(intact),
             intact_operations=intact_operations(intact),
         )
-        print(build.path.split("/")[0], results, "original calls:", probe.calls + intact.calls)
+        remaining = Probe(build, intact=True)
+        negative = Probe(build, intact=True)
+        results.update(
+            remaining_requirements=remaining_requirements(remaining),
+            negative_accessory_bonus=negative_accessory_bonus(negative),
+        )
+        print(
+            build.path.split("/")[0],
+            results,
+            "original calls:",
+            probe.calls + intact.calls + remaining.calls + negative.calls,
+        )
     print("Legacy matrices: recalculation and weights supplied. New intact_* and recalculation")
     print("matrices execute game recalculation/mass bodies; CRT memcpy/memset modeled;")
-    print("sound/UI skipped. ENG protected memset is not executed.")
+    print("sound/UI skipped. ENG raw-PE memset is not executed; its failure cause is unknown.")
     print("Shooting cancellation checked through idle request; idle transition itself skipped.")
     print("No runtime UI, combat damage or ownership validation claim.")
+    print("Negative accessory bonus accesses before the table; this is not a valid item rule.")
 
 
 if __name__ == "__main__":
