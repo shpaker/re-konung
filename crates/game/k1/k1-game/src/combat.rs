@@ -4,17 +4,17 @@ use crate::rules::{Ground, Random, group, neighbour};
 
 /// Only placed creatures enter this snapshot, in character-record order.
 #[derive(Debug, Clone, Copy)]
-pub struct Combatant {
-    pub id: usize,
+pub struct Combatant<Id = usize> {
+    pub id: Id,
     pub group: usize,
     pub group_kind: u8,
     pub class_id: u8,
     pub state: u8,
     pub cell: (i16, i16),
-    pub target: Option<usize>,
+    pub target: Option<Id>,
 }
 
-impl Combatant {
+impl<Id: Copy> Combatant<Id> {
     pub fn alive(self) -> bool {
         self.class_id & 0x80 == 0 && !matches!(self.state, 3 | 9)
     }
@@ -35,7 +35,7 @@ pub fn ambush(class_id: u8) -> bool {
     matches!(class_id, 0x44 | 0x57)
 }
 
-pub fn opponents(attacker: Combatant, target: Combatant) -> bool {
+pub fn opponents<Id: Copy>(attacker: Combatant<Id>, target: Combatant<Id>) -> bool {
     attacker.alive()
         && target.alive()
         && attacker.group != target.group
@@ -44,7 +44,10 @@ pub fn opponents(attacker: Combatant, target: Combatant) -> bool {
 }
 
 /// Caller gates acquisition on the group's live combat decision and animation readiness.
-pub fn monster_target(attacker: Combatant, creatures: &[Combatant]) -> Option<usize> {
+pub fn monster_target<Id: Copy + Ord>(
+    attacker: Combatant<Id>,
+    creatures: &[Combatant<Id>],
+) -> Option<Id> {
     if !attacker.roaming() || !attacker.alive() || matches!(attacker.class_id, 0x51..=0x53) {
         return None;
     }
@@ -91,7 +94,10 @@ pub fn monster_target(attacker: Combatant, creatures: &[Combatant]) -> Option<us
 }
 
 /// An explicit move/attack order suppresses this response in the caller.
-pub fn retaliation(attacker: Combatant, creatures: &[Combatant]) -> Option<usize> {
+pub fn retaliation<Id: Copy + Eq>(
+    attacker: Combatant<Id>,
+    creatures: &[Combatant<Id>],
+) -> Option<Id> {
     (0..8).find_map(|direction| {
         let cell = neighbour(attacker.cell, direction)?;
         creatures

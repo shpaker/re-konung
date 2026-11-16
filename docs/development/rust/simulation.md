@@ -169,8 +169,9 @@ cargo test --release --manifest-path crates/Cargo.toml -p k1-game \
 попадания. Показатель завершения взмаха не является уроном. Настоящий герой
 и бродячие существа участвуют в бою; отладочный маркер просмотрщика не
 получает ручных боевых команд.
-Маркер продолжает проверять восприятие групп, но не заменяет настоящего
-героя при выборе боевой цели и не провоцирует погоню за далёким героем.
+Отладочный игрок участвует в общем выборе цели наряду с живыми участниками
+игрока. Выбор маркера запускает только преследование до соседней клетки,
+без взмаха; выбор настоящего героя сохраняет существующий ближний бой.
 
 Проверки: синтетические `simulation::melee::tests` покрывают очередность
 приказов, преследование, удержание, ответ, отсутствие кадров, толпу,
@@ -252,33 +253,58 @@ KonungLightingPlugin применяет KonungLightMaterial (MaterialExtension2d
 - **Отказы загрузки — данные; ошибки определяют код завершения.** Simulation::new вызывает placement::place_roaming до создания мира, поэтому CLI simulate, тесты и просмотрщик размещают бродячие отряды одинаково. Прежде CLI буквально использовал файловые ячейки и отвергал целые отряды как ImpassableCell. Теперь остаются отказы записей, для которых нет правила перемещения. Simulation::spawn_failures содержит причины по записям, например жителя в заблокированной ячейке; Simulation::load_trimmed — усечение GroupSize. Это свойства поставляемых файлов, отражаемые в отчёте как данные. Списки обоих изданий закреплены в apps/viewer/tests/original_simulate.rs и [исследовании отказов загрузки](../../research/k1/creatures/placement.md#load-time-refusals). Запуск неуспешен только при order_failures или ошибке построения. Simulation::goal_reaches считает прибытия по событиям Arrived и классифицирует цель геометрически как рабочее место или прогулку; категория не доказывает исходную ветвь решения. См. [достижение целей](../../research/k1/creatures/placement.md#goal-reach). Отчёт выводит счётчики; фиксированный seed воспроизводит их, что проверяется на обоих изданиях, а не только RUS, как раньше.
 - **Дороги не подтверждены.** В Konung.N нет отдельного слоя дорог; мелкая сетка содержит только is_blocked (`foot & 0x0F == 0x0F`). MapPassage равен строго !is_blocked, без предпочтений дороги или местности. passage_is_the_confirmed_foot_rule_only отвергает добавление неподтверждённого правила. Возможное предпочтение дорог оригинальным маршрутизатором не восстановлено и не выдумывается; см. [перемещение K1](../../research/k1/movement.md).
 
-## Runtime debug player and command history
+## Отладочный игрок и история команд
 
-The debug player is a runtime tool, not a new game rule or a modification of
-`Game.N`. `Game::debug_player_profile` resolves the session's source and hero,
-then chooses the first living player-group member on that hero's start map with
-valid facing and all eight walk durations. Those durations are the raw walk-frame
-counts; missing rows return zero and make a candidate unavailable. The movement
-engine's unknown-id one-tick fallback is never used for this actor. Tests compare
-the profile against independently decoded raw counts for every available hero in
-both local editions (`original_debug_player.rs`).
+Отладочный игрок существует только в сеансе, не меняя `Game.N`.
+`Game::debug_player_profile` выбирает первого живого участника группы игрока
+на стартовой карте выбранного героя с допустимым направлением и всеми восемью
+длительностями ходьбы. Длительности берутся из числа кадров; отсутствующая
+последовательность делает профиль недоступным. Тест `original_debug_player.rs`
+сравнивает профиль с независимо прочитанными ресурсами всех героев обоих изданий.
 
-Placement, movement and removal use the existing `World` operations. Pace is
-registered against the actual returned `CreatureId`; removal leaves original
-record identities and every other actor's movement untouched. A separate runtime
-identity names the marker. The actor participates in the existing player-group
-live picture, so the already recovered squad-state calculation sees it. There is
-no added combat response: `PlayerInside` still means no new order, and does not
-stop an order already in flight. The original rules remain documented in
-[creature behavior](../../research/k1/creatures/behavior.md).
+Размещение, движение и удаление используют `World`; длительность шага связана
+с возвращённым `CreatureId`. Отдельный runtime ID маркера не совпадает по смыслу
+с номером записи персонажа. Общая политика выбора цели рассматривает живые
+записи в исходном порядке, затем маркер; отдельного приоритета маркера нет.
+При выборе настоящего персонажа сохраняется `AttackOrder`, а для маркера
+`DebugPursuit` хранит runtime ID, клетку и состояние
+`Pending/Approaching/InRange/Finished/Refused`. Это независимый от кадров атаки
+срез #79: соседняя свободная клетка означает `InRange`, без удара или урона.
 
-`Simulation::debug_snapshot` exposes actual current steps, remaining route cells,
-requested and accepted targets, and signed group rectangles. A pending retarget
-may differ from the route endpoint while a step finishes. A stopped mid-step
-actor still exposes that step's destination. The second rectangle remains raw
-data with no inferred chase role. Squad diagnostics distinguish the exact
-pre-movement state used by the last decision pass from a recomputed preview after
-a paused command; the stored, unknown `ai_state` byte is not substituted.
+Преследование использует существующий A* с `GoalPolicy::Adjacent`, занятостью
+и задержкой повторного поиска. Смена клетки цели обновляет маршрут, не обрывая
+начатый шаг. Граница удержания проверяется по восстановленному условию,
+а переход группы в покой сам по себе не отменяет уже назначенную цель.
+После `InRange` уход цели завершает намерение; новое приобретение на следующем
+тике снова требует подтверждённых условий, как выход исходного ближнего состояния.
+Удаление маркера замечается на следующем тике: дальнейший маршрут прекращается,
+начатый шаг завершается, затем действуют обычные решения покоя/возврата.
+Новая постановка получает новый ID и не оживляет прежний приказ.
+Исходные правила и ограничения уверенности — в [исследовании боя](../../research/k1/creatures/combat.md).
+
+`Simulation::debug_snapshot` показывает текущий шаг, оставшийся маршрут,
+запрошенную/принятую клетку назначения и отдельный `pursuit`. Цель преследования
+не смешивается с конечной свободной клеткой маршрута. Второй прямоугольник
+показывает подтверждённую область удержания; исходные знаковые координаты
+сохраняются. Диагностика различает состояние группы, использованное перед
+последним шагом, и текущий предварительный пересчёт. Неизвестный файловый
+`ai_state` не подменяет эти состояния.
+
+`original_pursuit.rs` проверяет две постановки на карте 17 в обоих изданиях:
+спокойный отряд стоит, обнаруживает маркер, сближается и останавливается рядом
+при полностью отключённых кадрах ближнего боя. На каждом тике проверяются
+проходимость и уникальность занятых клеток; повторный запуск и перемотка
+журнала дают те же события и снимки состояния.
+
+Замер 2026-11-16: Apple M4 Pro, macOS 27.0.1 arm64, rustc 1.99.1, `release`, ENG,
+карта 17, seed 42, 28 существ. Команда:
+`cargo test --manifest-path crates/Cargo.toml -p kn-game --release --test original_pursuit pursuit_tick_cost -- --ignored --nocapture`.
+Спокойная симуляция — 5,56 мкс/тик за 10000 тиков; постановка маркера с
+последующим сближением и удержанием — 4,69 мкс/тик за 10000 тиков.
+Первый тик после постановки, включая новые A* маршруты, — 838,91 мкс
+в среднем по 100 свежим сценам. Последняя величина измеряет приобретение
+и маршрутизацию, а длинный прогон в основном — стояние рядом с целью;
+эти числа не означают ускорения одного алгоритма относительно другого.
 
 `DebugJournal` is a Bevy-free sidecar around an existing `Simulation`. It holds
 ordered logical tick/sequence entries and receives the same map/hero/seed factory

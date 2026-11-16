@@ -408,6 +408,7 @@ fn add_enemy(simulation: &mut Simulation, cell: Cell) -> usize {
     simulation.ids.push(Some(world_id));
     simulation.by_creature.push(id);
     simulation.melee.orders.push(None);
+    simulation.melee.pursuits.push(None);
     simulation.melee.target_cells.push(None);
     simulation.melee.retry_at.push(0);
     simulation.melee.retreating.push(false);
@@ -653,4 +654,383 @@ fn a_viewer_marker_does_not_send_monsters_after_a_distant_real_hero() {
     }
     assert_eq!(simulation.group_states[1], GroupState::PlayerInside);
     assert_eq!(simulation.attack_order(1), None);
+}
+
+fn debug_profile() -> crate::debug::DebugPlayerProfile {
+    crate::debug::DebugPlayerProfile {
+        hero: 0,
+        character: 0,
+        group: 0,
+        direction: 0,
+        class_id: 5,
+        recorded_state: 0,
+        step_ticks: [1; 8],
+    }
+}
+
+fn place_debug(simulation: &mut Simulation, cell: (u32, u32)) {
+    simulation
+        .apply_debug_command(
+            &crate::debug::DebugCommand::Place { cell },
+            Some(&debug_profile()),
+            || Err("not resetting".into()),
+        )
+        .unwrap();
+}
+
+fn debug_encounter() -> Simulation {
+    let (mut simulation, _) = fixture(0x42, Cell::new(10, 80));
+    simulation.roster[1].spawn.left = 30;
+    simulation.configure_melee_frames(vec![[0; 8]; 2]);
+    place_debug(&mut simulation, (35, 80));
+    simulation
+}
+
+#[test]
+fn debug_pursuit_reaches_a_free_neighbour_without_an_attack_contract() {
+    let mut simulation = debug_encounter();
+    simulation.tick();
+    assert_eq!(simulation.group_states[1], GroupState::PlayerInside);
+    assert_eq!(
+        simulation.debug_pursuit(1).unwrap().status,
+        PursuitStatus::Approaching
+    );
+    assert_eq!(simulation.debug_pursuit(1).unwrap().target_id, 0);
+    advance_until(&mut simulation, |simulation| {
+        simulation.debug_pursuit(1).unwrap().status == PursuitStatus::InRange
+    });
+    for _ in 0..40 {
+        simulation.tick();
+        let creature = simulation.world.state(simulation.ids[1].unwrap()).unwrap();
+        let player = simulation.debug_player().unwrap().movement;
+        assert!(
+            Direction::between(creature.cell, Cell::new(player.cell.0, player.cell.1)).is_some()
+        );
+        assert!(!creature.moving);
+        assert_eq!(simulation.attack_order(1), None);
+        assert_eq!(simulation.creature_stage(1), Some(CreatureStage::Idle));
+        assert_eq!(
+            simulation.inspect_creature(1).unwrap().pursuit,
+            simulation.debug_pursuit(1)
+        );
+    }
+}
+
+#[test]
+fn calm_groups_do_not_acquire_a_distant_debug_target() {
+    let (mut simulation, _) = fixture(0x42, Cell::new(10, 80));
+    place_debug(&mut simulation, (35, 80));
+    for _ in 0..40 {
+        assert!(simulation.tick().is_empty());
+        assert_eq!(simulation.debug_pursuit(1), None);
+        assert_eq!(simulation.group_states[1], GroupState::Calm);
+    }
+}
+
+#[test]
+fn debug_pursuit_retargets_then_abandons_a_moved_target_outside_the_leash() {
+    // Retention: original 0x41212A/0x41213A, rectangle 0x412170..0x4121A4.
+    let mut simulation = debug_encounter();
+    simulation.tick();
+    simulation
+        .apply_debug_command(
+            &crate::debug::DebugCommand::Move { cell: (25, 80) },
+            None,
+            || Err("not resetting".into()),
+        )
+        .unwrap();
+    let mut changes = 0;
+    for _ in 0..40 {
+        let target = simulation.debug_player().unwrap().movement.cell;
+        let old = simulation.melee.target_cells[1];
+        simulation.tick();
+        let pursuit = simulation.debug_pursuit(1).unwrap();
+        if pursuit.status == PursuitStatus::Finished {
+            assert!(target.0 < 30);
+            assert!(changes > 0);
+            return;
+        }
+        if old.is_some_and(|cell| (cell.column, cell.row) != target) {
+            assert_eq!(pursuit.target_cell, target);
+            changes += 1;
+        }
+    }
+    panic!("target never crossed the retention boundary");
+}
+
+#[test]
+fn debug_target_removal_finishes_the_step_then_returns_without_reusing_identity() {
+    let mut simulation = debug_encounter();
+    simulation.tick();
+    let old_target = simulation.debug_pursuit(1).unwrap().target_id;
+    let before = simulation
+        .world
+        .debug_state(simulation.ids[1].unwrap())
+        .unwrap();
+    simulation
+        .apply_debug_command(&crate::debug::DebugCommand::Remove, None, || {
+            Err("not resetting".into())
+        })
+        .unwrap();
+    let after = simulation
+        .world
+        .debug_state(simulation.ids[1].unwrap())
+        .unwrap();
+    assert_eq!(
+        crate::debug::MovementDebugSnapshot::from(before),
+        crate::debug::MovementDebugSnapshot::from(after),
+        "removal does not mutate another actor before a tick"
+    );
+    simulation.tick();
+    assert_eq!(
+        simulation.debug_pursuit(1).unwrap().status,
+        PursuitStatus::Refused(PursuitError::TargetUnavailable)
+    );
+    for _ in 0..100 {
+        simulation.tick();
+    }
+    let actor = simulation.world.state(simulation.ids[1].unwrap()).unwrap();
+    assert!(inside_rectangle(simulation.roster[1].spawn, actor.cell));
+    assert!(!actor.moving);
+    place_debug(&mut simulation, (35, 80));
+    simulation.tick();
+    assert_ne!(simulation.debug_player().unwrap().id, old_target);
+    assert_eq!(
+        simulation.debug_pursuit(1).unwrap().target_id,
+        simulation.debug_player().unwrap().id
+    );
+}
+
+#[test]
+fn a_live_hero_and_marker_share_the_existing_target_ranking() {
+    let (mut simulation, _) = fixture(0x42, Cell::new(42, 80));
+    place_debug(&mut simulation, (44, 80));
+    simulation.tick();
+    assert_eq!(simulation.attack_order(1).unwrap().target_id, 0);
+    assert_eq!(simulation.debug_pursuit(1), None);
+    let mut simulation = debug_encounter();
+    simulation.tick();
+    assert!(simulation.debug_pursuit(1).is_some());
+    assert_eq!(simulation.attack_order(1), None);
+}
+
+#[test]
+fn failed_debug_routes_have_one_refusal_per_cooldown() {
+    let mut simulation = debug_encounter();
+    for row in 0..FINE_HEIGHT {
+        simulation.world.passage_mut().blocked.insert((41, row));
+    }
+    let events = simulation.tick();
+    assert_eq!(
+        simulation.debug_pursuit(1).unwrap().status,
+        PursuitStatus::Refused(PursuitError::NoRoute)
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::NoRoute { .. }))
+            .count(),
+        1
+    );
+    for _ in 0..20 {
+        assert!(
+            !simulation
+                .tick()
+                .iter()
+                .any(|event| matches!(event, Event::RouteSet { .. } | Event::NoRoute { .. }))
+        );
+    }
+    assert!(simulation.order_failures().is_empty());
+}
+
+#[test]
+fn target_death_during_a_chase_abandons_the_old_route() {
+    // Target filtering: original selectors 0x420098 (RUS) / 0x42011C (ENG).
+    for death_state in [None, Some(3), Some(9)] {
+        let (mut simulation, _) = fixture(0x42, Cell::new(35, 80));
+        simulation.roster[1].spawn.left = 30;
+        let id = simulation.ids[1].unwrap();
+        let events = simulation.tick();
+        assert!(events.iter().any(|event| matches!(event,
+            Event::RouteSet { creature, .. } if *creature == id)));
+        assert_eq!(
+            simulation.attack_order(1).unwrap().status,
+            AttackStatus::Approaching
+        );
+        let before = simulation.world.state(id).unwrap();
+        let next = before.step_to.unwrap();
+        if let Some(state) = death_state {
+            simulation.roster[0].state = state;
+        } else {
+            simulation.roster[0].class_id |= 0x80;
+        }
+        assert!(
+            simulation.tick().is_empty(),
+            "in-flight step continues without a new route"
+        );
+        assert_eq!(
+            simulation.attack_order(1).unwrap().status,
+            AttackStatus::Refused(AttackError::TargetUnavailable)
+        );
+        assert_eq!(simulation.world.state(id).unwrap().cell, before.cell);
+        let direction = Direction::between(before.cell, next).unwrap();
+        assert_eq!(
+            simulation.tick(),
+            vec![Event::StepFinished {
+                creature: id,
+                cell: next,
+                direction
+            },]
+        );
+        for _ in 0..20 {
+            assert!(simulation.tick().is_empty());
+        }
+        assert!(simulation.world.debug_state(id).unwrap().route.is_empty());
+        assert_eq!(simulation.group_states[1], GroupState::Calm);
+    }
+}
+
+#[test]
+fn debug_pursuit_snapshots_and_events_replay_identically() {
+    let mut first = debug_encounter();
+    let mut second = debug_encounter();
+    for tick in 0..100 {
+        for simulation in [&mut first, &mut second] {
+            if tick == 30 {
+                simulation
+                    .apply_debug_command(
+                        &crate::debug::DebugCommand::Move { cell: (32, 80) },
+                        None,
+                        || Err("not resetting".into()),
+                    )
+                    .unwrap();
+            }
+            if tick == 60 {
+                simulation
+                    .apply_debug_command(&crate::debug::DebugCommand::Remove, None, || {
+                        Err("not resetting".into())
+                    })
+                    .unwrap();
+            }
+        }
+        assert_eq!(first.tick(), second.tick());
+        assert_eq!(first.debug_snapshot(), second.debug_snapshot());
+    }
+}
+
+#[test]
+fn a_static_debug_target_keeps_its_chase_after_the_group_becomes_calm() {
+    // No retention-rectangle check for an unchanged destination: original 0x41213A.
+    let mut simulation = debug_encounter();
+    simulation.melee.leashes[1].left = 40;
+    simulation.tick();
+    simulation.roster[1].spawn.left = 40;
+    simulation.tick();
+    assert_eq!(simulation.group_states[1], GroupState::Calm);
+    assert_eq!(
+        simulation.debug_pursuit(1).unwrap().status,
+        PursuitStatus::Approaching
+    );
+    advance_until(&mut simulation, |simulation| {
+        simulation.debug_pursuit(1).unwrap().status == PursuitStatus::InRange
+    });
+    assert_eq!(simulation.debug_pursuit(1).unwrap().target_cell, (35, 80));
+    assert_eq!(simulation.group_states[1], GroupState::MemberOutside);
+}
+
+#[test]
+fn resetting_positions_clears_runtime_pursuit_state() {
+    let mut simulation = debug_encounter();
+    simulation.tick();
+    assert!(simulation.debug_pursuit(1).is_some());
+    let (fresh, _) = fixture(0x42, Cell::new(10, 80));
+    simulation.adopt_positions_from(fresh);
+    assert_eq!(simulation.debug_pursuit(1), None);
+    assert_eq!(simulation.debug_player(), None);
+}
+
+#[test]
+fn a_debug_target_leaving_range_is_reacquired_only_while_the_group_is_active() {
+    for stays_inside in [false, true] {
+        let (mut simulation, _) = fixture(0x42, Cell::new(10, 80));
+        if stays_inside {
+            simulation.roster[1].spawn.left = 40;
+        }
+        simulation.configure_melee_frames(vec![[0; 8]; 2]);
+        place_debug(&mut simulation, (42, 80));
+        simulation.tick();
+        assert_eq!(
+            simulation.debug_pursuit(1).unwrap().status,
+            PursuitStatus::InRange
+        );
+        simulation
+            .apply_debug_command(
+                &crate::debug::DebugCommand::Move { cell: (41, 80) },
+                None,
+                || Err("not resetting".into()),
+            )
+            .unwrap();
+        advance_until(&mut simulation, |simulation| {
+            simulation.debug_pursuit(1).unwrap().status == PursuitStatus::Finished
+        });
+        assert_eq!(simulation.debug_pursuit(1).unwrap().target_cell, (42, 80));
+        simulation.tick();
+        if stays_inside {
+            assert!(simulation.debug_pursuit(1).unwrap().status.active());
+        } else {
+            assert_eq!(simulation.group_states[1], GroupState::Calm);
+            assert_eq!(
+                simulation.debug_pursuit(1).unwrap().status,
+                PursuitStatus::Finished
+            );
+        }
+    }
+}
+
+#[test]
+fn ambush_classes_never_chase_a_debug_target_beyond_their_neighbours() {
+    for class_id in [0x44, 0x57] {
+        let mut simulation = debug_encounter();
+        simulation.roster[1].class_id = class_id;
+        for _ in 0..5 {
+            simulation.tick();
+            assert_eq!(simulation.debug_pursuit(1), None);
+        }
+        simulation
+            .apply_debug_command(&crate::debug::DebugCommand::Remove, None, || {
+                Err("not resetting".into())
+            })
+            .unwrap();
+        place_debug(&mut simulation, (42, 80));
+        simulation.tick();
+        assert_eq!(
+            simulation.debug_pursuit(1).unwrap().status,
+            PursuitStatus::InRange
+        );
+        simulation
+            .apply_debug_command(
+                &crate::debug::DebugCommand::Move { cell: (41, 80) },
+                None,
+                || Err("not resetting".into()),
+            )
+            .unwrap();
+        advance_until(&mut simulation, |simulation| {
+            simulation.debug_pursuit(1).unwrap().status == PursuitStatus::Finished
+        });
+        for _ in 0..10 {
+            simulation.tick();
+            assert_eq!(
+                simulation.debug_pursuit(1).unwrap().status,
+                PursuitStatus::Finished
+            );
+            assert_eq!(
+                simulation
+                    .world
+                    .state(simulation.ids[1].unwrap())
+                    .unwrap()
+                    .cell,
+                Cell::new(43, 80)
+            );
+        }
+    }
 }

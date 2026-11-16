@@ -35,6 +35,43 @@ pub struct AttackOrder {
     pub status: AttackStatus,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PursuitError {
+    TargetUnavailable,
+    NoRoute,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PursuitStatus {
+    Pending,
+    Approaching,
+    InRange,
+    Finished,
+    Refused(PursuitError),
+}
+
+impl PursuitStatus {
+    fn active(self) -> bool {
+        matches!(self, Self::Pending | Self::Approaching | Self::InRange)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DebugPursuit {
+    pub target_id: u64,
+    /// Last assigned target cell, retained after completion for inspection.
+    pub target_cell: (u32, u32),
+    pub status: PursuitStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum CombatTarget {
+    Character(usize),
+    DebugPlayer(u64),
+}
+
 #[derive(Debug, Clone, Copy)]
 enum HeroCommand {
     Move(Cell, MovementMode),
@@ -44,6 +81,7 @@ enum HeroCommand {
 pub(super) struct CombatRuntime {
     frames: Vec<[u32; DIRECTION_COUNT]>,
     orders: Vec<Option<AttackOrder>>,
+    pub(super) pursuits: Vec<Option<DebugPursuit>>,
     target_cells: Vec<Option<Cell>>,
     retry_at: Vec<u64>,
     retreating: Vec<bool>,
@@ -58,6 +96,7 @@ impl CombatRuntime {
         Self {
             frames: vec![[0; DIRECTION_COUNT]; roster.len()],
             orders: vec![None; roster.len()],
+            pursuits: vec![None; roster.len()],
             target_cells: vec![None; roster.len()],
             retry_at: vec![0; roster.len()],
             retreating: vec![false; roster.len()],
@@ -94,6 +133,11 @@ impl Simulation {
         self.melee.orders[index]
     }
 
+    pub fn debug_pursuit(&self, creature_id: usize) -> Option<DebugPursuit> {
+        self.record_index(creature_id)
+            .and_then(|index| self.melee.pursuits[index])
+    }
+
     pub fn hero_attack_order(&self) -> Option<AttackOrder> {
         self.melee.hero_feedback
     }
@@ -111,6 +155,36 @@ impl Simulation {
             target: self.melee.orders[index]
                 .filter(|order| order.status.active())
                 .map(|order| order.target_id),
+        })
+    }
+
+    fn targeting_combatant(&self, index: usize) -> Option<Combatant<CombatTarget>> {
+        let actor = self.combatant(index)?;
+        Some(Combatant {
+            id: CombatTarget::Character(actor.id),
+            group: actor.group,
+            group_kind: actor.group_kind,
+            class_id: actor.class_id,
+            state: actor.state,
+            cell: actor.cell,
+            target: self.melee.pursuits[index]
+                .filter(|pursuit| pursuit.status.active())
+                .map(|pursuit| CombatTarget::DebugPlayer(pursuit.target_id))
+                .or_else(|| actor.target.map(CombatTarget::Character)),
+        })
+    }
+
+    fn debug_combatant(&self) -> Option<Combatant<CombatTarget>> {
+        let actor = self.debug_actor.as_ref()?;
+        let state = self.world.state(actor.world_id)?;
+        Some(Combatant {
+            id: CombatTarget::DebugPlayer(actor.id),
+            group: actor.profile.group,
+            group_kind: k1_game::rules::group::PLAYER,
+            class_id: actor.profile.class_id,
+            state: actor.profile.recorded_state,
+            cell: (state.cell.column as i16, state.cell.row as i16),
+            target: None,
         })
     }
 
@@ -184,6 +258,7 @@ impl Simulation {
     }
 
     fn begin_attack(&mut self, index: usize, target_id: usize) {
+        self.melee.pursuits[index] = None;
         if self.melee.orders[index]
             .is_some_and(|order| order.target_id == target_id && order.status.active())
         {
@@ -245,6 +320,7 @@ impl Simulation {
             self.creature_anim.cancel_melee(creature.id);
         }
         self.melee.orders.fill(None);
+        self.melee.pursuits.fill(None);
         self.melee.target_cells.fill(None);
         self.melee.retry_at.fill(0);
         self.melee.retreating.fill(false);
@@ -327,15 +403,10 @@ impl Simulation {
             self.provoke_squad(order.target_id);
         }
 
-        // The viewer marker probes perception, but is not a living combat target.
-        let combat_groups = self
-            .debug_actor
-            .as_ref()
-            .map(|_| k1_game::rules::group_states(&self.roster, &self.live_picture()));
-
         let mut snapshot: Vec<_> = (0..self.roster.len())
-            .filter_map(|index| self.combatant(index))
+            .filter_map(|index| self.targeting_combatant(index))
             .collect();
+        snapshot.extend(self.debug_combatant());
         let mut busy = vec![false; self.roster.len()];
         for (index, handled) in busy.iter_mut().enumerate() {
             let Some(actor) = self.combatant(index) else {
@@ -360,7 +431,8 @@ impl Simulation {
                 }
                 self.melee.retreating[index] = false;
             }
-            let active = self.melee.orders[index].is_some_and(|order| order.status.active());
+            let active = self.melee.orders[index].is_some_and(|order| order.status.active())
+                || self.melee.pursuits[index].is_some_and(|pursuit| pursuit.status.active());
             if !active && self.tick >= self.melee.retry_at[index] {
                 let explicit_move = Some(actor.id) == self.hero_id
                     && self.hero_order.is_some_and(|order| {
@@ -370,9 +442,9 @@ impl Simulation {
                         )
                     });
                 let target = if !explicit_move && !state.moving && state.goal.is_none() {
+                    let actor = self.targeting_combatant(index).unwrap();
                     combat::retaliation(actor, &snapshot).or_else(|| {
-                        (combat_groups.as_ref().unwrap_or(&self.group_states)[index]
-                            == GroupState::PlayerInside
+                        (self.group_states[index] == GroupState::PlayerInside
                             || provoked_group == Some(actor.group))
                         .then(|| combat::monster_target(actor, &snapshot))
                         .flatten()
@@ -380,16 +452,30 @@ impl Simulation {
                 } else {
                     None
                 };
-                if let Some(target_id) = target {
-                    self.begin_attack(index, target_id);
-                    if let Err(error) = self.validate_attack(index, target_id) {
-                        self.finish_attack(index, AttackStatus::Refused(error));
-                        continue;
+                if let Some(target) = target {
+                    match target {
+                        CombatTarget::Character(target_id) => {
+                            self.begin_attack(index, target_id);
+                            if let Err(error) = self.validate_attack(index, target_id) {
+                                self.finish_attack(index, AttackStatus::Refused(error));
+                                continue;
+                            }
+                        }
+                        CombatTarget::DebugPlayer(target_id) => {
+                            self.begin_debug_pursuit(index, target_id);
+                        }
                     }
-                    if let Some(entry) = snapshot.iter_mut().find(|entry| entry.id == actor.id) {
-                        entry.target = Some(target_id);
+                    if let Some(entry) = snapshot
+                        .iter_mut()
+                        .find(|entry| entry.id == CombatTarget::Character(actor.id))
+                    {
+                        entry.target = Some(target);
                     }
                 }
+            }
+            if self.melee.pursuits[index].is_some_and(|pursuit| pursuit.status.active()) {
+                *handled = self.tick_debug_pursuit(index);
+                continue;
             }
             let Some(order) = self.melee.orders[index].filter(|order| order.status.active()) else {
                 continue;
@@ -462,27 +548,147 @@ impl Simulation {
         busy
     }
 
+    fn begin_debug_pursuit(&mut self, index: usize, target_id: u64) {
+        let Some(target) = self
+            .debug_actor
+            .as_ref()
+            .filter(|actor| actor.id == target_id)
+            .and_then(|actor| self.world.state(actor.world_id))
+            .map(|state| state.cell)
+        else {
+            return;
+        };
+        if self.melee.pursuits[index].is_none_or(|pursuit| pursuit.target_id != target_id) {
+            self.melee.retry_at[index] = 0;
+        }
+        if let Some(id) = self.ids[index] {
+            let _ = self.world.stop(id);
+        }
+        self.melee.orders[index] = None;
+        self.melee.target_cells[index] = None;
+        self.melee.pursuits[index] = Some(DebugPursuit {
+            target_id,
+            target_cell: (target.column, target.row),
+            status: PursuitStatus::Pending,
+        });
+    }
+
+    fn finish_debug_pursuit(&mut self, index: usize, status: PursuitStatus) {
+        if let Some(pursuit) = self.melee.pursuits[index].as_mut() {
+            pursuit.status = status;
+        }
+        if let Some(id) = self.ids[index] {
+            let _ = self.world.stop(id);
+        }
+        self.melee.target_cells[index] = None;
+        if matches!(status, PursuitStatus::Refused(PursuitError::NoRoute)) {
+            self.melee.retry_at[index] =
+                self.tick + u64::from(self.world.rules().repath_cooldown_ticks);
+        }
+    }
+
+    fn tick_debug_pursuit(&mut self, index: usize) -> bool {
+        let pursuit = self.melee.pursuits[index].unwrap();
+        let Some(actor) = self
+            .debug_actor
+            .as_ref()
+            .filter(|actor| actor.id == pursuit.target_id)
+        else {
+            self.finish_debug_pursuit(
+                index,
+                PursuitStatus::Refused(PursuitError::TargetUnavailable),
+            );
+            return false;
+        };
+        let Some(target) = self.world.state(actor.world_id).map(|state| state.cell) else {
+            self.finish_debug_pursuit(
+                index,
+                PursuitStatus::Refused(PursuitError::TargetUnavailable),
+            );
+            return false;
+        };
+        if pursuit.status == PursuitStatus::InRange
+            && self.melee.target_cells[index] != Some(target)
+        {
+            // The in-range boundary mirrors state 5 losing its assigned cell (combat.md).
+            self.finish_debug_pursuit(index, PursuitStatus::Finished);
+            return false;
+        }
+        let id = self.ids[index].unwrap();
+        let state = self.world.state(id).unwrap();
+        // Original retention checks the rectangle only after the destination changes.
+        if self.melee.target_cells[index].is_some_and(|previous| previous != target)
+            && (state.moving || state.goal.is_some())
+            && !inside_rectangle(self.melee.leashes[index], target)
+        {
+            self.finish_debug_pursuit(index, PursuitStatus::Finished);
+            return false;
+        }
+        if state.moving {
+            if self.melee.target_cells[index] != Some(target) {
+                self.approach_debug_target(index, target);
+            }
+            return true;
+        }
+        if let Some(direction) = Direction::between(state.cell, target) {
+            let _ = self.world.stop(id);
+            let _ = self.world.turn(id, direction);
+            self.melee.target_cells[index] = Some(target);
+            let pursuit = self.melee.pursuits[index].as_mut().unwrap();
+            pursuit.target_cell = (target.column, target.row);
+            pursuit.status = PursuitStatus::InRange;
+        } else if combat::ambush(self.roster[index].class_id) {
+            self.finish_debug_pursuit(index, PursuitStatus::Finished);
+            return false;
+        } else {
+            self.approach_debug_target(index, target);
+        }
+        true
+    }
+
+    fn approach_debug_target(&mut self, index: usize, target: Cell) {
+        if self.tick < self.melee.retry_at[index] {
+            return;
+        }
+        match self.request_approach(index, target) {
+            Ok(_) => {
+                self.melee.target_cells[index] = Some(target);
+                let pursuit = self.melee.pursuits[index].as_mut().unwrap();
+                pursuit.target_cell = (target.column, target.row);
+                pursuit.status = PursuitStatus::Approaching;
+            }
+            Err(_) => {
+                self.finish_debug_pursuit(index, PursuitStatus::Refused(PursuitError::NoRoute));
+            }
+        }
+    }
+
     fn approach_target(&mut self, index: usize, target: Cell) {
         if self.tick < self.melee.retry_at[index] {
             return;
         }
-        let id = self.ids[index].unwrap();
-        match self
-            .world
-            .move_to_with_policy(id, target, GoalPolicy::Adjacent)
-        {
+        match self.request_approach(index, target) {
             Ok(_) => {
                 self.melee.target_cells[index] = Some(target);
                 self.set_attack_status(index, AttackStatus::Approaching);
             }
-            Err(WorldError::NoRoute) => {
-                self.finish_attack(index, AttackStatus::Refused(AttackError::NoRoute))
-            }
-            Err(error) => {
-                self.order_failures.push((self.roster[index].id, error));
+            Err(_) => {
                 self.finish_attack(index, AttackStatus::Refused(AttackError::NoRoute));
             }
         }
+    }
+
+    fn request_approach(&mut self, index: usize, target: Cell) -> Result<usize, WorldError> {
+        let id = self.ids[index].unwrap();
+        let result = self
+            .world
+            .move_to_with_policy(id, target, GoalPolicy::Adjacent);
+        if let Err(error) = result
+            && error != WorldError::NoRoute
+        {
+            self.order_failures.push((self.roster[index].id, error));
+        }
+        result
     }
 
     fn start_retreat(&mut self, index: usize) -> bool {
