@@ -42,6 +42,20 @@ impl Default for WorldRules {
     }
 }
 
+/// Whether a route must end on its requested cell or may use a nearby cell.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GoalPolicy {
+    #[default]
+    Nearby,
+    Exact,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MoveOrder {
+    goal: Cell,
+    policy: GoalPolicy,
+}
+
 /// What happened to a creature on this tick.
 ///
 /// Events are discrete transitions; [`World::state`] is what a sprite looks
@@ -83,7 +97,7 @@ pub enum Event {
 
 impl Event {
     /// Whose state change this event reports.
-    fn creature(&self) -> CreatureId {
+    pub(crate) fn creature(&self) -> CreatureId {
         match self {
             Event::StepStarted { creature, .. }
             | Event::StepFinished { creature, .. }
@@ -124,16 +138,17 @@ struct Actor {
     /// The last goal an order named, kept across arrival so a tick loop that
     /// re-sends the same order is recognized as a no-op rather than a new
     /// search (docs/development/rust/movement.md, "Decision: a repeated order is idempotent").
-    last_commanded: Option<Cell>,
+    last_commanded: Option<MoveOrder>,
     /// The goal whose last route search found no route, kept only until that
     /// order is retried, replaced or withdrawn: it is what the repeat order is
     /// throttled against, and cannot be `last_commanded` — that one has to stay
     /// cleared so a retry after a crowd clears is not a silent no-op
     /// (docs/development/rust/movement.md, "Decision: a failed goal is retried on a cooldown").
-    failed_goal: Option<Cell>,
+    failed_goal: Option<MoveOrder>,
     /// A new order not yet turned into a route: it arrived while the creature
     /// was mid-step and will be executed at the cell border.
     pending: bool,
+    goal_policy: GoalPolicy,
     /// Ticks the creature has stood with a route it cannot start.
     waiting_ticks: u32,
     /// Tick of the last route search.
@@ -148,6 +163,7 @@ impl Actor {
             last_commanded: None,
             failed_goal: None,
             pending: false,
+            goal_policy: GoalPolicy::Nearby,
             waiting_ticks: 0,
             last_search: 0,
         }
@@ -162,6 +178,7 @@ pub struct ActorDebugState {
     pub requested_target: Option<Cell>,
     pub accepted_target: Option<Cell>,
     pub route: Vec<Cell>,
+    pub pending: bool,
 }
 
 /// The movement world: grid, walkability, occupancy and creatures on one tick.
@@ -236,6 +253,12 @@ impl<P: Passage, K: Pace> World<P, K> {
         &mut self.pace
     }
 
+    /// The requested target and whether its route waits for the current step.
+    pub fn order_state(&self, creature: CreatureId) -> Option<(Option<Cell>, bool)> {
+        let actor = self.actor(self.index(creature)?);
+        Some((actor.goal, actor.pending))
+    }
+
     pub fn debug_state(&self, creature: CreatureId) -> Option<ActorDebugState> {
         let actor = self.actor(self.index(creature)?);
         Some(ActorDebugState {
@@ -243,6 +266,7 @@ impl<P: Passage, K: Pace> World<P, K> {
             requested_target: actor.goal,
             accepted_target: actor.walker.goal(),
             route: actor.walker.remaining_cells(),
+            pending: actor.pending,
         })
     }
 
@@ -332,27 +356,40 @@ impl<P: Passage, K: Pace> World<P, K> {
     /// channel and come out first on the next [`World::tick_step`] — outside a
     /// tick the engine emits no events, but it does not lose them either.
     pub fn move_to(&mut self, creature: CreatureId, goal: Cell) -> Result<usize, WorldError> {
+        self.move_to_with_policy(creature, goal, GoalPolicy::Nearby)
+    }
+
+    /// Uses the same movement engine with an explicit policy for this order.
+    /// The policy remains attached across deferred searches and repathing.
+    pub fn move_to_with_policy(
+        &mut self,
+        creature: CreatureId,
+        goal: Cell,
+        policy: GoalPolicy,
+    ) -> Result<usize, WorldError> {
         let index = self.index(creature).ok_or(WorldError::UnknownCreature)?;
         if !self.grid.contains(goal) {
             return Err(WorldError::OutsideGrid);
         }
-        if self.actor(index).last_commanded == Some(goal) {
+        let order = MoveOrder { goal, policy };
+        if self.actor(index).last_commanded == Some(order) {
             return Ok(self.actor(index).walker.route_len());
         }
         let actor = self.actor(index);
-        if actor.failed_goal == Some(goal)
+        if actor.failed_goal == Some(order)
             && self.tick - actor.last_search < u64::from(self.rules.repath_cooldown_ticks)
         {
             return Err(WorldError::NoRoute);
         }
         self.actor_mut(index).goal = Some(goal);
+        self.actor_mut(index).goal_policy = policy;
         self.actor_mut(index).pending = true;
         self.actor_mut(index).waiting_ticks = 0;
         if self.actor(index).walker.is_walking() {
             // Deferred to the cell border: remember the goal so a repeat during
             // the step is a no-op. If the deferred search then fails,
             // `search_route` clears this, so a later retry can re-search.
-            self.actor_mut(index).last_commanded = Some(goal);
+            self.actor_mut(index).last_commanded = Some(order);
             return Ok(0);
         }
         let mut events = Vec::new();
@@ -608,13 +645,21 @@ impl<P: Passage, K: Pace> World<P, K> {
         else {
             return None;
         };
+        let order = MoveOrder {
+            goal,
+            policy: actor.goal_policy,
+        };
+        let mut route_rules = self.rules.route;
+        if order.policy == GoalPolicy::Exact {
+            route_rules.goal_fallback_radius = 0;
+        }
         self.actor_mut(index).last_search = self.tick;
         self.actor_mut(index).waiting_ticks = 0;
         let request = route::RouteRequest {
             grid: &self.grid,
             passage: &self.passage,
             occupancy: &self.occupancy,
-            rules: &self.rules.route,
+            rules: &route_rules,
             mover: creature,
             from,
             goal,
@@ -625,7 +670,7 @@ impl<P: Passage, K: Pace> World<P, K> {
                 let steps = route.len();
                 let actor = self.actor_mut(index);
                 actor.pending = false;
-                actor.last_commanded = Some(goal);
+                actor.last_commanded = Some(order);
                 actor.failed_goal = None;
                 actor.walker.set_route(&route);
                 events.push(Event::RouteSet { creature, steps });
@@ -641,7 +686,7 @@ impl<P: Passage, K: Pace> World<P, K> {
                 // repeat is throttled by `failed_goal` instead, so the retry
                 // costs one search per cooldown and not one per tick.
                 actor.last_commanded = None;
-                actor.failed_goal = Some(goal);
+                actor.failed_goal = Some(order);
                 actor.walker.clear_route();
                 events.push(Event::NoRoute { creature, goal });
                 None
@@ -738,6 +783,104 @@ mod tests {
             WorldRules::default(),
             0,
         )
+    }
+
+    #[test]
+    fn exact_policy_does_not_replace_taken_or_impassable_targets() {
+        let mut world = world(20, 20);
+        let mover = world.add(Cell::new(2, 4)).unwrap();
+        let target = Cell::new(8, 4);
+        let blocker = world.add(target).unwrap();
+        assert_eq!(
+            world.move_to_with_policy(mover, target, GoalPolicy::Exact),
+            Err(WorldError::NoRoute)
+        );
+        assert!(
+            world.move_to(mover, target).is_ok(),
+            "the policy is part of refusal identity"
+        );
+        assert_ne!(world.state(mover).unwrap().goal, Some(target));
+        assert_eq!(
+            world.move_to_with_policy(mover, target, GoalPolicy::Exact),
+            Err(WorldError::NoRoute)
+        );
+        world.remove(blocker).unwrap();
+        world.passage_mut().blocked.insert(target);
+        world.stop(mover).unwrap();
+        assert_eq!(
+            world.move_to_with_policy(mover, target, GoalPolicy::Exact),
+            Err(WorldError::NoRoute)
+        );
+        assert!(world.move_to(mover, target).is_ok());
+    }
+
+    #[test]
+    fn exact_policy_survives_deferred_search_and_repath() {
+        let mut world = world(20, 20);
+        let mover = world.add(Cell::new(2, 4)).unwrap();
+        let target = Cell::new(10, 4);
+        world.move_to(mover, Cell::new(8, 4)).unwrap();
+        world.tick_step();
+        world.add(target).unwrap();
+        assert_eq!(
+            world.move_to_with_policy(mover, target, GoalPolicy::Exact),
+            Ok(0)
+        );
+        let events: Vec<_> = (0..3).flat_map(|_| world.tick_step()).collect();
+        assert!(events.contains(&Event::NoRoute {
+            creature: mover,
+            goal: target
+        }));
+        assert_eq!(world.state(mover).unwrap().goal, None);
+
+        world.stop(mover).unwrap();
+        let free_target = Cell::new(6, 8);
+        world
+            .move_to_with_policy(mover, free_target, GoalPolicy::Exact)
+            .unwrap();
+        world.passage_mut().blocked.insert(free_target);
+        let events: Vec<_> = (0..100).flat_map(|_| world.tick_step()).collect();
+        assert!(events.contains(&Event::NoRoute {
+            creature: mover,
+            goal: free_target
+        }));
+        assert_ne!(world.cell_of(mover), Some(free_target));
+        assert!(
+            !events.iter().any(
+                |event| matches!(event, Event::Arrived { creature, .. } if *creature == mover)
+            )
+        );
+    }
+
+    #[test]
+    fn exact_policy_cache_does_not_hide_a_policy_change_to_the_same_goal() {
+        let mut world = world(20, 20);
+        let mover = world.add(Cell::new(2, 4)).unwrap();
+        let target = Cell::new(8, 4);
+        world.add(target).unwrap();
+        world.move_to(mover, target).unwrap();
+        assert_eq!(
+            world.move_to_with_policy(mover, target, GoalPolicy::Exact),
+            Err(WorldError::NoRoute)
+        );
+        let first = world.tick_step();
+        assert!(
+            first
+                .iter()
+                .any(|event| matches!(event, Event::NoRoute { .. }))
+        );
+        for _ in 0..20 {
+            assert_eq!(
+                world.move_to_with_policy(mover, target, GoalPolicy::Exact),
+                Err(WorldError::NoRoute)
+            );
+            assert!(
+                !world
+                    .tick_step()
+                    .iter()
+                    .any(|event| matches!(event, Event::NoRoute { .. } | Event::RouteSet { .. }))
+            );
+        }
     }
 
     #[test]

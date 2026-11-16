@@ -64,4 +64,4 @@ pub use passage::Passage;
 pub use rng::Rng;
 pub use route::{Leg, Route, RouteRules, find_route};
 pub use walk::{Step, WalkState, Walker};
-pub use world::{Event, World, WorldError, WorldRules};
+pub use world::{Event, GoalPolicy, World, WorldError, WorldRules};

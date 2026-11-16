@@ -193,6 +193,7 @@ pub fn init(world: &mut World, hero: u32, draft: kn_app::NewGameDraft) -> Result
 /// `CreatureDepth`) are kept too: they are rebuilt by the next request and read
 /// only while a simulation runs, which teardown just removed.
 pub fn teardown(world: &mut World) {
+    crate::orders::teardown(world);
     // Direct despawns, not commands: teardown must be observably complete the
     // moment it returns (callers may run it twice or read the world right
     // after), and a queued despawn would apply only at the next sync point.
