@@ -5,12 +5,17 @@ use kn_app::Screen;
 use kn_game::{
     movement::MovementMode,
     movement::grid::{Cell, Grid},
-    simulation::HeroOrderStatus,
+    simulation::{AttackStatus, HeroOrderStatus},
 };
-use kn_render::{CameraInput, CreatureSet, CreatureSim, MapCamera, MapViewport, ortho_scale};
-use kn_ui::{palette, pointer_over_ui};
+use kn_render::{
+    CameraInput, CreaturePicker, CreatureSet, CreatureSim, MapCamera, MapViewport, ortho_scale,
+};
+use kn_ui::{KonungFonts, palette, pointer_over_ui, spacing, typo};
 
-use crate::flow::{AppFlow, FlowSet};
+use crate::{
+    flow::{AppFlow, FlowSet},
+    i18n::{self, Text as InterfaceText},
+};
 
 const DRAG_DISTANCE: f32 = 4.0;
 const DOUBLE_CLICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(350);
@@ -106,7 +111,7 @@ impl MapGesture {
     }
 }
 
-/// Installs click-to-move and its marker; the existing creature plugin owns time.
+/// Installs movement and melee orders; the existing creature plugin owns time.
 pub struct PlayerOrdersPlugin;
 
 impl Plugin for PlayerOrdersPlugin {
@@ -121,7 +126,12 @@ impl Plugin for PlayerOrdersPlugin {
                     .before(CreatureSet::Advance)
                     .before(CameraInput),
             )
-            .add_systems(Update, feedback.after(CreatureSet::Advance).after(FlowSet));
+            .add_systems(
+                Update,
+                (feedback, attack_feedback)
+                    .after(CreatureSet::Advance)
+                    .after(FlowSet),
+            );
     }
 }
 
@@ -134,6 +144,7 @@ fn read_orders(
     hovered: Query<&Hovered, With<Node>>,
     viewport: Res<MapViewport>,
     cameras: Query<(&Camera, &GlobalTransform), With<MapCamera>>,
+    picker: CreaturePicker,
     mut gesture: ResMut<MapGesture>,
     mut double_click: ResMut<DoubleClick>,
     mut simulation: ResMut<CreatureSim>,
@@ -177,6 +188,14 @@ fn read_orders(
         double_click.last = None;
         return;
     };
+    if let Some(target_id) = picker.pick_screen(cursor, camera, transform)
+        && let Some(simulation) = simulation.sim.as_mut()
+        && simulation.can_hero_attack(target_id)
+    {
+        double_click.last = None;
+        let _ = simulation.order_hero_attack(target_id);
+        return;
+    }
     if let Some(target) = camera
         .viewport_to_world_2d(transform, cursor)
         .ok()
@@ -228,15 +247,31 @@ fn feedback(
         Without<OrderMarker>,
     >,
 ) {
-    let order = (flow.state().screen == Screen::Playing)
-        .then(|| {
-            simulation
-                .sim
-                .as_ref()
-                .and_then(|simulation| simulation.hero_order())
-        })
+    let active = (flow.state().screen == Screen::Playing)
+        .then_some(simulation.sim.as_ref())
         .flatten();
-    let Some(order) = order else {
+    let marker = active.and_then(|simulation| {
+        if let Some(order) = simulation.hero_attack_order() {
+            simulation
+                .states()
+                .into_iter()
+                .find(|state| state.id == order.target_id)
+                .map(|state| {
+                    (
+                        state.pixel,
+                        matches!(order.status, AttackStatus::Refused(_)),
+                    )
+                })
+        } else {
+            simulation.hero_order().map(|order| {
+                (
+                    order.target.centre(),
+                    matches!(order.status, HeroOrderStatus::Refused(_)),
+                )
+            })
+        }
+    });
+    let Some(((x, y), refused)) = marker else {
         for (entity, _, _) in &mut markers {
             commands.entity(entity).despawn();
         }
@@ -246,10 +281,8 @@ fn feedback(
         return;
     };
     let scale = ortho_scale(projection);
-    let (x, y) = order.target.centre();
     let marker_transform =
         Transform::from_xyz(x as f32, -y as f32, 900.0).with_scale(Vec3::new(scale, scale, 1.0));
-    let refused = matches!(order.status, HeroOrderStatus::Refused(_));
     if markers.is_empty() {
         spawn_marker(&mut commands, marker_transform, refused);
         return;
@@ -263,6 +296,68 @@ fn feedback(
         *sprite = next_sprite;
         *transform = next_transform;
         *visibility = next_visibility;
+    }
+}
+
+#[derive(Component)]
+struct AttackFeedback;
+
+fn attack_feedback(
+    mut commands: Commands,
+    flow: Res<AppFlow>,
+    simulation: Res<CreatureSim>,
+    fonts: Res<KonungFonts>,
+    mut labels: Query<(Entity, &mut Text, &mut TextColor), With<AttackFeedback>>,
+) {
+    let order = (flow.state().screen == Screen::Playing)
+        .then(|| simulation.sim.as_ref()?.hero_attack_order())
+        .flatten();
+    let Some(order) = order else {
+        for (entity, _, _) in &mut labels {
+            commands.entity(entity).despawn();
+        }
+        return;
+    };
+    let simulation = simulation.sim.as_ref().unwrap();
+    let status = i18n::t(
+        flow.state().applied.language,
+        InterfaceText::AttackStatus(order.status),
+    );
+    let caption = simulation
+        .creature_name(order.target_id)
+        .map_or_else(|| status.to_owned(), |name| format!("{status}: {name}"));
+    let color = if matches!(order.status, AttackStatus::Refused(_)) {
+        palette::DANGER
+    } else {
+        palette::TEXT
+    };
+    if labels.is_empty() {
+        commands.spawn((
+            AttackFeedback,
+            Text::new(caption),
+            TextFont {
+                font: fonts.regular.clone().into(),
+                font_size: typo::BODY,
+                ..default()
+            },
+            TextColor(color),
+            BackgroundColor(palette::WINDOW_BG),
+            Node {
+                position_type: PositionType::Absolute,
+                left: spacing::SPACE_16,
+                bottom: spacing::SPACE_16,
+                max_width: Val::Percent(90.0),
+                padding: UiRect::all(spacing::SPACE_8),
+                ..default()
+            },
+        ));
+    } else {
+        for (_, mut text, mut text_color) in &mut labels {
+            if text.0 != caption {
+                text.0.clone_from(&caption);
+            }
+            text_color.0 = color;
+        }
     }
 }
 
@@ -307,7 +402,8 @@ pub(crate) fn teardown(world: &mut World) {
     if let Some(mut double_click) = world.get_resource_mut::<DoubleClick>() {
         double_click.last = None;
     }
-    let mut markers = world.query_filtered::<Entity, With<OrderMarker>>();
+    let mut markers =
+        world.query_filtered::<Entity, Or<(With<OrderMarker>, With<AttackFeedback>)>>();
     let markers: Vec<_> = markers.iter(world).collect();
     for marker in markers {
         world.despawn(marker);

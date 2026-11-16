@@ -32,6 +32,9 @@ use std::collections::HashMap;
 /// number"). The only non-idle state the shipped `Game.N` files record.
 pub const SPECIAL_STATE: u8 = 4;
 
+/// The shared armed/unarmed melee animation row.
+pub const MELEE_STATE: u8 = 5;
+
 /// Where one creature is in the state machine right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
@@ -41,9 +44,27 @@ pub enum Stage {
     /// Standing in the idle state (the caller overlays walk on top of this
     /// from the simulation's `WalkState` when the creature is moving).
     Idle,
+    /// One melee swing; the simulation decides whether another swing starts.
+    Melee { frame: u32 },
 }
 
 impl Stage {
+    /// Stable animation kind, independent of the current frame.
+    pub fn kind(self) -> u8 {
+        match self {
+            Self::Idle => 0,
+            Self::Special { .. } => 1,
+            Self::Melee { .. } => 2,
+        }
+    }
+
+    pub fn frame(self) -> Option<u32> {
+        match self {
+            Self::Special { frame } | Self::Melee { frame } => Some(frame),
+            Self::Idle => None,
+        }
+    }
+
     /// True while the state-4 sequence is running.
     pub fn is_special(self) -> bool {
         matches!(self, Stage::Special { .. })
@@ -74,6 +95,8 @@ struct Entry {
     recorded_state: u8,
     /// Frames of the state-4 sequence, or 0 when there is none.
     special_frames: u32,
+    melee_frames: u32,
+    armed: bool,
     /// Current stage.
     stage: Stage,
     /// Stage as last reported by [`Machine::drain_changed`]; starts at Idle so
@@ -130,6 +153,8 @@ impl Machine {
                 id: seed.id,
                 recorded_state: seed.recorded_state,
                 special_frames: seed.special_frames,
+                melee_frames: 0,
+                armed: seed.recorded_state == 0,
                 stage: initial_stage(&seed),
                 reported: Stage::Idle,
             };
@@ -158,16 +183,61 @@ impl Machine {
     /// nothing.
     pub fn tick(&mut self) {
         for entry in &mut self.entries {
-            if let Stage::Special { frame } = entry.stage {
-                let next = frame + 1;
-                if next >= entry.special_frames {
-                    entry.stage = Stage::Idle;
-                    self.pose_rebuilds += 1;
-                } else {
-                    entry.stage = Stage::Special { frame: next };
-                }
+            let (frame, frames) = match entry.stage {
+                Stage::Special { frame } => (frame, entry.special_frames),
+                Stage::Melee { frame } => (frame, entry.melee_frames),
+                Stage::Idle => continue,
+            };
+            let next = frame + 1;
+            if next >= frames {
+                entry.stage = Stage::Idle;
+                self.pose_rebuilds += 1;
+            } else {
+                entry.stage = match entry.stage {
+                    Stage::Special { .. } => Stage::Special { frame: next },
+                    Stage::Melee { .. } => Stage::Melee { frame: next },
+                    Stage::Idle => unreachable!(),
+                };
             }
         }
+    }
+
+    /// Starts one complete swing from idle; unsupported or busy actors refuse it.
+    pub fn start_melee(&mut self, id: usize, frames: u32) -> bool {
+        let Some(&position) = self.index.get(&id) else {
+            return false;
+        };
+        let entry = &mut self.entries[position];
+        if frames == 0 || entry.stage != Stage::Idle {
+            return false;
+        }
+        entry.melee_frames = frames;
+        entry.stage = Stage::Melee { frame: 0 };
+        self.pose_rebuilds += 1;
+        true
+    }
+
+    /// Draws the weapon and selects armed idle after this creature's action.
+    pub fn arm(&mut self, id: usize) -> bool {
+        let Some(&position) = self.index.get(&id) else {
+            return false;
+        };
+        self.entries[position].armed = true;
+        true
+    }
+
+    /// Cancels an invalidated melee action without affecting appearance sequences.
+    pub fn cancel_melee(&mut self, id: usize) -> bool {
+        let Some(&position) = self.index.get(&id) else {
+            return false;
+        };
+        let entry = &mut self.entries[position];
+        if !matches!(entry.stage, Stage::Melee { .. }) {
+            return false;
+        }
+        entry.stage = Stage::Idle;
+        self.pose_rebuilds += 1;
+        true
     }
 
     /// Restart one creature's special from frame 0. This is the seam a game
@@ -188,7 +258,7 @@ impl Machine {
         }
         let previous = entry.stage;
         entry.stage = Stage::Special { frame: 0 };
-        if previous.is_special() != entry.stage.is_special() {
+        if previous.kind() != entry.stage.kind() {
             self.pose_rebuilds += 1;
         }
         true
@@ -210,7 +280,7 @@ impl Machine {
             }
             let previous = entry.stage;
             entry.stage = Stage::Special { frame: 0 };
-            if previous.is_special() != entry.stage.is_special() {
+            if previous.kind() != entry.stage.kind() {
                 self.pose_rebuilds += 1;
             }
             restarted += 1;
@@ -237,6 +307,8 @@ impl Machine {
         let entry = &self.entries[position];
         Some(match entry.stage {
             Stage::Special { .. } => SPECIAL_STATE,
+            Stage::Melee { .. } => MELEE_STATE,
+            Stage::Idle if entry.armed => 0,
             Stage::Idle => idle_state(entry.recorded_state),
         })
     }
@@ -247,9 +319,14 @@ impl Machine {
     /// on 6 so a multi-sprite dynamic creature keeps the same weapon-in-hands
     /// bit it carries in the file next to state 4.
     pub fn idle_state(&self, id: usize) -> Option<u8> {
-        self.index
-            .get(&id)
-            .map(|&position| idle_state(self.entries[position].recorded_state))
+        self.index.get(&id).map(|&position| {
+            let entry = &self.entries[position];
+            if entry.armed {
+                0
+            } else {
+                idle_state(entry.recorded_state)
+            }
+        })
     }
 
     /// Direction the record carries. The machine never changes direction on
@@ -280,7 +357,7 @@ impl Machine {
             .iter()
             .filter_map(|(&id, &position)| match self.entries[position].stage {
                 Stage::Special { frame } => Some((id, frame)),
-                Stage::Idle => None,
+                Stage::Idle | Stage::Melee { .. } => None,
             })
     }
 
@@ -304,7 +381,7 @@ impl Machine {
             .iter()
             .filter_map(|(&id, &position)| {
                 let entry = &self.entries[position];
-                (entry.stage.is_special() != entry.reported.is_special()).then_some(id)
+                (entry.stage.kind() != entry.reported.kind()).then_some(id)
             })
             .collect();
         changed.sort_unstable();
@@ -347,6 +424,61 @@ mod tests {
             recorded_state,
             special_frames,
         }
+    }
+
+    #[test]
+    fn melee_runs_once_and_reports_only_pose_edges() {
+        let mut machine = Machine::new();
+        machine.enter_world([seed(3, 6, 0)]);
+        assert!(machine.start_melee(3, 3));
+        assert_eq!(machine.shown_state(3), Some(MELEE_STATE));
+        assert_eq!(machine.drain_changed(), [3]);
+        for frame in 0..3 {
+            assert_eq!(machine.stage(3), Some(Stage::Melee { frame }));
+            assert!(!machine.start_melee(3, 3));
+            assert!(machine.drain_changed().is_empty());
+            machine.tick();
+        }
+        assert_eq!(machine.stage(3), Some(Stage::Idle));
+        assert_eq!(machine.drain_changed(), [3]);
+        assert_eq!(machine.pose_rebuilds(), 2);
+        assert!(machine.start_melee(3, 3));
+        assert_eq!(machine.stage(3), Some(Stage::Melee { frame: 0 }));
+    }
+
+    #[test]
+    fn melee_refuses_missing_frames_unknown_actors_and_running_specials() {
+        let mut machine = Machine::new();
+        machine.enter_world([seed(1, 4, 2), seed(2, 0, 0)]);
+        assert!(!machine.start_melee(1, 3));
+        assert!(!machine.start_melee(2, 0));
+        assert!(!machine.start_melee(99, 3));
+        machine.tick();
+        machine.tick();
+        assert!(machine.start_melee(1, 1));
+        assert_eq!(machine.drain_changed(), [1]);
+        machine.tick();
+        assert_eq!(machine.stage(1), Some(Stage::Idle));
+        assert_eq!(machine.drain_changed(), [1]);
+    }
+
+    #[test]
+    fn drawing_weapon_survives_a_swing_and_cancel_preserves_specials() {
+        let mut machine = Machine::new();
+        machine.enter_world([seed(1, 6, 0), seed(2, 4, 3)]);
+        assert!(!machine.arm(99));
+        assert!(machine.arm(1));
+        assert_eq!(machine.shown_state(1), Some(0));
+        assert!(machine.start_melee(1, 2));
+        machine.tick();
+        assert!(machine.cancel_melee(1));
+        assert_eq!(machine.stage(1), Some(Stage::Idle));
+        assert_eq!(machine.shown_state(1), Some(0));
+        assert!(!machine.cancel_melee(1));
+        assert!(!machine.cancel_melee(2));
+        assert_eq!(machine.stage(2), Some(Stage::Special { frame: 1 }));
+        machine.enter_world([seed(1, 6, 0)]);
+        assert_eq!(machine.shown_state(1), Some(6));
     }
 
     #[test]

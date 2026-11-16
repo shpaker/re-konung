@@ -739,6 +739,15 @@ fn sync_workspace(
                             friendly(&c["group_state_value"]), friendly(&c["group_state"]),
                             if c["group_state_tick"].is_null() { "Unevaluated".into() } else { friendly(&c["group_state_tick"]) }
                         );
+                        if !c["attack"].is_null() {
+                            details.push_str(&format!("\nAttack: {}\nAttack target: {}", friendly(&c["attack"]["status"]), friendly(&c["attack"]["target_id"])));
+                            if !c["attack"]["error"].is_null() {
+                                details.push_str(&format!("\nAttack refusal: {}", friendly(&c["attack"]["error"])));
+                            }
+                        }
+                        if !c["animation_melee_frame"].is_null() {
+                            details.push_str(&format!("\nMelee frame: {}", friendly(&c["animation_melee_frame"])));
+                        }
                         if c["cell"].is_null() { details.push_str("\nNot simulated"); }
                         else { details.push_str(&format!("\nMovement: {}\nCell: {}\nPixel: {}\nDirection: {}", friendly(&c["walk_state"]), friendly(&c["cell"]), friendly(&c["pixel"]), friendly(&c["direction"]))); }
                         details
@@ -1321,6 +1330,35 @@ mod layout_tests {
             );
         }
     }
+    #[test]
+    fn inspector_explains_the_attack_target_phase_and_refusal() {
+        let mut app = app(960, 640);
+        app.world_mut().resource_mut::<ReadProjection>().0 = json!({
+            "displayed_map":{"source":"game","number":17},
+            "simulation_available":true,
+            "creatures":[{
+                "id":4,"label":"Synthetic attacker","recorded_state":0,
+                "animation_state":5,"animation_stage":"melee","animation_melee_frame":3,
+                "group":1,"group_state":"player_inside","group_state_tick":20,
+                "attack":{"target_id":41,"status":"refused","error":"no_route"}
+            }]
+        });
+        app.world_mut()
+            .resource_mut::<ViewerWorkspace>()
+            .selected_creature = Some(4);
+        app.update();
+        let inspector = only::<Inspector>(&mut app);
+        let text = &app.world().get::<Text>(inspector).unwrap().0;
+        for detail in [
+            "Attack: refused",
+            "Attack target: 41",
+            "Attack refusal: no route",
+            "Melee frame: 3",
+        ] {
+            assert!(text.contains(detail), "missing {detail:?}: {text}");
+        }
+    }
+
     #[test]
     fn inspector_scrolls_long_details_without_expanding_the_viewport() {
         let mut app = app(960, 640);

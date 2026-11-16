@@ -462,3 +462,99 @@ fn the_applied_setting_enables_double_click_run_and_ui_cancels_the_pair() {
         );
     }
 }
+
+#[test]
+fn a_visible_enemy_pixel_orders_attack_and_ui_capture_prevents_it() {
+    let Some(directory) = common::game_dir() else {
+        return;
+    };
+    let game = Game::open(&directory).unwrap();
+    let hero = common::first_hero(&game);
+    let mut app = common::player_app(game, vec![hero]);
+    app.add_plugins(bevy::transform::TransformPlugin)
+        .init_resource::<ButtonInput<MouseButton>>()
+        .add_plugins(PlayerOrdersPlugin);
+    let mut window = Window {
+        resolution: (800, 600).into(),
+        focused: true,
+        ..default()
+    };
+    window.set_cursor_position(Some(Vec2::new(400.0, 300.0)));
+    let window = app.world_mut().spawn((window, PrimaryWindow)).id();
+    let ui = app.world_mut().spawn((Node::default(), Hovered(true))).id();
+    start(&mut app, hero);
+    // The headless fixture omits visibility propagation; picking consumes the
+    // same propagated visibility the window supplies for these rendered layers.
+    let mut layers = app
+        .world_mut()
+        .query_filtered::<&mut InheritedVisibility, With<kn_render::CreatureSprite>>();
+    for mut visible in layers.iter_mut(app.world_mut()) {
+        *visible = InheritedVisibility::VISIBLE;
+    }
+    let simulation = app.world().resource::<CreatureSim>().sim.as_ref().unwrap();
+    let enemies: Vec<_> = simulation
+        .states()
+        .into_iter()
+        .filter(|state| simulation.can_hero_attack(state.id))
+        .collect();
+    let mut picking =
+        bevy::ecs::system::SystemState::<kn_render::CreaturePicker>::new(app.world_mut());
+    let picker = picking.get(app.world()).unwrap();
+    let (enemy, point) = enemies
+        .into_iter()
+        .find_map(|enemy| {
+            let bounds = picker.bounds_world(enemy.id)?;
+            for y in bounds.min.y.floor() as i32..bounds.max.y.ceil() as i32 {
+                for x in bounds.min.x.floor() as i32..bounds.max.x.ceil() as i32 {
+                    let point = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+                    if picker.pick_world(point) == Some(enemy.id) {
+                        return Some((enemy, point));
+                    }
+                }
+            }
+            None
+        })
+        .expect("the hero start map must contain a visible attackable enemy");
+    let camera = camera_at(&mut app, Cell::new(enemy.cell.0, enemy.cell.1), 1.0);
+    let camera_entity = app.world().entity(camera);
+    let cursor = camera_entity
+        .get::<Camera>()
+        .unwrap()
+        .world_to_viewport(
+            camera_entity.get::<GlobalTransform>().unwrap(),
+            point.extend(0.0),
+        )
+        .unwrap();
+    app.world_mut()
+        .entity_mut(window)
+        .get_mut::<Window>()
+        .unwrap()
+        .set_cursor_position(Some(cursor));
+    click(&mut app);
+    assert!(
+        app.world()
+            .resource::<CreatureSim>()
+            .sim
+            .as_ref()
+            .unwrap()
+            .hero_attack_order()
+            .is_none(),
+        "UI must capture the attack click"
+    );
+    app.world_mut().entity_mut(ui).insert(Hovered(false));
+    click(&mut app);
+    let simulation = app.world().resource::<CreatureSim>().sim.as_ref().unwrap();
+    let order = simulation.hero_attack_order().unwrap();
+    assert_eq!(order.target_id, enemy.id);
+    assert!(simulation.hero_order().is_none());
+    let caption = kn_fe_player::i18n::t(
+        app.world().resource::<AppFlow>().state().applied.language,
+        kn_fe_player::i18n::Text::AttackStatus(order.status),
+    );
+    let mut labels = app.world_mut().query::<&Text>();
+    assert!(
+        labels
+            .iter(app.world())
+            .any(|text| text.0.starts_with(caption) && !text.0.contains(&format!("#{}", enemy.id)))
+    );
+}

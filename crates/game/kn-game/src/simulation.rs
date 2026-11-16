@@ -25,6 +25,9 @@ pub use k1_game::rules::GroupState;
 
 use crate::rules;
 
+mod melee;
+pub use melee::{AttackError, AttackOrder, AttackStatus};
+
 /// Walkability from the map's foot grid.
 #[derive(Clone)]
 pub struct MapPassage {
@@ -96,6 +99,7 @@ pub struct CreatureInspection {
     pub group: usize,
     pub group_state: GroupState,
     pub group_state_tick: Option<u64>,
+    pub attack: Option<AttackOrder>,
 }
 
 struct DebugActor {
@@ -129,6 +133,7 @@ pub struct HeroOrder {
 
 /// A simulation over one map.
 pub struct Simulation {
+    melee: melee::CombatRuntime,
     world: World<MapPassage, StepDurations>,
     hero_id: Option<usize>,
     hero_world_id: Option<CreatureId>,
@@ -314,6 +319,7 @@ impl Simulation {
             .and_then(|hero| roster.iter().position(|creature| creature.id == hero))
             .and_then(|index| ids[index]);
         Simulation {
+            melee: melee::CombatRuntime::new(&state.groups, &roster),
             world,
             hero_id,
             hero_world_id,
@@ -371,6 +377,12 @@ impl Simulation {
         target: Cell,
         mode: MovementMode,
     ) -> Result<usize, HeroOrderError> {
+        if self.defer_combat_move(target, mode)? {
+            return Ok(0);
+        }
+        if self.world.grid().contains(target) {
+            self.clear_hero_attack();
+        }
         let result = self
             .hero_world_id()
             .ok_or(HeroOrderError::HeroUnavailable)
@@ -568,6 +580,7 @@ impl Simulation {
         self.hero_order = None;
         self.hero_active_target = None;
         self.hero_goal_reaches = 0;
+        self.reset_combat();
     }
 
     pub fn tick(&mut self) -> Vec<Event> {
@@ -579,6 +592,7 @@ impl Simulation {
         let live = self.live_picture();
         self.group_states = self.debug_group_states(&live);
         self.group_state_tick = Some(self.tick);
+        let combat_busy = self.tick_combat();
         let mut context = Context {
             ground: &self.world,
             random: &mut self.rng,
@@ -592,7 +606,9 @@ impl Simulation {
             .enumerate()
             .zip(decisions.iter())
             .filter_map(|((index, id), decision)| {
-                (*id).map(|id| (self.roster[index].id, id, *decision))
+                (*id)
+                    .filter(|_| !combat_busy[index])
+                    .map(|id| (self.roster[index].id, id, *decision))
             })
             .collect();
         let pairs: Vec<(CreatureId, Decision)> = commands
@@ -835,6 +851,7 @@ impl Simulation {
             group: creature.group,
             group_state: self.group_states[index],
             group_state_tick: self.group_state_tick,
+            attack: self.attack_order(id),
         }
     }
 
@@ -856,6 +873,14 @@ impl Simulation {
     /// here and never touches the K1 name tables itself.
     pub fn labels(&self) -> &HashMap<usize, String> {
         &self.labels
+    }
+
+    /// A source name without the viewer's diagnostic record-number prefix.
+    pub fn creature_name(&self, creature_id: usize) -> Option<&str> {
+        self.labels
+            .get(&creature_id)?
+            .split_once(' ')
+            .map(|(_, name)| name)
     }
 
     /// The animation stage of one creature (issue #70): `Special { frame }`
@@ -911,7 +936,10 @@ impl Simulation {
             cell: (walk.cell.column, walk.cell.row),
             pixel: (px, py),
             step_to_pixel,
-            direction: walk.direction.map(|d| d.index() as u8),
+            direction: Some(
+                walk.direction
+                    .map_or(self.roster[index].direction, |d| d.index() as u8),
+            ),
             moving: walk.moving,
             step_elapsed: walk.step_elapsed,
             step_ticks: walk.step_ticks,
@@ -1637,6 +1665,7 @@ mod tests {
         record.roaming = false;
         sim.roster.push(record);
         sim.ids.push(Some(player));
+        sim.melee = melee::CombatRuntime::new(&state.groups, &sim.roster);
         sim.tick();
         let used = sim.inspect_creature(id).unwrap();
         assert_eq!(used.group_state, GroupState::PlayerInside);

@@ -493,6 +493,27 @@ pub(crate) fn project_state(world: &mut World) {
     world.resource_mut::<ReadProjection>().0 = state;
 }
 
+fn attack_value(order: kn_game::simulation::AttackOrder) -> Value {
+    use kn_game::simulation::{AttackError, AttackStatus};
+    let (status, error) = match order.status {
+        AttackStatus::Pending => ("pending", None),
+        AttackStatus::Approaching => ("approaching", None),
+        AttackStatus::Attacking => ("attacking", None),
+        AttackStatus::Finished => ("finished", None),
+        AttackStatus::Refused(error) => (
+            "refused",
+            Some(match error {
+                AttackError::AttackerUnavailable => "attacker_unavailable",
+                AttackError::TargetUnavailable => "target_unavailable",
+                AttackError::InvalidTarget => "invalid_target",
+                AttackError::MissingAnimation => "missing_animation",
+                AttackError::NoRoute => "no_route",
+            }),
+        ),
+    };
+    json!({"target_id":order.target_id,"status":status,"error":error})
+}
+
 pub(crate) fn state_value(world: &mut World) -> Value {
     let viewer = world.resource::<Viewer>();
     let requested = viewer
@@ -517,10 +538,16 @@ pub(crate) fn state_value(world: &mut World) -> Value {
         let states=sim.states();
         sim.inspect_creatures().into_iter().map(|creature| {
             let state=states.iter().find(|state|state.id==creature.id);
-            let stage=creature.animation_stage.map(|stage|if stage.is_special(){"special"}else{"idle"});
+            let stage=creature.animation_stage.map(|stage|match stage {
+                kn_game::simulation::CreatureStage::Special { .. } => "special",
+                kn_game::simulation::CreatureStage::Melee { .. } => "melee",
+                kn_game::simulation::CreatureStage::Idle => "idle",
+            });
             let special_frame=creature.animation_stage.and_then(|stage|match stage {kn_game::simulation::CreatureStage::Special {frame}=>Some(frame),_=>None});
+            let melee_frame=creature.animation_stage.and_then(|stage|match stage {kn_game::simulation::CreatureStage::Melee {frame}=>Some(frame),_=>None});
+            let attack=creature.attack.map(attack_value);
             let group_state=match creature.group_state {kn_game::simulation::GroupState::Calm=>"calm",kn_game::simulation::GroupState::PlayerInside=>"player_inside",kn_game::simulation::GroupState::MemberOutside=>"member_outside"};
-            json!({"id":creature.id,"label":creature.label,"recorded_state":creature.recorded_state,"animation_state":creature.animation_state,"animation_stage":stage,"animation_special_frame":special_frame,"walk_state":creature.walk_state.map(|state|format!("{state:?}").to_lowercase()),"group":creature.group,"group_state":group_state,"group_state_value":creature.group_state.byte(),"group_state_tick":creature.group_state_tick,"cell":state.map(|state|state.cell),"pixel":state.map(|state|state.pixel),"direction":state.and_then(|state|state.direction)})
+            json!({"id":creature.id,"label":creature.label,"recorded_state":creature.recorded_state,"animation_state":creature.animation_state,"animation_stage":stage,"animation_special_frame":special_frame,"animation_melee_frame":melee_frame,"attack":attack,"walk_state":creature.walk_state.map(|state|format!("{state:?}").to_lowercase()),"group":creature.group,"group_state":group_state,"group_state_value":creature.group_state.byte(),"group_state_tick":creature.group_state_tick,"cell":state.map(|state|state.cell),"pixel":state.map(|state|state.pixel),"direction":state.and_then(|state|state.direction)})
         }).collect::<Vec<_>>()
     }).unwrap_or_default();
     let mut layers_query =
@@ -639,6 +666,25 @@ mod tests {
         world.insert_resource(CreatureSim::default());
         world
     }
+    #[test]
+    fn attack_projection_names_phase_target_and_refusal() {
+        use kn_game::simulation::{AttackError, AttackOrder, AttackStatus};
+        assert_eq!(
+            attack_value(AttackOrder {
+                target_id: 41,
+                status: AttackStatus::Attacking
+            }),
+            json!({"target_id":41,"status":"attacking","error":null}),
+        );
+        assert_eq!(
+            attack_value(AttackOrder {
+                target_id: 41,
+                status: AttackStatus::Refused(AttackError::NoRoute)
+            }),
+            json!({"target_id":41,"status":"refused","error":"no_route"}),
+        );
+    }
+
     #[test]
     fn invalid_requests_preserve_selection_and_map() {
         let mut world = world();

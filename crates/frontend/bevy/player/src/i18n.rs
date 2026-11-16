@@ -7,6 +7,7 @@
 //! without touching the callers.
 
 use kn_app::{SaveError, SessionError};
+use kn_game::simulation::{AttackError, AttackStatus};
 use kn_settings::Language;
 
 /// One interface string. The payloads are the typed errors the app state
@@ -78,6 +79,7 @@ pub enum Text {
     Settings,
     Exit,
     Loading,
+    AttackStatus(AttackStatus),
     /// Why a session could not be built.
     SessionError(SessionError),
     /// The word "Language" as a field label.
@@ -100,6 +102,44 @@ pub enum Text {
 /// The string for `text` in `language`.
 pub fn t(language: Language, text: Text) -> &'static str {
     match text {
+        Text::AttackStatus(status) => match (language, status) {
+            (Language::Russian, AttackStatus::Pending) => "Атака ожидает",
+            (Language::English, AttackStatus::Pending) => "Attack queued",
+            (Language::Russian, AttackStatus::Approaching) => "Сближение",
+            (Language::English, AttackStatus::Approaching) => "Approaching",
+            (Language::Russian, AttackStatus::Attacking) => "Атака",
+            (Language::English, AttackStatus::Attacking) => "Attacking",
+            (Language::Russian, AttackStatus::Finished) => "Атака завершена",
+            (Language::English, AttackStatus::Finished) => "Attack ended",
+            (Language::Russian, AttackStatus::Refused(AttackError::AttackerUnavailable)) => {
+                "Герой недоступен"
+            }
+            (Language::English, AttackStatus::Refused(AttackError::AttackerUnavailable)) => {
+                "Hero unavailable"
+            }
+            (Language::Russian, AttackStatus::Refused(AttackError::TargetUnavailable)) => {
+                "Цель недоступна"
+            }
+            (Language::English, AttackStatus::Refused(AttackError::TargetUnavailable)) => {
+                "Target unavailable"
+            }
+            (Language::Russian, AttackStatus::Refused(AttackError::InvalidTarget)) => {
+                "Нельзя атаковать эту цель"
+            }
+            (Language::English, AttackStatus::Refused(AttackError::InvalidTarget)) => {
+                "Cannot attack this target"
+            }
+            (Language::Russian, AttackStatus::Refused(AttackError::MissingAnimation)) => {
+                "Атака недоступна"
+            }
+            (Language::English, AttackStatus::Refused(AttackError::MissingAnimation)) => {
+                "Attack unavailable"
+            }
+            (Language::Russian, AttackStatus::Refused(AttackError::NoRoute)) => "Нет пути к цели",
+            (Language::English, AttackStatus::Refused(AttackError::NoRoute)) => {
+                "No route to target"
+            }
+        },
         Text::Title => match language {
             Language::Russian => "Князь: Легенды Лесной страны",
             Language::English => "Konung: Legends of the North",
@@ -468,6 +508,20 @@ mod tests {
             Text::Cancel,
         ];
         keys.extend([1, 2, 3, 4].map(Text::HeroSlot));
+        keys.extend(
+            [
+                AttackStatus::Pending,
+                AttackStatus::Approaching,
+                AttackStatus::Attacking,
+                AttackStatus::Finished,
+                AttackStatus::Refused(AttackError::AttackerUnavailable),
+                AttackStatus::Refused(AttackError::TargetUnavailable),
+                AttackStatus::Refused(AttackError::InvalidTarget),
+                AttackStatus::Refused(AttackError::MissingAnimation),
+                AttackStatus::Refused(AttackError::NoRoute),
+            ]
+            .map(Text::AttackStatus),
+        );
         keys.extend(
             [
                 SessionError::Map,

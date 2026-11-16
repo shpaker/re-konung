@@ -183,23 +183,36 @@ fn creature_animation_layers_align_with_scene_pieces() {
                  совпасть с числом его кусков Characters"
             );
             assert_eq!(animation.walk.len(), 8, "{edition}: восемь направлений");
+            assert_eq!(animation.melee.len(), 8, "{edition}: melee directions");
+            assert_eq!(
+                animation.armed_rest.len(),
+                8,
+                "{edition}: armed idle directions"
+            );
         }
     }
 }
 
-/// Every walk frame decodes, so a creature never shows a blank sprite mid-step.
+/// Every pose frame decodes, including separately loaded melee equipment and shadows.
 ///
 /// The scene only carries the record pose; the walk frames are decoded separately
 /// by the viewer's texture cache. A frame that fails here would render invisible.
 #[test]
-fn creature_animation_walk_frames_decode() {
+fn creature_animation_frames_decode() {
     for (edition, root) in game_roots() {
         let game = Game::open(&root).unwrap();
         let map_ref = game.maps().unwrap()[0];
         let animations = game.creature_animations(map_ref).unwrap();
         let mut ids = std::collections::HashSet::new();
         for (_, animation) in &animations {
-            for clips in std::iter::once(&animation.rest).chain(animation.walk.iter().flatten()) {
+            for clips in std::iter::once(&animation.rest)
+                .chain(animation.walk.iter().flatten())
+                .chain(animation.melee.iter().flatten())
+                .chain(animation.armed_rest.iter().flatten())
+                .chain(animation.special.iter())
+            {
+                ids.extend(clips.layers.iter().filter_map(|layer| layer.base));
+                ids.extend(clips.shadow.as_ref().and_then(|layer| layer.base));
                 let body = clips.layers.iter().map(|layer| layer.animation.as_ref());
                 let shadow = std::iter::once(
                     clips

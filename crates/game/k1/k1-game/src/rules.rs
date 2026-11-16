@@ -10,7 +10,8 @@
 //! from bits 3–5 of the class or from the village slot the creature itself
 //! holds, and a jobless villager walks on a half roll; a roaming squad stands
 //! while its recomputed state ([`group_states`]) is calm, returns to its
-//! spawn area when a member strayed, and combat is not reverse-engineered.
+//! spawn area when a member strayed. Melee decisions live in `combat` and
+//! are applied by the simulation before these peaceful decisions.
 //! Criterion 5: lone NPCs (group kind 0x53) take no decision. The rules read
 //! live positions, never file bytes.
 
@@ -138,7 +139,7 @@ pub enum GroupState {
     /// Calm: 0. A roaming squad stands; every other group is always this.
     Calm,
     /// 1: a live member of the player squad is inside the spawn area — the
-    /// original starts combat here, which is not reverse-engineered.
+    /// combat module acquires a target here; peaceful rules issue no order.
     PlayerInside,
     /// 0x20: a live member of the squad stands outside the spawn area.
     MemberOutside,
@@ -405,9 +406,8 @@ const NOT_MONSTER: [u8; 3] = [class::WOMAN, class::CHILD, 0x53];
 
 /// The roaming monster's decision, from its squad's recomputed state (Slavik
 /// `game_play.cpp:3156-3181`, `3286`, `3337-3392`; docs/research/k1/creatures/behavior.md,
-/// "The monster decision"). Calm stands; `PlayerInside` would start combat —
-/// target choice, attack and shooting are not reverse-engineered, so we give
-/// no order rather than invent one; `MemberOutside` returns. A creature of a
+/// "The monster decision"). Calm stands; `PlayerInside` delegates to the
+/// separate melee controller; `MemberOutside` returns. A creature of a
 /// class the monster rules skip takes no decision whatever its squad state.
 fn monster_decision<G: Ground, R: Random>(
     creature: &Creature,
@@ -509,7 +509,7 @@ pub const NEIGHBOUR_OFFSETS: [((i32, i32), (i32, i32)); 8] = [
 
 /// The neighbour of `cell` in direction `index` (0..7), or `None` past the
 /// top-left edge of the coordinate space.
-fn neighbour(cell: (i16, i16), index: usize) -> Option<(i16, i16)> {
+pub(crate) fn neighbour(cell: (i16, i16), index: usize) -> Option<(i16, i16)> {
     let (even, odd) = *NEIGHBOUR_OFFSETS.get(index)?;
     let (dc, dr) = if cell.1 & 1 == 1 { odd } else { even };
     let x = i64::from(cell.0) + i64::from(dc);
@@ -1556,10 +1556,8 @@ mod tests {
     }
 
     #[test]
-    fn player_inside_stands_because_combat_is_not_recovered() {
-        // `PlayerInside` in the original starts combat — target choice,
-        // attack, shooting — none of it reverse-engineered. We give no
-        // order rather than invent one (docs/research/k1/creatures/behavior.md).
+    fn player_inside_leaves_target_selection_to_the_combat_controller() {
+        // Peaceful decisions must not overwrite the melee controller's route.
         let monster = small_squad();
         let decision = decide_monster(
             &monster,

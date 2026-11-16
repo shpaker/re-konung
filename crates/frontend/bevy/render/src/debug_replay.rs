@@ -227,7 +227,9 @@ impl DebugReplay {
         logical_tick: u64,
     ) -> u64 {
         match stage {
-            Some(CreatureStage::Special { frame }) => logical_tick.saturating_sub(u64::from(frame)),
+            Some(CreatureStage::Special { frame } | CreatureStage::Melee { frame }) => {
+                logical_tick.saturating_sub(u64::from(frame))
+            }
             _ if state.moving => {
                 logical_tick.saturating_sub(u64::from(state.step_elapsed.saturating_sub(1)))
             }
@@ -427,6 +429,8 @@ mod tests {
             rest: clip(rest),
             walk: (0..8).map(|_| clip(walk)).collect(),
             special: clip(special),
+            melee: Vec::new(),
+            armed_rest: Vec::new(),
         }
     }
     fn render_app(special_frames: u32, walking: bool, debug: bool) -> App {

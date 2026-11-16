@@ -210,6 +210,29 @@ pub fn special_frame_counts(
         .collect()
 }
 
+/// State-5 frame counts per roster member and direction; zero is unsupported.
+pub fn melee_frame_counts(
+    state: &GameState,
+    creatures: &[Creature],
+    graph: &GraphRes<'_>,
+    objects: &ObjectsRes<'_>,
+) -> Vec<[u32; DIRECTIONS]> {
+    creatures
+        .iter()
+        .map(|creature| {
+            let Some(character) = state.characters.get(creature.id).and_then(Option::as_ref) else {
+                return [0; DIRECTIONS];
+            };
+            let mut probe = character.clone();
+            probe.state = crate::creature_anim::MELEE_STATE;
+            std::array::from_fn(|direction| {
+                probe.direction = direction as u8;
+                u32::try_from(k1_data::characters::frame_count(&probe, graph, objects)).unwrap_or(0)
+            })
+        })
+        .collect()
+}
+
 /// Display label per record number: `#<id> <name>` (issues #38, #84). The name
 /// is [`k1_data::executable::character_name`]: the species for a monster, the
 /// name and the nickname for a person. A creature the tables cannot name
