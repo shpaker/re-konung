@@ -77,6 +77,9 @@ def test_six_starting_loadouts_use_file_items(k1_game):
         assert character.equipment == (0, 0, 1, 0, 0, 0)
         assert character.weapon_slot == 2
         assert sum(bool(reference) for reference in character.inventory) == 6
+        carried = [state.items[reference] for reference in character.inventory if reference]
+        assert [item.type_id for item in carried] == [11, 9, 9, 9, 9, 9]
+        assert all((item.bonus_id, item.special_id, item.flags) == (-1, -1, 0) for item in carried)
         assert character.accessories == (0,) * 5
         item = state.items[1]
         assert (item.type_id, item.info_id, item.bonus_id, item.special_id) == (2, 18, -1, -1)

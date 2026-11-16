@@ -33,6 +33,7 @@
 | `FLAMES.RES` | Разбор до EOF, огонь отображается | `konung/k1/flames_res.py`; Rust `k1-data`; Tiled | [Огонь](formats/flames-res.md) |
 | `KONUNG.EXE`, RUS `konung.res` | Таблицы снаряжения, порядка отрисовки, огня и текстов; полнота различается по реализациям | `konung/k1/executable.py`; Rust `k1-data::executable`; Tiled | [Таблицы EXE](formats/executable.md) |
 | `NEWH*.RES` | Все четыре файла обоих изданий разобраны до EOF; портреты совпадают | Rust `k1-data::newh_res` | [Изображения новой игры](formats/newh-res.md) |
+| `INTR*.RES` | Все шесть файлов RUS/ENG разобраны до EOF; значки предметов сверены по RGBA | Python `konung/k1/intr_res.py` | [Изображения интерфейса](formats/intr-res.md) |
 | RLE | Кодек восстановлен | `konung/rle.py`; Rust `k1-data::rle`; Tiled | [RLE](formats/rle.md) |
 | Звук, прочие ресурсы интерфейса | Сведения только по источникам | См. перечень | [Перечень](inventory.md) |
 | `Maps.res`, `Game.res`, `SAVITEMS.DAT`, `QUEST*.RES`, `*.flm` | Не исследованы; структура `Maps.res` — гипотеза | См. перечень | [Перечень](inventory.md) |
