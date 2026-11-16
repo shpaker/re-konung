@@ -1645,6 +1645,20 @@ fn clip_identity(
                 .enumerate()
                 .map(|(dir, clip)| (format!("walk[{dir}]"), clip.as_ref())),
         )
+        .chain(
+            layer
+                .armed_rest
+                .iter()
+                .enumerate()
+                .map(|(direction, clip)| (format!("armed_rest[{direction}]"), clip.as_ref())),
+        )
+        .chain(
+            layer
+                .melee
+                .iter()
+                .enumerate()
+                .map(|(direction, clip)| (format!("melee[{direction}]"), clip.as_ref())),
+        )
         .chain(std::iter::once((
             "special".to_string(),
             layer.special.as_ref(),
@@ -1983,6 +1997,8 @@ mod tests {
                 })
                 .collect(),
             special: None,
+            melee: Vec::new(),
+            armed_rest: Vec::new(),
         };
         select_clip(&layer, walking, direction, false)
             .map(|clip| clip.base)
@@ -2012,6 +2028,8 @@ mod tests {
                 .map(|d| if d == 5 { Some(clip_of(1)) } else { None })
                 .collect(),
             special: None,
+            melee: Vec::new(),
+            armed_rest: Vec::new(),
         };
         let chosen = select_clip(&layer, true, 7, false).unwrap();
         assert_eq!(chosen.base, 0);
@@ -2023,6 +2041,8 @@ mod tests {
             rest: Some(clip_of(0)),
             walk: Vec::new(),
             special: None,
+            melee: Vec::new(),
+            armed_rest: Vec::new(),
         };
         let chosen = select_clip(&layer, true, 200, false).unwrap();
         assert_eq!(chosen.base, 0, "направление вне таблицы не роняет выбор");
@@ -2036,6 +2056,8 @@ mod tests {
             rest: Some(clip_of(0)),
             walk: (0..8).map(|_| Some(clip_of(1))).collect(),
             special: Some(clip_of(2)),
+            melee: Vec::new(),
+            armed_rest: Vec::new(),
         };
         let chosen = select_clip(&layer, true, 3, true).unwrap();
         assert_eq!(chosen.base, 2, "the special wins over walk");
@@ -2050,6 +2072,8 @@ mod tests {
             rest: Some(clip_of(0)),
             walk: (0..8).map(|_| Some(clip_of(1))).collect(),
             special: Some(clip_of(2)),
+            melee: Vec::new(),
+            armed_rest: Vec::new(),
         };
         let chosen = select_clip(&layer, false, 3, false).unwrap();
         assert_eq!(
@@ -2066,6 +2090,8 @@ mod tests {
             rest: Some(clip_of(0)),
             walk: Vec::new(),
             special: None,
+            melee: Vec::new(),
+            armed_rest: Vec::new(),
         };
         let chosen = select_clip(&layer, false, 3, true).unwrap();
         assert_eq!(chosen.base, 0);
@@ -4186,9 +4212,8 @@ mod tests {
         }
         assert!(shadow_count > 0, "the map must give shadows to judge");
 
-        // Every creature stands after the reset, so every body sits on its
-        // resting sequence again: a stale walk clip would keep the cycle of a
-        // step that no longer exists.
+        // A reset restores idle in the recorded facing, retaining drawn weapons.
+        // Its exact rest clip must replace the previous step or attack sequence.
         let creature_anim = world.resource::<CreatureAnim>();
         let mut judged = 0;
         for (tag, animator) in sprites.iter(world) {
@@ -4203,7 +4228,52 @@ mod tests {
                 };
                 layer
             };
-            let Some(rest) = &layer.rest else { continue };
+            let Some(recorded_rest) = &layer.rest else {
+                continue;
+            };
+            let inspection = sim
+                .sim
+                .as_ref()
+                .unwrap()
+                .inspect_creature(tag.creature_id)
+                .unwrap();
+            assert_eq!(
+                inspection.animation_stage,
+                Some(kn_game::simulation::CreatureStage::Idle)
+            );
+            let rest = states
+                .iter()
+                .find(|state| state.id == tag.creature_id)
+                .filter(|_| inspection.animation_state == Some(0))
+                .and_then(|state| state.direction)
+                .and_then(|direction| layer.armed_rest.get(direction as usize))
+                .and_then(Option::as_ref)
+                .unwrap_or(recorded_rest);
+            if inspection.recorded_state == 0 {
+                assert_eq!(
+                    (rest.base, rest.corner),
+                    (recorded_rest.base, recorded_rest.corner)
+                );
+                assert_eq!(
+                    rest.sequence.frames.len(),
+                    recorded_rest.sequence.frames.len()
+                );
+                assert!(
+                    rest.sequence
+                        .frames
+                        .iter()
+                        .zip(&recorded_rest.sequence.frames)
+                        .all(|(current, recorded)| {
+                            current.image == recorded.image
+                                && current.size == recorded.size
+                                && current.offset == recorded.offset
+                                && current.ticks == recorded.ticks
+                        }),
+                    "creature #{} layer {} changed its recorded idle geometry",
+                    tag.creature_id,
+                    tag.layer
+                );
+            }
             assert!(
                 Arc::ptr_eq(&animator.sequence, &rest.sequence),
                 "creature #{} layer {} (shadow: {}) is on a foreign sequence after the reset",

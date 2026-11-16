@@ -58,6 +58,8 @@ pub struct LayerSequences {
     pub rest: Option<Clip>,
     pub walk: Vec<Option<Clip>>,
     pub special: Option<Clip>,
+    pub melee: Vec<Option<Clip>>,
+    pub armed_rest: Vec<Option<Clip>>,
 }
 
 /// Sequences for one creature's pieces: `body` by Characters-group layer index,
@@ -78,13 +80,12 @@ pub struct CreatureAnim {
     /// step-relative like the original's `Frame` counter (Slavik
     /// `game_play.cpp:3727-3740`) instead of free-running against the global clock.
     pub locked: HashMap<usize, (StepKey, u32)>,
-    /// Last animation stage kind (Special vs Idle) per creature (issue #70).
+    /// Last animation stage kind per creature, excluding its frame counter.
     /// The state machine's own change report fires once per edge, but a reset
     /// recreates the whole machine, so the first observation after a reset must
     /// also count as a change; the subsystem keeps its own snapshot for that.
-    pub stages: HashMap<usize, bool>,
-    /// Last observed special-frame index of each creature still playing its
-    /// special. A decrease under an unchanged [`Sequence`] is a restart the
+    pub stages: HashMap<usize, u8>,
+    /// Last observed one-shot frame index of each creature still playing. A decrease under an unchanged [`Sequence`] is a restart the
     /// stage-kind snapshot cannot see — "Reset animation" or a rewind returns a
     /// mid-special creature to an earlier frame without flipping Special↔Idle —
     /// so the swap must re-anchor on it (review of #101, P2-#3). Cleared for a
@@ -129,10 +130,30 @@ impl CreatureAnim {
     /// rebuild per creature per state change: a plain frame advance inside a
     /// running Special is not a change and must not appear here.
     pub fn observe_stages(&mut self, states: &[(usize, bool)]) -> HashSet<usize> {
+        let stages: Vec<_> = states
+            .iter()
+            .map(|&(id, special)| {
+                (
+                    id,
+                    if special {
+                        CreatureStage::Special { frame: 0 }
+                    } else {
+                        CreatureStage::Idle
+                    },
+                )
+            })
+            .collect();
+        self.observe_animation_stages(&stages)
+    }
+
+    pub fn observe_animation_stages(
+        &mut self,
+        states: &[(usize, CreatureStage)],
+    ) -> HashSet<usize> {
         let mut changed = HashSet::new();
-        for &(id, in_special) in states {
-            let previous = self.stages.insert(id, in_special);
-            if previous != Some(in_special) {
+        for &(id, stage) in states {
+            let kind = stage.kind();
+            if self.stages.insert(id, kind) != Some(kind) {
                 changed.insert(id);
             }
         }
@@ -410,6 +431,8 @@ pub fn build_creature_anim(
     for (_, anim) in &animations {
         for clips in std::iter::once(&anim.rest)
             .chain(anim.walk.iter().flatten())
+            .chain(anim.melee.iter().flatten())
+            .chain(anim.armed_rest.iter().flatten())
             .chain(anim.special.iter())
         {
             // Both the layer's static base and every animation frame are drawn.
@@ -473,70 +496,125 @@ pub fn build_creature_anim(
     (anim, report)
 }
 
-/// One creature's clips → sequences, aligned to the scene's layers by
-/// [`kn_game::LayerKey`], never by position: see [`pose_matched_layers`].
+/// Stable rest-first layer union across all poses, joined by part identity.
 fn build_sequences(anim: &CreatureAnimation, cache: &TextureCache) -> CreatureSequences {
-    let matched = pose_matched_layers(&anim.rest.layers, &anim.walk);
-    // The state-4 clip is matched to each resting layer by the same key: the
-    // appearance sequence carries the same parts (body, equipment, shadow) as
-    // the idle, and an unmatched swap slides one part's clip onto another.
-    let special_matched: Vec<Option<&GameCreatureLayer>> = anim
-        .rest
-        .layers
+    let mut keys: Vec<_> = anim.rest.layers.iter().map(|layer| layer.key).collect();
+    for pose in anim
+        .walk
         .iter()
-        .map(|rest_layer| {
-            anim.special.as_ref().and_then(|special| {
-                special
-                    .layers
+        .chain(anim.melee.iter())
+        .chain(anim.armed_rest.iter())
+        .flatten()
+        .chain(anim.special.iter())
+    {
+        for layer in &pose.layers {
+            if !keys.contains(&layer.key) {
+                keys.push(layer.key);
+            }
+        }
+    }
+    let body =
+        keys.into_iter()
+            .enumerate()
+            .map(|(index, key)| {
+                let rest_layer = layer_with_key(&anim.rest, key);
+                let rest = clip_seq(rest_layer, cache).or_else(|| Some(blank_clip()));
+                let walk = anim
+                    .walk
                     .iter()
-                    .find(|layer| layer.key == rest_layer.key)
+                    .map(|pose| {
+                        pose.as_ref()
+                            .and_then(|pose| clip_seq(layer_with_key(pose, key), cache))
+                    })
+                    .collect();
+                let special = anim.special.as_ref().map(|pose| {
+                    clip_seq(layer_with_key(pose, key), cache).unwrap_or_else(blank_clip)
+                });
+                let armed_rest = anim
+                    .armed_rest
+                    .iter()
+                    .map(|pose| {
+                        pose.as_ref().map(|pose| {
+                            clip_seq(layer_with_key(pose, key), cache).unwrap_or_else(blank_clip)
+                        })
+                    })
+                    .collect();
+                let melee = anim
+                    .melee
+                    .iter()
+                    .map(|pose| {
+                        pose.as_ref().map(|pose| {
+                            clip_seq(layer_with_key(pose, key), cache).unwrap_or_else(blank_clip)
+                        })
+                    })
+                    .collect();
+                (
+                    index,
+                    LayerSequences {
+                        rest,
+                        walk,
+                        special,
+                        melee,
+                        armed_rest,
+                    },
+                )
             })
-        })
-        .collect();
-    let body = anim
-        .rest
-        .layers
-        .iter()
-        .enumerate()
-        .map(|(index, rest_layer)| {
-            let rest = clip_seq(Some(rest_layer), cache);
-            let walk = matched[index]
-                .iter()
-                .map(|layer| clip_seq(*layer, cache))
-                .collect();
-            let special = clip_seq(special_matched[index], cache);
-            (
-                index,
-                LayerSequences {
-                    rest,
-                    walk,
-                    special,
-                },
-            )
-        })
-        .collect();
-    let rest = clip_seq(anim.rest.shadow.as_ref(), cache);
+            .collect();
+    let rest = clip_seq(anim.rest.shadow.as_ref(), cache).or_else(|| Some(blank_clip()));
     let walk = anim
         .walk
         .iter()
-        .map(|dir| {
-            dir.as_ref()
-                .and_then(|clips| clips.shadow.as_ref())
-                .and_then(|layer| clip_seq(Some(layer), cache))
+        .map(|pose| {
+            pose.as_ref()
+                .and_then(|clips| clip_seq(clips.shadow.as_ref(), cache))
         })
         .collect();
     let special = anim
         .special
         .as_ref()
-        .and_then(|clips| clips.shadow.as_ref())
-        .and_then(|layer| clip_seq(Some(layer), cache));
+        .map(|clips| clip_seq(clips.shadow.as_ref(), cache).unwrap_or_else(blank_clip));
+    let armed_rest = anim
+        .armed_rest
+        .iter()
+        .map(|pose| {
+            pose.as_ref()
+                .map(|clips| clip_seq(clips.shadow.as_ref(), cache).unwrap_or_else(blank_clip))
+        })
+        .collect();
+    let melee = anim
+        .melee
+        .iter()
+        .map(|pose| {
+            pose.as_ref()
+                .map(|clips| clip_seq(clips.shadow.as_ref(), cache).unwrap_or_else(blank_clip))
+        })
+        .collect();
     CreatureSequences {
         body,
         shadow: LayerSequences {
             rest,
             walk,
             special,
+            melee,
+            armed_rest,
         },
+    }
+}
+
+fn layer_with_key(clips: &CreatureClips, key: kn_game::LayerKey) -> Option<&GameCreatureLayer> {
+    clips.layers.iter().find(|layer| layer.key == key)
+}
+
+fn blank_clip() -> Clip {
+    Clip {
+        sequence: Arc::new(Sequence::new(vec![crate::animation::Frame {
+            image: None,
+            size: Vec2::ZERO,
+            offset: Vec2::ZERO,
+            ticks: 1,
+        }])),
+        base: 0,
+        corner: (0, 0),
     }
 }
 
@@ -547,6 +625,7 @@ fn build_sequences(anim: &CreatureAnimation, cache: &TextureCache) -> CreatureSe
 /// another order, and an index join would bolt one part's walk clip onto
 /// another's piece — equipment sliding across the sprite on every step
 /// (review #68).
+#[cfg(test)]
 fn pose_matched_layers<'a>(
     rest: &'a [GameCreatureLayer],
     walk: &'a [Option<CreatureClips>],
@@ -570,11 +649,22 @@ fn pose_matched_layers<'a>(
 /// Frames of one layer → a swap clip; `None` when no frame decoded.
 fn clip_seq(layer: Option<&GameCreatureLayer>, cache: &TextureCache) -> Option<Clip> {
     let layer = layer?;
-    let animation = layer.animation.as_ref()?;
-    let sequence = piece_sequence(animation, cache)?;
+    let (sequence, base) = if let Some(animation) = &layer.animation {
+        (piece_sequence(animation, cache)?, animation.base)
+    } else {
+        let texture = layer.base.and_then(|texture| cache.get(&texture))?;
+        (
+            Arc::new(Sequence::new(vec![crate::animation::Frame::new(
+                texture.handle.clone(),
+                texture.size.as_vec2(),
+                Vec2::ZERO,
+            )])),
+            0,
+        )
+    };
     Some(Clip {
         sequence,
-        base: animation.base,
+        base,
         corner: layer.corner,
     })
 }
@@ -682,6 +772,23 @@ fn build_creature_plan(
     };
     let bottom = origin.1 + height;
     let sequences = anim.creatures.get(&id);
+    if let Some(sequences) = sequences {
+        // Pose-only equipment needs an entity before its first visible frame.
+        for _ in layers.len()..sequences.body.len() {
+            layers.push(LayerData {
+                image: Handle::default(),
+                size: Vec2::ZERO,
+                offset: Vec2::ZERO,
+            });
+        }
+        if shadow.is_none() && sequences.shadow.melee.iter().any(Option::is_some) {
+            shadow = Some(LayerData {
+                image: Handle::default(),
+                size: Vec2::ZERO,
+                offset: Vec2::ZERO,
+            });
+        }
+    }
     let animations = layers
         .iter()
         .enumerate()
@@ -1070,6 +1177,24 @@ pub fn select_clip(
     layer.rest.as_ref()
 }
 
+fn select_stage_clip(
+    layer: &LayerSequences,
+    walking: bool,
+    direction: u8,
+    stage: CreatureStage,
+    armed: bool,
+) -> Option<&Clip> {
+    match stage {
+        CreatureStage::Melee { .. } => layer.melee.get(direction as usize).and_then(Option::as_ref),
+        CreatureStage::Idle if armed && !walking => layer
+            .armed_rest
+            .get(direction as usize)
+            .and_then(Option::as_ref)
+            .or(layer.rest.as_ref()),
+        _ => select_clip(layer, walking, direction, stage.is_special()),
+    }
+}
+
 /// Swaps each creature sprite's [`crate::animation::Animator`] between the
 /// resting, the walking and the state-4 sequence when the simulation's
 /// [`WalkState`], its facing direction or the creature's animation stage
@@ -1099,30 +1224,28 @@ pub fn sync_creature_animation(
     };
     let states = simulation.states();
     let restep = anim.observe_steps(&states);
-    let stage_pairs: Vec<(usize, bool)> = states
+    let stage_pairs: Vec<_> = states
         .iter()
         .map(|state| {
             (
                 state.id,
                 simulation
                     .creature_stage(state.id)
-                    .is_some_and(|stage| stage.is_special()),
+                    .unwrap_or(CreatureStage::Idle),
             )
         })
         .collect();
-    let stage_changes = anim.observe_stages(&stage_pairs);
-    // A special whose frame counter fell since the last observation is a restart
-    // the kind flip cannot see (Reset animation / rewind): it must re-anchor even
-    // on the same `Sequence` Arc (review of #101, P2-#3). Only creatures now in
-    // Special are offered, so a plain forward advance never trips it.
-    let special_playing: Vec<(usize, u32)> = states
+    let stage_changes = anim.observe_animation_stages(&stage_pairs);
+    let special_playing: Vec<_> = stage_pairs
         .iter()
-        .filter_map(|state| match simulation.creature_stage(state.id) {
-            Some(CreatureStage::Special { frame }) => Some((state.id, frame)),
-            _ => None,
-        })
+        .filter_map(|&(id, stage)| stage.frame().map(|frame| (id, frame)))
         .collect();
     let special_resets = anim.observe_specials(&special_playing);
+    let directed: HashSet<_> = states
+        .iter()
+        .filter(|state| state.direction.is_some())
+        .map(|state| state.id)
+        .collect();
     let facing: HashMap<usize, (bool, u8)> = states
         .iter()
         .map(|state| {
@@ -1161,16 +1284,11 @@ pub fn sync_creature_animation(
         let Some(creature) = anim.creatures.get(&tag.creature_id) else {
             continue;
         };
-        // The state machine's answer drives clip choice: while a creature
-        // plays its state-4 special (issue #70), the special clip wins over
-        // walk and rest regardless of the simulation's walking state.
-        let in_special = simulation
+        let stage = simulation
             .creature_stage(tag.creature_id)
-            .is_some_and(|stage| stage.is_special());
-        let special_frame = match simulation.creature_stage(tag.creature_id) {
-            Some(CreatureStage::Special { frame }) => Some(frame),
-            _ => None,
-        };
+            .unwrap_or(CreatureStage::Idle);
+        let acting = stage != CreatureStage::Idle;
+        let special_frame = stage.frame();
         let layer = if tag.is_shadow {
             &creature.shadow
         } else {
@@ -1180,24 +1298,38 @@ pub fn sync_creature_animation(
             }
         };
         let (walking, direction) = facing.get(&tag.creature_id).copied().unwrap_or((false, 0));
-        let clip = select_clip(layer, walking, direction, in_special);
+        let clip = select_stage_clip(
+            layer,
+            walking,
+            direction,
+            stage,
+            directed.contains(&tag.creature_id)
+                && simulation.creature_shown_state(tag.creature_id) == Some(0),
+        );
         let Some(clip) = clip else { continue };
         let (elapsed, step_ticks) = progress.get(&tag.creature_id).copied().unwrap_or((0, 0));
-        let sampled_frame = (walking
-            && !in_special
-            && layer
-                .walk
-                .get(direction as usize)
-                .is_some_and(Option::is_some))
-        .then(|| {
-            let point = sampled_step_tick(clip.sequence.ticks, elapsed, step_ticks);
-            clip.sequence
-                .frame_at(point, clip.sequence.phase_for(clip.base))
-        });
+        let sampled_frame = if let CreatureStage::Melee { frame } = stage {
+            Some(
+                clip.sequence
+                    .frame_at(u64::from(frame), clip.sequence.phase_for(clip.base)),
+            )
+        } else {
+            (walking
+                && !acting
+                && layer
+                    .walk
+                    .get(direction as usize)
+                    .is_some_and(Option::is_some))
+            .then(|| {
+                let point = sampled_step_tick(clip.sequence.ticks, elapsed, step_ticks);
+                clip.sequence
+                    .frame_at(point, clip.sequence.phase_for(clip.base))
+            })
+        };
         animator.sampled_frame = sampled_frame;
         let replay_anchor = replay_anchors.get(&tag.creature_id).copied();
         if Arc::ptr_eq(&animator.sequence, &clip.sequence)
-            && !(restep.contains(&tag.creature_id) && !in_special)
+            && !(restep.contains(&tag.creature_id) && !acting)
             && !stage_changes.contains(&tag.creature_id)
             && !special_resets.contains(&tag.creature_id)
             && replay_anchor
@@ -1326,6 +1458,312 @@ mod tests {
     use crate::animation::Frame;
 
     #[test]
+    fn melee_and_armed_idle_follow_the_live_direction_and_their_own_frames() {
+        let clip = |offset| Clip {
+            sequence: Arc::new(Sequence::new(
+                (0..3)
+                    .map(|frame| {
+                        Frame::new(
+                            Handle::default(),
+                            Vec2::ONE,
+                            Vec2::new((offset + frame) as f32, 0.0),
+                        )
+                    })
+                    .collect(),
+            )),
+            base: 0,
+            corner: (offset, 0),
+        };
+        let layer = LayerSequences {
+            rest: Some(clip(1)),
+            walk: vec![],
+            special: Some(clip(10)),
+            melee: (0..8).map(|direction| Some(clip(20 + direction))).collect(),
+            armed_rest: (0..8).map(|direction| Some(clip(40 + direction))).collect(),
+        };
+        let attack =
+            select_stage_clip(&layer, false, 5, CreatureStage::Melee { frame: 2 }, true).unwrap();
+        assert_eq!(attack.corner, (25, 0));
+        assert_eq!(attack.sequence.frame_at(2, 0), 2);
+        let idle = select_stage_clip(&layer, false, 5, CreatureStage::Idle, true).unwrap();
+        assert_eq!(idle.corner, (45, 0));
+        assert_eq!(
+            select_stage_clip(&layer, false, 5, CreatureStage::Idle, false)
+                .unwrap()
+                .corner,
+            (1, 0)
+        );
+        assert_eq!(
+            select_stage_clip(&layer, false, 5, CreatureStage::Special { frame: 1 }, true)
+                .unwrap()
+                .corner,
+            (10, 0)
+        );
+        let mut tracker = CreatureAnim::default();
+        assert_eq!(
+            tracker.observe_animation_stages(&[(7, CreatureStage::Melee { frame: 0 })]),
+            HashSet::from([7])
+        );
+        assert!(
+            tracker
+                .observe_animation_stages(&[(7, CreatureStage::Melee { frame: 2 })])
+                .is_empty()
+        );
+        assert_eq!(
+            tracker.observe_animation_stages(&[(7, CreatureStage::Idle)]),
+            HashSet::from([7])
+        );
+    }
+
+    #[test]
+    fn attack_only_equipment_gets_a_hidden_rest_entity_and_missing_parts_stay_hidden() {
+        let body = data_layer(LayerKey::Body, (0, 0));
+        let gear = data_layer(LayerKey::Gear { slot: 1 }, (5, 8));
+        let animations = CreatureAnimation {
+            rest: CreatureClips {
+                layers: vec![body.clone()],
+                shadow: None,
+            },
+            walk: vec![],
+            special: None,
+            armed_rest: vec![],
+            melee: vec![
+                Some(CreatureClips {
+                    layers: vec![gear, body],
+                    shadow: None,
+                }),
+                Some(CreatureClips {
+                    layers: vec![],
+                    shadow: None,
+                }),
+            ],
+        };
+        let sequences = build_sequences(&animations, &TextureCache::default());
+        assert_eq!(sequences.body.len(), 2);
+        let gear = sequences.body.get(&1).unwrap();
+        assert!(
+            gear.rest.as_ref().unwrap().sequence.frames[0]
+                .image
+                .is_none()
+        );
+        assert!(
+            gear.melee[1].as_ref().unwrap().sequence.frames[0]
+                .image
+                .is_none()
+        );
+        let anim = CreatureAnim {
+            creatures: HashMap::from([(7, sequences)]),
+            ..default()
+        };
+        let (plan, _) =
+            build_creature_plan(vec![], &TextureCache::default(), &anim, 7, (10, 10), (0, 0));
+        assert_eq!(plan.layers.len(), 2);
+        assert!(plan.animations.iter().all(Option::is_some));
+    }
+
+    #[test]
+    fn melee_body_equipment_and_shadow_sample_simulation_frames_even_when_clock_differs() {
+        use k1_data::{
+            game_state::{Character, GameState, Group, Rect},
+            map::KonungMap,
+        };
+        let mut characters = vec![None; 10];
+        characters[7] = Some(Character {
+            slot: 7,
+            x: 10,
+            y: 10,
+            group: 0,
+            state: 6,
+            direction: 2,
+            ..default()
+        });
+        characters[9] = Some(Character {
+            slot: 9,
+            x: 11,
+            y: 10,
+            group: 1,
+            class_id: 0x41,
+            ..default()
+        });
+        let fresh = || {
+            Simulation::new(
+                &KonungMap {
+                    ground: vec![],
+                    overlay: vec![],
+                    foot: vec![],
+                    decorations: vec![],
+                    objects: vec![],
+                },
+                &GameState {
+                    items: vec![],
+                    loot: vec![],
+                    exits: vec![],
+                    villages: vec![],
+                    characters: characters.clone(),
+                    groups: vec![
+                        Some(Group {
+                            slot: 0,
+                            first_character: 7,
+                            size: 1,
+                            kind: 0x20,
+                            ..default()
+                        }),
+                        Some(Group {
+                            slot: 1,
+                            first_character: 9,
+                            size: 1,
+                            kind: 0x41,
+                            map_id: 1,
+                            spawn: Rect {
+                                left: 11,
+                                right: 11,
+                                top: 10,
+                                bottom: 10,
+                            },
+                            ..default()
+                        }),
+                    ],
+                },
+                1,
+                Some(0),
+                vec![[12; 8]; 2],
+                vec![0; 2],
+                vec![],
+                42,
+                None,
+            )
+        };
+        let mut simulation = fresh();
+        simulation.configure_melee_frames(vec![[3; 8], [0; 8]]);
+        simulation.order_hero_attack(9).unwrap();
+        let sequence = Arc::new(Sequence::new(
+            (0..3)
+                .map(|frame| Frame::new(Handle::default(), Vec2::ONE, Vec2::new(frame as f32, 0.0)))
+                .collect(),
+        ));
+        let layer = || LayerSequences {
+            rest: Some(blank_clip()),
+            walk: vec![],
+            special: None,
+            armed_rest: (0..8)
+                .map(|direction| {
+                    Some(Clip {
+                        sequence: Arc::clone(&sequence),
+                        base: 0,
+                        corner: (20 + direction, 30),
+                    })
+                })
+                .collect(),
+            melee: (0..8)
+                .map(|_| {
+                    Some(Clip {
+                        sequence: Arc::clone(&sequence),
+                        base: 0,
+                        corner: (5, 6),
+                    })
+                })
+                .collect(),
+        };
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, crate::AnimPlugin::new(60.0)))
+            .insert_resource(CreatureSim {
+                sim: Some(simulation),
+                ..default()
+            })
+            .insert_resource(CreatureAnim {
+                creatures: HashMap::from([(
+                    7,
+                    CreatureSequences {
+                        body: HashMap::from([(0, layer()), (1, layer())]),
+                        shadow: layer(),
+                    },
+                )]),
+                ..default()
+            })
+            .insert_resource(CreatureSpawns {
+                origins: HashMap::from([(7, (0, 0))]),
+                ..default()
+            })
+            .add_systems(Update, sync_creature_animation.before(AnimSet::Sprites));
+        app.world_mut()
+            .resource_mut::<Clock>()
+            .goto(crate::PlayState::Paused);
+        let entities: Vec<_> = (0..3)
+            .map(|part| {
+                app.world_mut()
+                    .spawn((
+                        CreatureSprite {
+                            creature_id: 7,
+                            layer: part.min(1),
+                            is_shadow: part == 2,
+                        },
+                        Animator::new(Arc::clone(&sequence), 0, 0),
+                        Sprite::default(),
+                        Transform::default(),
+                        Visibility::Inherited,
+                    ))
+                    .id()
+            })
+            .collect();
+        for tick in 1..=8 {
+            let frame = {
+                let mut sim = app.world_mut().resource_mut::<CreatureSim>();
+                let simulation = sim.sim.as_mut().unwrap();
+                simulation.tick();
+                let Some(CreatureStage::Melee { frame }) = simulation.creature_stage(7) else {
+                    panic!("expected a repeating melee action at tick {tick}");
+                };
+                frame
+            };
+            app.world_mut().resource_mut::<Clock>().ticks = tick * 10;
+            app.update();
+            for &entity in &entities {
+                let animator = app.world().get::<Animator>(entity).unwrap();
+                assert_eq!(animator.shown(), Some(frame as usize));
+                assert_eq!((animator.x, animator.y), (5, 6));
+            }
+            app.update();
+            for &entity in &entities {
+                assert_eq!(
+                    app.world().get::<Animator>(entity).unwrap().shown(),
+                    Some(frame as usize)
+                );
+            }
+        }
+        {
+            let mut sim = app.world_mut().resource_mut::<CreatureSim>();
+            let simulation = sim.sim.as_mut().unwrap();
+            simulation.adopt_positions_from(fresh());
+            assert_eq!(simulation.creature_stage(7), Some(CreatureStage::Idle));
+            assert_eq!(simulation.creature_shown_state(7), Some(0));
+            assert_eq!(
+                simulation
+                    .states()
+                    .iter()
+                    .find(|state| state.id == 7)
+                    .unwrap()
+                    .direction,
+                Some(2)
+            );
+        }
+        app.update();
+        for &entity in &entities {
+            let animator = app.world().get::<Animator>(entity).unwrap();
+            assert_eq!((animator.x, animator.y), (22, 30));
+        }
+        app.world_mut().resource_mut::<CreatureSim>().sim = Some(fresh());
+        app.world_mut()
+            .resource_mut::<Clock>()
+            .goto(crate::PlayState::Off);
+        app.update();
+        for &entity in &entities {
+            let animator = app.world().get::<Animator>(entity).unwrap();
+            assert_eq!((animator.x, animator.y), (0, 0));
+            assert!(animator.sequence.frames[0].image.is_none());
+        }
+    }
+
+    #[test]
     fn shortened_steps_sample_the_entire_walk_cycle_without_changing_normal_steps() {
         assert_eq!(
             (1..=6)
@@ -1417,6 +1855,8 @@ mod tests {
             }),
             walk: (0..8).map(|_| Some(clip())).collect(),
             special: None,
+            melee: Vec::new(),
+            armed_rest: Vec::new(),
         };
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, crate::AnimPlugin::new(60.0)))

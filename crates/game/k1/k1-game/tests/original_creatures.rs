@@ -223,3 +223,66 @@ fn step_durations_are_the_walk_animation_frame_counts() {
             .unwrap();
     }
 }
+
+/// The measured state-5 resource boundary is identical in both installed editions.
+#[test]
+fn melee_frames_cover_combat_sprites_and_reject_the_three_passive_sets() {
+    for (edition, game) in game_dirs() {
+        let resources = Resources::load(&game).unwrap();
+        let states = states(&game);
+        resources
+            .with_graphics(|graph, objects| {
+                let mut seen = HashSet::new();
+                for (hero, state) in &states {
+                    for number in maps(&game) {
+                        let roster = creatures::roster(state, number, Some(*hero));
+                        let counts = creatures::melee_frame_counts(state, &roster, graph, objects);
+                        assert_eq!(counts.len(), roster.len());
+                        for (creature, counts) in roster.iter().zip(counts) {
+                            let character = state.characters[creature.id].as_ref().unwrap();
+                            if !seen.insert((character.has_dynamic_sprite(), character.sprite_set))
+                            {
+                                continue;
+                            }
+                            if character.has_dynamic_sprite() {
+                                if (14..=16).contains(&character.sprite_set) {
+                                    assert_eq!(
+                                        counts, [0; 8],
+                                        "{edition}: a passive sprite gained a melee action"
+                                    );
+                                } else if character.sprite_set == 20 {
+                                    assert_eq!(
+                                        counts,
+                                        [1, 1, 1, 1, 1, 1, 1, 16],
+                                        "{edition}: directional exception changed"
+                                    );
+                                } else {
+                                    assert!(counts.iter().all(|&count| count == counts[0]));
+                                    assert!(
+                                        (10..=16).contains(&counts[0]),
+                                        "{edition}: unexpected dynamic melee duration {}",
+                                        counts[0]
+                                    );
+                                }
+                            } else {
+                                assert_eq!(
+                                    counts, [12; 8],
+                                    "{edition}: unexpected human melee duration"
+                                );
+                            }
+                        }
+                    }
+                }
+                assert!(
+                    seen.contains(&(false, 0)),
+                    "{edition}: no human model checked"
+                );
+                assert!(seen.contains(&(true, 11)), "{edition}: no skeleton checked");
+                assert!(
+                    seen.contains(&(true, 14)),
+                    "{edition}: no passive sprite checked"
+                );
+            })
+            .unwrap();
+    }
+}

@@ -992,14 +992,16 @@ impl Game {
         let state = state
             .ok_or_else(|| GameError::Io(std::io::Error::other("no game state for simulation")))?;
         let jobs = k1_game::creatures::job_slots(&state, map_ref.number as usize);
-        let (step_table, special_frames) = self.resources.with_graphics(|graph, objects| {
-            let roster = k1_game::creatures::roster(&state, map_ref.number as usize, hero);
-            let steps = k1_game::creatures::step_durations(&state, &roster, graph, objects);
-            let specials =
-                k1_game::creatures::special_frame_counts(&state, &roster, graph, objects);
-            (steps, specials)
-        })?;
-        Ok(simulation::Simulation::new(
+        let (step_table, special_frames, melee_frames) =
+            self.resources.with_graphics(|graph, objects| {
+                let roster = k1_game::creatures::roster(&state, map_ref.number as usize, hero);
+                let steps = k1_game::creatures::step_durations(&state, &roster, graph, objects);
+                let specials =
+                    k1_game::creatures::special_frame_counts(&state, &roster, graph, objects);
+                let melee = k1_game::creatures::melee_frame_counts(&state, &roster, graph, objects);
+                (steps, specials, melee)
+            })?;
+        let mut simulation = simulation::Simulation::new(
             &konung_map,
             &state,
             map_ref.number as usize,
@@ -1009,7 +1011,9 @@ impl Game {
             jobs,
             seed,
             self.resources.tables.texts.as_ref(),
-        ))
+        );
+        simulation.configure_melee_frames(melee_frames);
+        Ok(simulation)
     }
 
     /// Resolves the same source/hero as a map session, but takes the actual
@@ -1116,6 +1120,36 @@ impl Game {
                         .map(clips_of)
                     })
                     .collect();
+                let armed_rest: Vec<Option<CreatureClips>> = (0..DIRECTIONS as u8)
+                    .map(|direction| {
+                        k1_game::scene::pose_in(
+                            character,
+                            px,
+                            py,
+                            &state,
+                            &graphics,
+                            &PoseKind::start(0, direction),
+                        )
+                        .ok()
+                        .flatten()
+                        .map(clips_of)
+                    })
+                    .collect();
+                let melee: Vec<Option<CreatureClips>> = (0..DIRECTIONS as u8)
+                    .map(|direction| {
+                        k1_game::scene::pose_in(
+                            character,
+                            px,
+                            py,
+                            &state,
+                            &graphics,
+                            &PoseKind::start(k1_game::creature_anim::MELEE_STATE, direction),
+                        )
+                        .ok()
+                        .flatten()
+                        .map(clips_of)
+                    })
+                    .collect();
                 // Only a state-4 record can have a special; a human's state 4 is
                 // the shot, which is out of #70's scope and must not be routed
                 // through the appearance clip (docs/research/k1/creatures/animation.md).
@@ -1138,13 +1172,18 @@ impl Game {
                         .map(clips_of)
                     })
                     .flatten();
-                if walk.iter().any(|clip| clip.is_some()) || special.is_some() {
+                if walk.iter().any(Option::is_some)
+                    || melee.iter().any(Option::is_some)
+                    || special.is_some()
+                {
                     result.push((
                         character.slot,
                         CreatureAnimation {
                             rest,
                             walk,
                             special,
+                            melee,
+                            armed_rest,
                         },
                     ));
                 }
@@ -1415,6 +1454,10 @@ pub struct CreatureAnimation {
     pub rest: CreatureClips,
     pub walk: Vec<Option<CreatureClips>>,
     pub special: Option<CreatureClips>,
+    /// Melee poses in the same eight sprite directions as `walk`.
+    pub melee: Vec<Option<CreatureClips>>,
+    /// Armed idle poses keep the facing selected by a melee action.
+    pub armed_rest: Vec<Option<CreatureClips>>,
 }
 
 /// The pose's own clips, in the order the scene lists the creature's pieces:

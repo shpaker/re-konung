@@ -48,6 +48,8 @@ pub enum GoalPolicy {
     #[default]
     Nearby,
     Exact,
+    /// End on a free immediate neighbour, never on the requested cell.
+    Adjacent,
 }
 
 /// Pace selected for one order; the active step always keeps its original duration.
@@ -697,7 +699,11 @@ impl<P: Passage, K: Pace> World<P, K> {
             from,
             goal,
         };
-        let found = route::find_route(&request, &mut self.rng);
+        let found = if order.policy == GoalPolicy::Adjacent {
+            route::find_adjacent_route(&request, &mut self.rng)
+        } else {
+            route::find_route(&request, &mut self.rng)
+        };
         match found {
             Some(route) => {
                 let steps = route.len();

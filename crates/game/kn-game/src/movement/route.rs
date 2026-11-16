@@ -211,8 +211,26 @@ pub fn find_route<P: Passage>(request: &RouteRequest<'_, P>, rng: &mut Rng) -> O
     None
 }
 
-/// A* to one ring of cells around the goal: the ring is both the success test
-/// and the anchor of the estimate.
+/// Approach an immediate neighbour even when the requested cell itself is free.
+pub fn find_adjacent_route<P: Passage>(
+    request: &RouteRequest<'_, P>,
+    rng: &mut Rng,
+) -> Option<Route> {
+    if !request.grid.contains(request.from) || !request.grid.contains(request.goal) {
+        return None;
+    }
+    let candidates: Vec<_> = Direction::ALL
+        .into_iter()
+        .filter_map(|direction| request.grid.neighbour(request.goal, direction))
+        .filter(|cell| request.enterable(*cell))
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    astar_to(request, &candidates, rng.below(8) as usize)
+}
+
+/// Search to any candidate, with a lower-bound estimate to the whole candidate set.
 fn astar_to<P: Passage>(
     request: &RouteRequest<'_, P>,
     candidates: &[Cell],
