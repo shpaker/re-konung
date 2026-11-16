@@ -16,6 +16,30 @@ use kn_render::{
     update_lighting_uniforms,
 };
 
+#[derive(Component)]
+struct BoundaryProbe;
+
+#[derive(Resource)]
+struct BoundaryMaterials {
+    ambient: Handle<KonungLightMaterial>,
+    neutral: Handle<KonungLightMaterial>,
+    switches: u32,
+}
+
+fn switch_material(
+    mut materials: ResMut<BoundaryMaterials>,
+    mut sprite: Single<&mut SpriteMaterial<KonungLightMaterial>, With<BoundaryProbe>>,
+) {
+    if materials.switches < 240 {
+        sprite.0 = if materials.switches.is_multiple_of(2) {
+            materials.ambient.clone()
+        } else {
+            materials.neutral.clone()
+        };
+        materials.switches += 1;
+    }
+}
+
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
     let texture = world.resource_mut::<Assets<Image>>().add(Image::new(
@@ -61,6 +85,37 @@ fn setup(world: &mut World) {
             Transform::from_xyz(index as f32 * 64.0 - 160.0, 0.0, 0.0),
         ));
     }
+    let pool = world.resource_scope::<Assets<Image>, _>(|world, mut images| {
+        let mut materials = world.resource_mut::<Assets<KonungLightMaterial>>();
+        LightingMaterials::new(&mut images, &mut materials, &[])
+    });
+    let ambient = pool.ambient();
+    let neutral = pool.neutral();
+    world.insert_resource(pool);
+    world.insert_resource(LightingState {
+        ambient_blend: Vec3::splat(-0.7),
+        ..default()
+    });
+    world.run_system_once(update_lighting_uniforms).unwrap();
+    world.insert_resource(BoundaryMaterials {
+        ambient,
+        neutral: neutral.clone(),
+        switches: 0,
+    });
+    for (x, extended) in [(-64.0, true), (64.0, false)] {
+        let mut sprite = world.spawn((
+            Sprite {
+                image: texture.clone(),
+                color: Color::srgba(0.6, 0.8, 1.0, 0.5),
+                custom_size: Some(Vec2::splat(64.0)),
+                ..default()
+            },
+            Transform::from_xyz(x, -80.0, 0.0),
+        ));
+        if extended {
+            sprite.insert((BoundaryProbe, SpriteMaterial(neutral.clone())));
+        }
+    }
     // The probe freezes every material at its own case instead of using a shared clock.
     world.remove_resource::<LightingMaterials>();
 }
@@ -70,8 +125,9 @@ fn capture(
     mut frames: Local<u32>,
     capturing: Query<(), With<Capturing>>,
     time: Res<Time>,
+    boundary: Res<BoundaryMaterials>,
 ) {
-    if time.elapsed_secs() < 3.0 {
+    if time.elapsed_secs() < 3.0 || boundary.switches < 240 {
         return;
     }
     *frames += 1;
@@ -97,6 +153,6 @@ fn main() {
         }))
         .add_plugins(KonungLightingPlugin)
         .add_systems(Startup, setup)
-        .add_systems(Update, capture)
+        .add_systems(Update, (switch_material, capture).chain())
         .run();
 }

@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bevy::prelude::*;
+use bevy::{prelude::*, sprite_render::SpriteMaterial};
 use kn_game::simulation::{CreatureStage, CreatureState, Simulation, WalkState};
 use kn_game::{
     CreatureAnimation, CreatureClips, CreatureLayer as GameCreatureLayer, Game, MapRef, Piece,
@@ -34,6 +34,7 @@ use crate::creatures::{
     CreatureData, CreatureNode, CreatureRoot, CreatureShadow, DepthMap, LayerAnimation, LayerData,
     spawn_creature, update_creature_depth,
 };
+use crate::lighting::LightingMaterials;
 use crate::scene::{Z_STEP, piece_sequence, piece_size};
 use crate::textures::TextureCache;
 
@@ -1008,6 +1009,7 @@ pub fn spawn_creature_nodes(
     spawns: Res<CreatureSpawns>,
     depth: Res<CreatureDepth>,
     visible: Res<CreatureNodesVisible>,
+    lighting: Option<Res<LightingMaterials>>,
 ) {
     if sim.creatures_spawned || sim.sim.is_none() {
         return;
@@ -1030,6 +1032,11 @@ pub fn spawn_creature_nodes(
                 layer,
                 is_shadow: false,
             });
+            if let Some(pool) = &lighting {
+                commands
+                    .entity(*child)
+                    .insert(SpriteMaterial(pool.neutral()));
+            }
         }
         if let Some(shadow) = spawned.shadow {
             commands.entity(shadow).insert(CreatureSprite {
@@ -1348,6 +1355,115 @@ mod tests {
             42,
             None,
         )
+    }
+
+    #[test]
+    fn creature_layers_keep_the_material_type_across_light_boundaries() {
+        use crate::lighting::{FineLightGrid, KonungLightMaterial, update_creature_lighting};
+
+        let simulation = synthetic_simulation();
+        let state = simulation.states().into_iter().next().unwrap();
+        let mut images = Assets::<Image>::default();
+        let mut materials = Assets::<KonungLightMaterial>::default();
+        let pool = LightingMaterials::new(&mut images, &mut materials, &[]);
+        let ambient = pool.ambient();
+        let neutral = pool.neutral();
+        let layer = || LayerData {
+            image: Handle::default(),
+            size: Vec2::splat(8.0),
+            offset: Vec2::new(3.0, 4.0),
+        };
+        let sequence = Arc::new(Sequence::new(vec![Frame {
+            image: Some(Handle::default()),
+            size: Vec2::splat(8.0),
+            offset: Vec2::ZERO,
+            ticks: 1,
+        }]));
+        let mut app = App::new();
+        app.insert_resource(CreatureSim {
+            sim: Some(simulation),
+            ..default()
+        })
+        .insert_resource(CreatureSpawns {
+            plans: vec![CreatureData {
+                id: state.id as u32,
+                x: 100,
+                y: 200,
+                bottom: 208,
+                layers: vec![layer(), layer()],
+                animations: vec![
+                    Some(LayerAnimation {
+                        sequence: Arc::clone(&sequence),
+                        base: 0,
+                        anchor: (3, 4),
+                    }),
+                    None,
+                ],
+                shadow: Some(layer()),
+                shadow_animation: None,
+            }],
+            ..default()
+        })
+        .init_resource::<CreatureDepth>()
+        .insert_resource(CreatureNodesVisible(false))
+        .insert_resource(pool)
+        .add_systems(
+            Update,
+            (spawn_creature_nodes, update_creature_lighting).chain(),
+        );
+
+        // Even before a grid is supplied, hidden and static layers are born with
+        // the custom material, before the renderer can extract a standard one.
+        app.update();
+        let mut query = app
+            .world_mut()
+            .query::<(Entity, &CreatureSprite, &Transform)>();
+        let sprites: Vec<_> = query
+            .iter(app.world())
+            .map(|(entity, tag, transform)| (entity, tag.is_shadow, *transform))
+            .collect();
+        assert_eq!(sprites.len(), 3);
+        for &(entity, shadow, _) in &sprites {
+            let material = app
+                .world()
+                .get::<SpriteMaterial<KonungLightMaterial>>(entity);
+            assert_eq!(
+                material.map(|material| &material.0),
+                (!shadow).then_some(&neutral)
+            );
+        }
+        let root = app.world().resource::<CreatureSim>().creature_root.unwrap();
+        assert_eq!(
+            app.world().get::<Visibility>(root),
+            Some(&Visibility::Hidden)
+        );
+
+        for value in [0, 7, 0, 7, 0] {
+            let mut grid = vec![vec![0; state.cell.0 as usize + 1]; state.cell.1 as usize + 1];
+            grid[state.cell.1 as usize][state.cell.0 as usize] = value;
+            app.insert_resource(FineLightGrid(Some(grid)));
+            app.update();
+            let expected = if value == 0 { &ambient } else { &neutral };
+            for &(entity, shadow, transform) in &sprites {
+                assert_eq!(app.world().get::<Transform>(entity), Some(&transform));
+                let material = app
+                    .world()
+                    .get::<SpriteMaterial<KonungLightMaterial>>(entity);
+                assert_eq!(
+                    material.map(|material| &material.0),
+                    (!shadow).then_some(expected)
+                );
+                if let Some(animator) = app.world().get::<Animator>(entity) {
+                    assert!(Arc::ptr_eq(&animator.sequence, &sequence));
+                }
+            }
+            // A stable cell must not keep dirtying materials every frame.
+            app.update();
+            let mut changed = app
+                .world_mut()
+                .query_filtered::<Entity, Changed<SpriteMaterial<KonungLightMaterial>>>();
+            assert_eq!(changed.iter(app.world()).count(), 0);
+        }
     }
 
     #[test]
