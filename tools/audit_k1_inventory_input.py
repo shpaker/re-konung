@@ -15,12 +15,12 @@ FOREIGN_ACTOR = ACTOR + 0x200
 
 
 class InputProbe(Probe):
-    def __init__(self, build):
+    def __init__(self, build, *, actor=ACTOR):
         self.dispatcher, self.hit_test = (
             (0x42260C, 0x4381C8) if build.path.startswith("rus/") else (0x4226D8, 0x438410)
         )
         self.hit = 9
-        super().__init__(build, intact=True)
+        super().__init__(build, intact=True, actor=actor)
 
     def boundary(self, machine, address, size, data):
         if address == self.hit_test:

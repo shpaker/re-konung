@@ -6,13 +6,16 @@
 
 Run: uv run tools/audit_k1_inventory_tick.py
 Exit 1 means the original input/tick chain is incomplete, with each blocked case
-reported separately. No protected game helper is replaced to obtain a passing run.
+reported separately. No unavailable game helper is replaced to obtain a passing run.
 """
 
 from dataclasses import dataclass
 
-from audit_k1_inventory import ACTOR, BUILDS, CURSOR, ITEMS, ROOT
+import pefile
+from audit_k1_inventory import BUILDS, CURSOR, ITEMS, ROOT, Probe
 from audit_k1_inventory_input import InputProbe
+from audit_k1_inventory_ui import UIProbe
+from k1_inventory_evidence import pair_recalculations
 from unicorn import UcError
 from unicorn.x86_const import UC_X86_REG_EIP
 
@@ -21,7 +24,7 @@ GROUP = 0x1002000
 IMAGE = 0x1003000
 HUMAN_MODEL = 0x6F348C
 GROUP_TICK = 0x4123BC
-PROTECTED_STEP = 0x43DB6A
+UNAVAILABLE_STEP = 0x43DB6A
 
 
 @dataclass(frozen=True)
@@ -36,10 +39,26 @@ class Phase:
     goal: tuple[int, int]
 
 
-class TickProbe(InputProbe):
+class TickFixture:
     def __init__(self, build):
         self.random_calls = 0
+        executable = pefile.PE(str(ROOT / "original/k1" / build.path))
+        self.step_address = 0x43D922 if build.path.startswith("rus/") else UNAVAILABLE_STEP
+        self.step_rva = self.step_address - executable.OPTIONAL_HEADER.ImageBase
+        self.step_offset = executable.get_offset_from_rva(self.step_rva)
+        self.step_section = executable.get_section_by_rva(self.step_rva).Name.rstrip(b"\0").decode()
+        self.entry_address = (
+            executable.OPTIONAL_HEADER.ImageBase + executable.OPTIONAL_HEADER.AddressOfEntryPoint
+        )
+        raw_data = (ROOT / "original/k1" / build.path).read_bytes()
+        self.step_bytes = raw_data[self.step_offset : self.step_offset + 64]
+        mapped = executable.get_memory_mapped_image()
+        assert mapped[self.step_rva : self.step_rva + 64] == self.step_bytes
         super().__init__(build)
+        self.check_step_bytes()
+
+    def check_step_bytes(self):
+        assert bytes(self.machine.mem_read(self.step_address, 64)) == self.step_bytes
 
     def boundary(self, machine, address, size, data):
         if address in (0x43EA46, 0x43EC98):
@@ -62,9 +81,9 @@ class TickProbe(InputProbe):
         )
 
     def prepare(self, state, frame):
+        self.machine.mem_write(CHARACTERS, bytes(512))
         self.reset(state=state)
         self.random_calls = 0
-        self.machine.mem_write(CHARACTERS, bytes(512))
         self.machine.mem_write(GROUP, bytes(32))
         self.machine.mem_write(HUMAN_MODEL, bytes(0x4D28))
         self.write(HUMAN_MODEL + 4, IMAGE)
@@ -80,22 +99,22 @@ class TickProbe(InputProbe):
             self.write(ITEMS + item * 16 + 8, 100.0, "f")
         self.mass(2, 1)
         self.inventory([2])
-        self.write(ACTOR + 0x6A, 1, "H")
-        self.write(ACTOR + 0x12, 2, "B")
-        self.write(ACTOR + 3, 4, "B")
-        self.write(ACTOR + 2, 1 if state == 5 else 8 if state == 1 else 0, "B")
-        self.write(ACTOR + 1, 7 if state == 5 else 0, "B")
-        self.write(ACTOR + 0x10, frame, "B")
-        self.write(ACTOR + 0xD7, 12, "B")
-        self.write(ACTOR + 0x13, 0, "B")
-        self.write(ACTOR + 0x14, -1, "b")
-        self.write(ACTOR + 6, 2, "h")
-        self.write(ACTOR + 8, 100, "h")
-        self.write(ACTOR + 10, 100, "h")
-        self.write(ACTOR + 12, 101, "h")
-        self.write(ACTOR + 14, 100, "h")
-        self.write(ACTOR + 0x5C, 1600, "h")
-        self.machine.mem_write(CHARACTERS + 256, bytes(self.machine.mem_read(ACTOR, 256)))
+        self.write(self.actor + 0x6A, 1, "H")
+        self.write(self.actor + 0x12, 2, "B")
+        self.write(self.actor + 3, 4, "B")
+        self.write(self.actor + 2, 1 if state == 5 else 8 if state == 1 else 0, "B")
+        self.write(self.actor + 1, 7 if state == 5 else 0, "B")
+        self.write(self.actor + 0x10, frame, "B")
+        self.write(self.actor + 0xD7, 12, "B")
+        self.write(self.actor + 0x13, 0, "B")
+        self.write(self.actor + 0x14, -1, "b")
+        self.write(self.actor + 6, 2, "h")
+        self.write(self.actor + 8, 100, "h")
+        self.write(self.actor + 10, 100, "h")
+        self.write(self.actor + 12, 101, "h")
+        self.write(self.actor + 14, 100, "h")
+        self.write(self.actor + 0x5C, 1600, "h")
+        self.machine.mem_write(CHARACTERS + 256, bytes(self.machine.mem_read(self.actor, 256)))
         self.machine.mem_write(CHARACTERS + 256 + 0x66, bytes(0x66))
         self.write(CHARACTERS + 256, 0, "B")
         self.write(CHARACTERS + 256 + 2, 0, "B")
@@ -108,21 +127,98 @@ class TickProbe(InputProbe):
         self.write(GROUP + 0x1C, 1, "B")
         self.write(0x81D56C, CHARACTERS)
         self.write(CURSOR, 4)
+        self.check_step_bytes()
 
     def change(self, action):
-        before = self.phase(ACTOR)
+        before = self.phase(self.actor)
         if action == "remove":
             self.click(9)
-            assert self.call(self.build.land, ACTOR) == 1
-            assert self.read(ACTOR + 0x6A, "H") == 0
+            assert self.call(self.build.land, self.actor) == 1
+            assert self.read(self.actor + 0x6A, "H") == 0
             assert self.inventory()[:2] == [1, 2]
         elif action == "replace":
             self.take(2)
             self.click(9)
-            assert self.read(ACTOR + 0x6A, "H") == 2
+            assert self.read(self.actor + 0x6A, "H") == 2
             assert self.inventory()[0] == 1
-        assert self.phase(ACTOR) == before
-        self.machine.mem_write(CHARACTERS, bytes(self.machine.mem_read(ACTOR, 256)))
+        assert self.phase(self.actor) == before
+        self.machine.mem_write(CHARACTERS, bytes(self.machine.mem_read(self.actor, 256)))
+
+    def tick(self):
+        # Keep raw Unicorn failures available to this diagnostic's explicit classifier.
+        return Probe.call(self, GROUP_TICK, GROUP)
+
+
+class TickProbe(TickFixture, InputProbe):
+    """Retain the original transfer-only UI boundaries for comparison."""
+
+
+class UITickProbe(TickFixture, UIProbe):
+    """Execute inventory refresh and character-screen logic before the group tick."""
+
+    def change(self, action):
+        before = self.phase(self.actor)
+        self.write(0x81D5C0, self.read(0x81D734))
+        if action == "remove":
+            self.click(9)
+            self.click(50)
+            assert self.read(self.actor + 0x6A, "H") == 0
+            assert self.inventory()[:2] == [1, 2]
+        elif action == "replace":
+            self.click(50)
+            self.click(9)
+            assert self.read(self.actor + 0x6A, "H") == 2
+            assert self.inventory()[0] == 1
+        assert self.phase(self.actor) == before
+
+
+def matrix(probe, edition, mode):
+    completed = 0
+    blocked = 0
+    if mode != "isolated":
+        assert probe.actor == CHARACTERS
+    for state in (0, 1, 5):
+        for frame in (0, 5, 11):
+            results = []
+            control_phase = None
+            for action in ("control", "remove", "replace"):
+                probe.prepare(state, frame)
+                if mode == "inventory":
+                    probe.refresh_inventory()
+                elif mode == "character":
+                    probe.show_character()
+                if mode != "isolated":
+                    assert probe.read(0x81D610) == (3 if mode == "character" else 0)
+                probe.change(action)
+                probe.check_step_bytes()
+                if isinstance(probe, UIProbe):
+                    pair_recalculations(probe.trace)
+                try:
+                    probe.tick()
+                except UcError:
+                    instruction = probe.machine.reg_read(UC_X86_REG_EIP)
+                    if edition != "eng" or instruction != UNAVAILABLE_STEP:
+                        raise
+                    probe.check_step_bytes()
+                    blocked += 1
+                    results.append(f"{action}=BLOCKED@{instruction:#x}")
+                else:
+                    completed += 1
+                    phase = probe.phase(CHARACTERS)
+                    assert phase.active_slot == 2
+                    assert phase.armed == 4
+                    if action == "control":
+                        control_phase = phase
+                    else:
+                        assert phase == control_phase
+                    expected_equipment = {"control": 1, "remove": 0, "replace": 2}
+                    assert probe.read(CHARACTERS + 0x6A, "H") == expected_equipment[action]
+                    if isinstance(probe, UIProbe):
+                        pair_recalculations(probe.trace)
+                    results.append(f"{action}={phase}")
+            print(edition, mode, "input", (state, frame), *results, sep=" | ")
+    print(edition, mode, "completed ticks:", completed, "blocked ticks:", blocked)
+    return blocked
 
 
 def main():
@@ -132,45 +228,26 @@ def main():
     blocked = 0
     for build in BUILDS:
         edition = build.path.split("/")[0]
-        probe = TickProbe(build)
-        completed = 0
-        edition_blocked = 0
-        for state in (0, 1, 5):
-            for frame in (0, 5, 11):
-                results = []
-                control_phase = None
-                for action in ("control", "remove", "replace"):
-                    probe.prepare(state, frame)
-                    probe.change(action)
-                    try:
-                        probe.call(GROUP_TICK, GROUP)
-                    except UcError:
-                        instruction = probe.machine.reg_read(UC_X86_REG_EIP)
-                        if edition != "eng" or instruction != PROTECTED_STEP:
-                            raise
-                        edition_blocked += 1
-                        results.append(f"{action}=BLOCKED@{instruction:#x}")
-                    else:
-                        completed += 1
-                        phase = probe.phase(CHARACTERS)
-                        assert phase.active_slot == 2
-                        assert phase.armed == 4
-                        if action == "control":
-                            control_phase = phase
-                        else:
-                            assert phase == control_phase
-                        expected_equipment = {"control": 1, "remove": 0, "replace": 2}
-                        assert probe.read(CHARACTERS + 0x6A, "H") == expected_equipment[action]
-                        results.append(f"{action}={phase}")
-                print(edition, "input", (state, frame), *results, sep=" | ")
-        blocked += edition_blocked
-        print(edition, "completed ticks:", completed, "blocked ticks:", edition_blocked)
+        for mode, probe_type in (
+            ("isolated", TickProbe),
+            ("inventory", UITickProbe),
+            ("character", UITickProbe),
+        ):
+            probe = probe_type(build)
+            print(
+                edition,
+                f"step helper VA={probe.step_address:#x} RVA={probe.step_rva:#x}",
+                f"raw offset={probe.step_offset:#x} section={probe.step_section}",
+                f"PE entry VA={probe.entry_address:#x} raw/mapped equal=True",
+            )
+            blocked += matrix(probe, edition, mode)
     print("Synthetic inputs: hit target, one group, adjacent enemy, 12-frame model, 16x24 image.")
-    print("CRT memcpy/memset modeled, rand supplied as zero; sound/UI presentation skipped.")
+    print("CRT memory/text helpers modeled, rand supplied as zero; sound/draw sinks skipped.")
     print("Original game recalculation, mass, input dispatch and attempted group tick execute.")
-    print("No renderer, protected coordinate-helper emulation or combat-formula claim.")
+    print("No renderer, coordinate-helper emulation or combat-formula claim.")
     if blocked:
-        print("INCOMPLETE: ENG protected game coordinate helper prevents the listed next ticks.")
+        print("INCOMPLETE: ENG raw-PE game coordinate helper fails at its first instruction.")
+        print("Runtime initialization/protection is a hypothesis; fixture preserves helper bytes.")
     return int(bool(blocked))
 
 
