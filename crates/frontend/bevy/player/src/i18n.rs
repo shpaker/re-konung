@@ -87,6 +87,10 @@ pub enum Text {
     LanguageNative(Language),
     Fullscreen,
     Vsync,
+    GeneralTab,
+    DeviationsTab,
+    DoubleClickRun,
+    DoubleClickRunHelp,
     Save,
     Cancel,
     /// Why saving the settings failed.
@@ -343,6 +347,26 @@ pub fn t(language: Language, text: Text) -> &'static str {
             Language::Russian => "Вертикальная синхронизация",
             Language::English => "Vertical sync",
         },
+        Text::GeneralTab => match language {
+            Language::Russian => "Общие",
+            Language::English => "General",
+        },
+        Text::DeviationsTab => match language {
+            Language::Russian => "Отличия от оригинала",
+            Language::English => "Differences from the original",
+        },
+        Text::DoubleClickRun => match language {
+            Language::Russian => "Бег по двойному клику",
+            Language::English => "Run on double-click",
+        },
+        Text::DoubleClickRunHelp => match language {
+            Language::Russian => {
+                "Скорость ×2 и ускоренная анимация ходьбы. Дополнение к K1, по умолчанию выключено."
+            }
+            Language::English => {
+                "2× speed with accelerated walking animation. An optional K1 extension, off by default."
+            }
+        },
         Text::Save => match language {
             Language::Russian => "Сохранить",
             Language::English => "Save",
@@ -436,6 +460,10 @@ mod tests {
             Text::LanguageNative(Language::English),
             Text::Fullscreen,
             Text::Vsync,
+            Text::GeneralTab,
+            Text::DeviationsTab,
+            Text::DoubleClickRun,
+            Text::DoubleClickRunHelp,
             Text::Save,
             Text::Cancel,
         ];

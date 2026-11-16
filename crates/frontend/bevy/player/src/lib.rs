@@ -9,6 +9,7 @@
 
 pub mod flow;
 pub mod i18n;
+pub mod orders;
 pub mod session;
 
 pub mod screens;
@@ -17,14 +18,14 @@ pub mod widgets;
 use std::path::PathBuf;
 
 use bevy::{
-    input::mouse::{AccumulatedMouseMotion, MouseWheel},
+    input::mouse::MouseWheel,
     picking::hover::Hovered,
     prelude::*,
     window::{MonitorSelection, PresentMode, VideoModeSelection, WindowMode},
 };
 use k1_game::lighting;
 use kn_game::TICK_MS;
-use kn_input::{ZoomScroll, drag_delta, pan_direction, wheel_steps};
+use kn_input::{ZoomScroll, pan_direction, wheel_steps};
 use kn_render::{
     AnimPlugin, CameraInput, CameraState, CreatureAnimationPlugin, CreatureMotion, CreatureSim,
     GameResource, KonungLightingPlugin, LightingState, MapCamera, MapCameraPlugin, PAN_SPEED,
@@ -102,6 +103,7 @@ pub fn run_player(config: PlayerConfig) {
         // picture of a creature is built in one place (issue #70).
         AnimPlugin::new(TICK_MS as f32),
         CreatureAnimationPlugin,
+        orders::PlayerOrdersPlugin,
         // The same scene lighting as the viewer: uniforms from the
         // simulation tick, one writer in kn-render.
         KonungLightingPlugin,
@@ -181,8 +183,7 @@ fn update_lighting_state(
 #[allow(clippy::too_many_arguments)]
 fn camera_control(
     keys: Res<ButtonInput<KeyCode>>,
-    buttons: Res<ButtonInput<MouseButton>>,
-    motion: Res<AccumulatedMouseMotion>,
+    gesture: Res<orders::MapGesture>,
     mut wheel: MessageReader<MouseWheel>,
     over_ui_nodes: Query<&Hovered, With<Node>>,
     time: Res<Time>,
@@ -192,11 +193,7 @@ fn camera_control(
 ) {
     let over_ui = pointer_over_ui(over_ui_nodes.iter().map(|hovered| hovered.0));
     let direction = pan_direction(&keys);
-    let drag = if over_ui {
-        None
-    } else {
-        drag_delta(&buttons, &motion)
-    };
+    let drag = gesture.pan_delta;
     let steps = wheel_steps(&mut scroll, &mut wheel, over_ui);
     let (mut transform, projection) = camera.into_inner();
     let scale = ortho_scale(projection);

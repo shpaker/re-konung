@@ -5,12 +5,11 @@
 //! renders it and mirrors it back onto the widgets.
 
 use bevy::feathers::controls::ButtonVariant;
-use bevy::feathers::display::caption;
 use bevy::prelude::*;
 use bevy::scene::{EntityScene, Scene};
 use bevy::ui::Checked;
 use bevy::ui_widgets::{Activate, ValueChange};
-use kn_app::{Action, SaveStatus, SettingsAction, SettingsField};
+use kn_app::{Action, SaveStatus, SettingsAction, SettingsField, SettingsTab};
 use kn_settings::{Language, Settings};
 use kn_ui::{KonungFonts, palette, spacing, typo, widgets};
 
@@ -30,6 +29,14 @@ pub(crate) struct FullscreenCheck;
 /// The vsync checkbox.
 #[derive(Component, Clone, Default)]
 pub(crate) struct VsyncCheck;
+#[derive(Component, Clone, Default)]
+pub(crate) struct DoubleClickRunCheck;
+#[derive(Component, Clone, Default)]
+pub(crate) struct GeneralTab;
+#[derive(Component, Clone, Default)]
+pub(crate) struct DeviationsTab;
+#[derive(Component, Clone, Default)]
+struct TabContent;
 /// The one-line save status, empty while idle.
 #[derive(Component, Clone, Default)]
 pub(crate) struct SaveStatusLine;
@@ -37,7 +44,7 @@ pub(crate) struct SaveStatusLine;
 /// The draft language the current view was built in; a change means the view
 /// is stale — its captions are baked at spawn, so it is respawned wholesale.
 #[derive(Resource)]
-struct BuiltLanguage(kn_settings::Language);
+struct BuiltView(kn_settings::Language, SettingsTab);
 
 pub(crate) fn spawn(world: &mut World) {
     let fonts = screens::fonts(world);
@@ -47,7 +54,22 @@ pub(crate) fn spawn(world: &mut World) {
     world
         .spawn_scene(root(&fonts, screen.draft))
         .expect("the settings root spawns");
-    world.insert_resource(BuiltLanguage(screen.draft.language));
+    let container = world
+        .query_filtered::<Entity, With<TabContent>>()
+        .single(world)
+        .unwrap();
+    let content = match screen.tab {
+        SettingsTab::General => world
+            .spawn_scene(general(&fonts, screen.draft.language))
+            .unwrap()
+            .id(),
+        SettingsTab::Deviations => world
+            .spawn_scene(deviations(&fonts, screen.draft.language))
+            .unwrap()
+            .id(),
+    };
+    world.entity_mut(content).insert(ChildOf(container));
+    world.insert_resource(BuiltView(screen.draft.language, screen.tab));
 }
 
 fn root(fonts: &KonungFonts, draft: Settings) -> impl Scene {
@@ -63,6 +85,7 @@ fn root(fonts: &KonungFonts, draft: Settings) -> impl Scene {
         }
         BackgroundColor(palette::WINDOW_BG)
         ScreenRoot
+        bevy::input_focus::tab_navigation::TabGroup { modal: true }
         Children [
             {EntityScene(screens::text(
                 fonts.bold.clone(),
@@ -73,37 +96,21 @@ fn root(fonts: &KonungFonts, draft: Settings) -> impl Scene {
             {EntityScene(widgets::panel(
                 fonts,
                 bsn_list! {
-                    @caption(t(language, Text::LanguageLabel))
-                    --
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: spacing::SPACE_8,
-                    }
+                    Node { flex_direction: FlexDirection::Row, column_gap: spacing::SPACE_8 }
                     Children [
-                        @widgets::menu_button(
-                            fonts,
-                            t(language, Text::LanguageNative(Language::Russian)),
-                        )
-                        LanguageRussian
-                        on(click_russian)
+                        @widgets::menu_button(fonts, t(language, Text::GeneralTab))
+                        GeneralTab
+                        on(click_general)
                         --
-                        @widgets::menu_button(
-                            fonts,
-                            t(language, Text::LanguageNative(Language::English)),
-                        )
-                        LanguageEnglish
-                        on(click_english)
+                        @widgets::menu_button(fonts, t(language, Text::DeviationsTab))
+                        DeviationsTab
+                        on(click_deviations)
                     ]
                     --
-                    @widgets::checkbox_row(fonts, t(language, Text::Fullscreen))
-                    FullscreenCheck
-                    on(toggle_fullscreen)
+                    Node { flex_direction: FlexDirection::Column, row_gap: spacing::SPACE_8 }
+                    TabContent
                     --
-                    @widgets::checkbox_row(fonts, t(language, Text::Vsync))
-                    VsyncCheck
-                    on(toggle_vsync)
-                    --
-                    @caption("")
+                    @screens::text(fonts.regular.clone(), typo::BODY, "")
                     SaveStatusLine
                     --
                     Node {
@@ -124,6 +131,70 @@ fn root(fonts: &KonungFonts, draft: Settings) -> impl Scene {
     }
 }
 
+fn general(fonts: &KonungFonts, language: Language) -> impl Scene {
+    bsn! {
+        Node { flex_direction: FlexDirection::Column, row_gap: spacing::SPACE_8 }
+        Children [
+            @screens::text(fonts.regular.clone(), typo::BODY, t(language, Text::LanguageLabel))
+            --
+            Node { flex_direction: FlexDirection::Row, column_gap: spacing::SPACE_8 }
+            Children [
+                @widgets::menu_button(fonts, t(language, Text::LanguageNative(Language::Russian)))
+                LanguageRussian
+                on(click_russian)
+                --
+                @widgets::menu_button(fonts, t(language, Text::LanguageNative(Language::English)))
+                LanguageEnglish
+                on(click_english)
+            ]
+            --
+            @widgets::checkbox_row(fonts, t(language, Text::Fullscreen))
+            FullscreenCheck
+            on(toggle_fullscreen)
+            --
+            @widgets::checkbox_row(fonts, t(language, Text::Vsync))
+            VsyncCheck
+            on(toggle_vsync)
+        ]
+    }
+}
+
+fn deviations(fonts: &KonungFonts, language: Language) -> impl Scene {
+    bsn! {
+        Node { flex_direction: FlexDirection::Column, row_gap: spacing::SPACE_8, max_width: px(460.0) }
+        Children [
+            @widgets::checkbox_row(fonts, t(language, Text::DoubleClickRun))
+            DoubleClickRunCheck
+            on(toggle_double_click_run)
+            --
+            @screens::text(fonts.regular.clone(), typo::CAPTION, t(language, Text::DoubleClickRunHelp))
+        ]
+    }
+}
+
+fn click_general(_click: On<Activate>, mut flow: ResMut<AppFlow>) {
+    flow.submit(Action::Settings(SettingsAction::SelectTab(
+        SettingsTab::General,
+    )));
+}
+
+fn click_deviations(_click: On<Activate>, mut flow: ResMut<AppFlow>) {
+    flow.submit(Action::Settings(SettingsAction::SelectTab(
+        SettingsTab::Deviations,
+    )));
+}
+
+fn toggle_double_click_run(
+    change: On<ValueChange<bool>>,
+    mut commands: Commands,
+    mut flow: ResMut<AppFlow>,
+) {
+    kn_ui::sync_checked(&mut commands, change.source, change.value);
+    flow.submit(Action::Settings(SettingsAction::Change(
+        SettingsField::DoubleClickRun(change.value),
+    )));
+}
+
 /// Mirrors the settings draft back onto the widgets: the checked boxes, the
 /// active language button, the save-failure line. The draft is the only
 /// truth; widgets echo it and never the other way (the viewer's
@@ -135,12 +206,37 @@ pub(crate) fn sync(world: &mut World) {
     };
     let draft = screen.draft;
 
-    let built = world.get_resource::<BuiltLanguage>().map(|built| built.0);
-    if built != Some(draft.language) {
+    let built = world
+        .get_resource::<BuiltView>()
+        .map(|built| (built.0, built.1));
+    if built != Some((draft.language, screen.tab)) {
+        let had_focus = world
+            .get_resource::<bevy::input_focus::InputFocus>()
+            .is_some_and(|focus| focus.get().is_some());
         despawn_root(world);
         spawn(world);
+        if had_focus {
+            let target = match screen.tab {
+                SettingsTab::General => world
+                    .query_filtered::<Entity, With<GeneralTab>>()
+                    .iter(world)
+                    .next(),
+                SettingsTab::Deviations => world
+                    .query_filtered::<Entity, With<DeviationsTab>>()
+                    .iter(world)
+                    .next(),
+            };
+            if let Some(target) = target
+                && let Some(mut focus) = world.get_resource_mut::<bevy::input_focus::InputFocus>()
+            {
+                focus.set(target, bevy::input_focus::FocusCause::Navigated);
+            }
+        }
     }
 
+    sync_language_button::<GeneralTab>(world, screen.tab == SettingsTab::General);
+    sync_language_button::<DeviationsTab>(world, screen.tab == SettingsTab::Deviations);
+    sync_checkbox::<DoubleClickRunCheck>(world, draft.deviations.double_click_run);
     sync_language_button::<LanguageRussian>(world, draft.language == Language::Russian);
     sync_language_button::<LanguageEnglish>(world, draft.language == Language::English);
     sync_checkbox::<FullscreenCheck>(world, draft.video.fullscreen);
@@ -151,8 +247,13 @@ pub(crate) fn sync(world: &mut World) {
         SaveStatus::Failed(reason) => t(draft.language, Text::SaveFailed(reason)),
     };
     // The widget `Text`, qualified: this module's `Text` is the i18n key.
-    let mut status = world.query_filtered::<&mut bevy::ui::widget::Text, With<SaveStatusLine>>();
-    if let Ok(mut text) = status.single_mut(world)
+    let mut roots = world.query_filtered::<&Children, With<SaveStatusLine>>();
+    let child = roots
+        .single(world)
+        .ok()
+        .and_then(|children| children.first().copied());
+    if let Some(child) = child
+        && let Some(mut text) = world.get_mut::<bevy::ui::widget::Text>(child)
         && text.0 != string
     {
         text.0 = string.into();

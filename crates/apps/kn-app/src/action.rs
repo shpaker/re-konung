@@ -8,7 +8,7 @@
 
 use kn_settings::Language;
 
-use crate::state::{SaveError, SessionError};
+use crate::state::{SaveError, SessionError, SettingsTab};
 
 /// Main menu intents.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -32,6 +32,7 @@ pub enum SettingsField {
     Language(Language),
     Fullscreen(bool),
     Vsync(bool),
+    DoubleClickRun(bool),
 }
 
 /// Hero selection intents — the second step of the new-game flow, a
@@ -74,6 +75,7 @@ pub enum HeroSelectAction {
 /// Settings screen intents.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SettingsAction {
+    SelectTab(SettingsTab),
     /// Edit the draft with one field assignment; `applied` is untouched.
     Change(SettingsField),
     /// Apply the draft and persist it. Emits

@@ -7,14 +7,14 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use k1_data::executable::Texts;
-use k1_data::game_state::GameState;
+use k1_data::game_state::{self, GameState};
 use k1_data::map::{self, KonungMap};
 
 use crate::movement::CreatureId;
 use crate::movement::grid::{Cell, DIRECTION_COUNT, FINE_HEIGHT, FINE_WIDTH, Grid};
 use crate::movement::passage::Passage;
 use crate::movement::rng::Rng;
-use crate::movement::world::{Event, World, WorldError, WorldRules};
+use crate::movement::world::{Event, GoalPolicy, MovementMode, World, WorldError, WorldRules};
 use crate::step_durations::StepDurations;
 use k1_game::creature_anim::{self, Machine as CreatureAnimMachine, Seed as CreatureAnimSeed};
 use k1_game::creatures::{self, Creature, Workplace};
@@ -104,9 +104,37 @@ struct DebugActor {
     profile: crate::debug::DebugPlayerProfile,
 }
 
+/// A rejected player command; movement errors retain the common engine's verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeroOrderError {
+    HeroUnavailable,
+    Movement(WorldError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeroOrderStatus {
+    Pending,
+    Moving,
+    Arrived,
+    Refused(HeroOrderError),
+}
+
+/// The latest command only: presenting a running session needs no event backlog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeroOrder {
+    pub target: Cell,
+    pub mode: MovementMode,
+    pub status: HeroOrderStatus,
+}
+
 /// A simulation over one map.
 pub struct Simulation {
     world: World<MapPassage, StepDurations>,
+    hero_id: Option<usize>,
+    hero_world_id: Option<CreatureId>,
+    hero_order: Option<HeroOrder>,
+    hero_active_target: Option<Cell>,
+    hero_goal_reaches: u64,
     roster: Vec<Creature>,
     group_states: Vec<GroupState>,
     group_state_tick: Option<u64>,
@@ -201,6 +229,11 @@ impl Simulation {
         let grid = Grid::new(FINE_WIDTH, FINE_HEIGHT);
         let pace = StepDurations::new(step_table);
 
+        let hero_id = game_state::on_map(state, map_number, hero)
+            .start
+            .and_then(|group| group.members().next())
+            .and_then(|slot| state.characters.get(slot)?.as_ref())
+            .map(|character| character.slot);
         let roster = creatures::roster(state, map_number, hero);
         let labels = creatures::labels(&roster, texts);
         // The confirmed load-time rule (docs/research/k1/creatures/placement.md, «Roaming squad
@@ -277,8 +310,16 @@ impl Simulation {
                 second_rectangle: group.leash.into(),
             })
             .collect();
+        let hero_world_id = hero_id
+            .and_then(|hero| roster.iter().position(|creature| creature.id == hero))
+            .and_then(|index| ids[index]);
         Simulation {
             world,
+            hero_id,
+            hero_world_id,
+            hero_order: None,
+            hero_active_target: None,
+            hero_goal_reaches: 0,
             group_states,
             group_state_tick: None,
             debug_actor: None,
@@ -299,6 +340,110 @@ impl Simulation {
             by_creature,
             tracked_goal: Vec::new(),
             goal_reaches: BTreeMap::new(),
+        }
+    }
+
+    /// Stable source-record identity of the selected starting hero.
+    pub fn hero_id(&self) -> Option<usize> {
+        self.hero_id
+    }
+
+    pub fn hero_order(&self) -> Option<HeroOrder> {
+        self.hero_order
+    }
+
+    pub fn hero_goal_reaches(&self) -> u64 {
+        self.hero_goal_reaches
+    }
+
+    fn hero_world_id(&self) -> Option<CreatureId> {
+        self.hero_world_id
+    }
+
+    /// Orders the real hero through the shared engine, with an exact target.
+    pub fn order_hero_move(&mut self, target: Cell) -> Result<usize, HeroOrderError> {
+        self.order_hero_move_with_mode(target, MovementMode::Walk)
+    }
+
+    /// Selects the hero's pace through the same exact-target movement order.
+    pub fn order_hero_move_with_mode(
+        &mut self,
+        target: Cell,
+        mode: MovementMode,
+    ) -> Result<usize, HeroOrderError> {
+        let result = self
+            .hero_world_id()
+            .ok_or(HeroOrderError::HeroUnavailable)
+            .and_then(|hero| {
+                self.world
+                    .move_to_with_mode(hero, target, GoalPolicy::Exact, mode)
+                    .map_err(HeroOrderError::Movement)
+            });
+        let status = match result {
+            Ok(_) => {
+                let hero = self.hero_world_id().unwrap();
+                let state = self.world.state(hero).unwrap();
+                let (requested_target, pending) = self.world.order_state(hero).unwrap();
+                if state.cell == target && requested_target.is_none() {
+                    HeroOrderStatus::Arrived
+                } else {
+                    self.hero_active_target = Some(target);
+                    if pending {
+                        HeroOrderStatus::Pending
+                    } else {
+                        HeroOrderStatus::Moving
+                    }
+                }
+            }
+            Err(error) => {
+                if !matches!(error, HeroOrderError::Movement(WorldError::OutsideGrid)) {
+                    self.hero_active_target = None;
+                }
+                HeroOrderStatus::Refused(error)
+            }
+        };
+        self.hero_order = Some(HeroOrder {
+            target,
+            mode,
+            status,
+        });
+        result
+    }
+
+    fn record_hero_events(&mut self, events: &[Event]) {
+        let Some(hero) = self.hero_world_id() else {
+            return;
+        };
+        let Some(target) = self.hero_active_target else {
+            return;
+        };
+        let Some((requested_target, pending)) = self.world.order_state(hero) else {
+            return;
+        };
+        let arrived = events.iter().any(|event| {
+            matches!(event, Event::Arrived { creature, cell } if *creature == hero && *cell == target)
+        });
+        let refused = requested_target.is_none()
+            && events.iter().any(|event| {
+                matches!(event, Event::NoRoute { creature, goal } if *creature == hero && *goal == target)
+            });
+        let status = if arrived {
+            self.hero_goal_reaches += 1;
+            self.hero_active_target = None;
+            HeroOrderStatus::Arrived
+        } else if refused {
+            self.hero_active_target = None;
+            HeroOrderStatus::Refused(HeroOrderError::Movement(WorldError::NoRoute))
+        } else if pending {
+            HeroOrderStatus::Pending
+        } else {
+            HeroOrderStatus::Moving
+        };
+        if let Some(order) = &mut self.hero_order
+            && order.target == target
+            && !matches!(order.status, HeroOrderStatus::Refused(_))
+        {
+            order.status = status;
         }
     }
 
@@ -398,6 +543,8 @@ impl Simulation {
     pub fn adopt_positions_from(&mut self, fresh: Simulation) {
         let Simulation {
             world,
+            hero_id,
+            hero_world_id,
             ids,
             rng,
             order_failures,
@@ -408,6 +555,8 @@ impl Simulation {
             ..
         } = fresh;
         self.world = world;
+        self.hero_id = hero_id;
+        self.hero_world_id = hero_world_id;
         self.ids = ids;
         self.rng = rng;
         self.order_failures = order_failures;
@@ -416,6 +565,9 @@ impl Simulation {
         self.group_states = group_states;
         self.group_state_tick = group_state_tick;
         self.debug_actor = None;
+        self.hero_order = None;
+        self.hero_active_target = None;
+        self.hero_goal_reaches = 0;
     }
 
     pub fn tick(&mut self) -> Vec<Event> {
@@ -479,6 +631,7 @@ impl Simulation {
             self.tracked_goal[index] = Some(Cell::new(column, row));
         }
         let events = self.world.tick_step();
+        self.record_hero_events(&events);
         for event in &events {
             if let Event::Arrived { creature, cell } = event {
                 self.record_goal_reach(*creature, *cell);
@@ -1038,6 +1191,367 @@ mod tests {
 
     fn simulation(map: &KonungMap, state: &GameState, creatures: usize) -> Simulation {
         simulation_with(map, state, creatures, Vec::new())
+    }
+
+    fn hero_simulation(blocked: impl Fn(u32, u32) -> bool) -> Simulation {
+        let map = open_map(blocked);
+        let mut state = village_state(
+            Rect {
+                left: 40,
+                top: 40,
+                right: 48,
+                bottom: 48,
+            },
+            &[(44, 44)],
+        );
+        state.groups[1].as_mut().unwrap().map_id = 1;
+        let hero_record = 7;
+        state.characters.resize_with(hero_record + 1, || None);
+        state.characters[hero_record] = Some(Character {
+            slot: hero_record,
+            x: 8,
+            y: 8,
+            group: 0,
+            class_id: k1_game::rules::class::WARRIOR,
+            ..Character::default()
+        });
+        state.groups[0] = Some(Group {
+            slot: 0,
+            first_character: hero_record as i16,
+            size: 1,
+            kind: 0x20,
+            ..Group::default()
+        });
+        Simulation::new(
+            &map,
+            &state,
+            1,
+            Some(0),
+            vec![[2; DIRECTION_COUNT]; 2],
+            vec![0; 2],
+            Vec::new(),
+            7,
+            None,
+        )
+    }
+
+    #[test]
+    fn hero_run_mode_changes_only_hero_steps_and_keeps_npc_ticks() {
+        let mut sim = hero_simulation(|_, _| false);
+        let mut baseline = hero_simulation(|_, _| false);
+        let hero = sim.hero_world_id().unwrap();
+        sim.world.pace_mut().set_row(hero, [12; DIRECTION_COUNT]);
+        baseline
+            .world
+            .pace_mut()
+            .set_row(hero, [12; DIRECTION_COUNT]);
+        let target = Cell::new(18, 8);
+        sim.order_hero_move_with_mode(target, MovementMode::Run)
+            .unwrap();
+        assert_eq!(sim.hero_order().unwrap().mode, MovementMode::Run);
+        let mut npc_events = 0;
+        let mut hero_steps = 0;
+        for _ in 0..100 {
+            let events = sim.tick();
+            for event in &events {
+                if let Event::StepStarted {
+                    creature, ticks, ..
+                } = event
+                    && *creature == hero
+                {
+                    hero_steps += 1;
+                    assert_eq!(*ticks, 6);
+                }
+            }
+            let events = events
+                .into_iter()
+                .filter(|event| event.creature() != hero)
+                .collect::<Vec<_>>();
+            npc_events += events.len();
+            let expected = baseline
+                .tick()
+                .into_iter()
+                .filter(|event| event.creature() != hero)
+                .collect::<Vec<_>>();
+            assert_eq!(events, expected);
+            assert_eq!(sim.tick_number(), baseline.tick_number());
+        }
+        assert!(hero_steps > 0 && npc_events > 0);
+        assert_eq!(sim.hero_goal_reaches(), 1);
+        assert_eq!(sim.hero_order().unwrap().status, HeroOrderStatus::Arrived);
+        sim.order_hero_move(Cell::new(20, 8)).unwrap();
+        assert_eq!(sim.hero_order().unwrap().mode, MovementMode::Walk);
+    }
+
+    #[test]
+    fn hero_order_resolves_source_identity_and_records_exact_arrival_once() {
+        let mut sim = hero_simulation(|column, row| column == 11 && (4..=12).contains(&row));
+        assert_eq!(sim.hero_id(), Some(7));
+        let hero = sim.hero_world_id().unwrap();
+        assert_ne!(hero.raw(), 0, "the NPC has the first world id");
+        let target = Cell::new(15, 8);
+        assert!(sim.order_hero_move(target).is_ok());
+        let mut route_seen = false;
+        for _ in 0..100 {
+            let events = sim.tick();
+            route_seen |= events.iter().any(
+                |event| matches!(event, Event::RouteSet { creature, .. } if *creature == hero),
+            );
+            if sim.hero_goal_reaches() == 1 {
+                break;
+            }
+        }
+        assert!(route_seen);
+        assert_eq!(sim.world.cell_of(hero), Some(target));
+        assert_eq!(sim.hero_order().unwrap().status, HeroOrderStatus::Arrived);
+        assert_eq!(sim.hero_goal_reaches(), 1);
+        for _ in 0..10 {
+            assert_eq!(sim.order_hero_move(target), Ok(0));
+            sim.tick();
+        }
+        assert_eq!(sim.hero_goal_reaches(), 1);
+        assert_eq!(sim.hero_order().unwrap().status, HeroOrderStatus::Arrived);
+        assert_eq!(
+            sim.order_hero_move(Cell::new(FINE_WIDTH, FINE_HEIGHT)),
+            Err(HeroOrderError::Movement(WorldError::OutsideGrid))
+        );
+        assert_eq!(sim.order_hero_move(target), Ok(0));
+        assert_eq!(sim.hero_order().unwrap().status, HeroOrderStatus::Arrived);
+        assert_eq!(sim.hero_goal_reaches(), 1);
+    }
+
+    #[test]
+    fn hero_refusal_is_explicit_and_repeated_unreachable_orders_are_throttled() {
+        let mut sim = hero_simulation(|column, _| column == 12);
+        let target = Cell::new(15, 8);
+        assert_eq!(
+            sim.order_hero_move(target),
+            Err(HeroOrderError::Movement(WorldError::NoRoute))
+        );
+        let hero = sim.hero_world_id().unwrap();
+        let mut no_routes = 0;
+        for _ in 0..30 {
+            assert!(sim.order_hero_move(target).is_err());
+            no_routes += sim
+                .tick()
+                .iter()
+                .filter(
+                    |event| matches!(event, Event::NoRoute { creature, .. } if *creature == hero),
+                )
+                .count();
+        }
+        assert_eq!(no_routes, 1);
+        assert_eq!(sim.world.cell_of(hero), Some(Cell::new(8, 8)));
+        assert_eq!(sim.hero_goal_reaches(), 0);
+        assert_eq!(
+            sim.hero_order().unwrap().status,
+            HeroOrderStatus::Refused(HeroOrderError::Movement(WorldError::NoRoute))
+        );
+    }
+
+    #[test]
+    fn hero_reorder_keeps_independent_npc_events_and_world_ticks() {
+        let mut sim = hero_simulation(|_, _| false);
+        let mut baseline = hero_simulation(|_, _| false);
+        let hero = sim.hero_world_id().unwrap();
+        let first = Cell::new(18, 8);
+        let second = Cell::new(8, 18);
+        sim.order_hero_move(first).unwrap();
+        let mut npc_events = 0;
+        for tick in 0..100 {
+            if tick == 1 {
+                sim.order_hero_move(second).unwrap();
+                assert_eq!(sim.hero_order().unwrap().status, HeroOrderStatus::Pending);
+            }
+            let events = sim
+                .tick()
+                .into_iter()
+                .filter(|event| event.creature() != hero)
+                .collect::<Vec<_>>();
+            let expected = baseline
+                .tick()
+                .into_iter()
+                .filter(|event| event.creature() != hero)
+                .collect::<Vec<_>>();
+            npc_events += events.len();
+            assert_eq!(events, expected);
+            assert_eq!(sim.tick_number(), baseline.tick_number());
+        }
+        assert!(npc_events > 0);
+        assert_eq!(sim.world.cell_of(hero), Some(second));
+        assert_eq!(sim.hero_goal_reaches(), 1);
+        assert_eq!(sim.hero_order().unwrap().target, second);
+    }
+
+    #[test]
+    fn hero_latest_order_ignores_superseded_search_events_and_latches_late_refusal() {
+        let mut sim = hero_simulation(|_, _| false);
+        let first = Cell::new(12, 8);
+        let target = Cell::new(8, 16);
+        sim.order_hero_move(first).unwrap();
+        sim.order_hero_move(target).unwrap();
+        sim.tick();
+        assert_eq!(sim.hero_order().unwrap().target, target);
+        assert_eq!(sim.hero_goal_reaches(), 0);
+        sim.world
+            .passage_mut()
+            .blocked
+            .insert((target.column, target.row));
+        for _ in 0..100 {
+            sim.tick();
+        }
+        assert_eq!(
+            sim.hero_order().unwrap().status,
+            HeroOrderStatus::Refused(HeroOrderError::Movement(WorldError::NoRoute))
+        );
+        assert_eq!(sim.hero_goal_reaches(), 0);
+        assert_ne!(
+            sim.world.cell_of(sim.hero_world_id().unwrap()),
+            Some(target)
+        );
+    }
+
+    #[test]
+    fn hero_multiple_commands_before_a_tick_only_complete_the_latest_target() {
+        let mut sim = hero_simulation(|_, _| false);
+        let first = Cell::new(8, 8);
+        let other = Cell::new(20, 8);
+        sim.order_hero_move(first).unwrap();
+        sim.order_hero_move(other).unwrap();
+        sim.order_hero_move(first).unwrap();
+        sim.tick();
+        assert_eq!(sim.hero_goal_reaches(), 1);
+        assert_eq!(
+            sim.hero_order().unwrap(),
+            HeroOrder {
+                mode: MovementMode::Walk,
+                target: first,
+                status: HeroOrderStatus::Arrived
+            }
+        );
+        sim.order_hero_move(Cell::new(159, 319)).unwrap();
+        sim.order_hero_move(other).unwrap();
+        for _ in 0..100 {
+            sim.tick();
+        }
+        assert_eq!(sim.hero_goal_reaches(), 2);
+        assert_eq!(
+            sim.hero_order().unwrap(),
+            HeroOrder {
+                mode: MovementMode::Walk,
+                target: other,
+                status: HeroOrderStatus::Arrived
+            }
+        );
+    }
+
+    #[test]
+    fn hero_outside_refusal_keeps_active_movement_and_its_arrival() {
+        let mut sim = hero_simulation(|_, _| false);
+        let target = Cell::new(18, 8);
+        sim.order_hero_move(target).unwrap();
+        sim.tick();
+        let outside = Cell::new(FINE_WIDTH, FINE_HEIGHT);
+        assert_eq!(
+            sim.order_hero_move(outside),
+            Err(HeroOrderError::Movement(WorldError::OutsideGrid))
+        );
+        for _ in 0..100 {
+            sim.tick();
+        }
+        assert_eq!(sim.hero_goal_reaches(), 1);
+        assert_eq!(
+            sim.hero_order().unwrap(),
+            HeroOrder {
+                mode: MovementMode::Walk,
+                target: outside,
+                status: HeroOrderStatus::Refused(HeroOrderError::Movement(WorldError::OutsideGrid))
+            }
+        );
+        assert_eq!(sim.order_hero_move(target), Ok(0));
+        assert_eq!(sim.hero_order().unwrap().status, HeroOrderStatus::Arrived);
+        assert_eq!(sim.hero_goal_reaches(), 1);
+    }
+
+    #[test]
+    fn hero_order_without_a_placed_hero_is_typed_and_reset_clears_its_state() {
+        let map = open_map(|_, _| false);
+        let state = villager_outside_their_area();
+        let mut absent = simulation(&map, &state, 1);
+        assert_eq!(
+            absent.order_hero_move(Cell::new(8, 8)),
+            Err(HeroOrderError::HeroUnavailable)
+        );
+        let mut unplaced = hero_simulation(|column, row| column == 8 && row == 8);
+        assert_eq!(unplaced.hero_id(), Some(7));
+        assert_eq!(
+            unplaced.order_hero_move(Cell::new(9, 8)),
+            Err(HeroOrderError::HeroUnavailable)
+        );
+        let mut sim = hero_simulation(|_, _| false);
+        sim.order_hero_move(Cell::new(9, 8)).unwrap();
+        for _ in 0..10 {
+            sim.tick();
+        }
+        assert_eq!(sim.hero_goal_reaches(), 1);
+        sim.adopt_positions_from(hero_simulation(|_, _| false));
+        assert_eq!(sim.hero_order(), None);
+        assert_eq!(sim.hero_goal_reaches(), 0);
+    }
+
+    #[test]
+    #[ignore = "manual synthetic hero-order cost measurement"]
+    fn hero_order_costs() {
+        use std::{hint::black_box, time::Instant};
+        for policy in [GoalPolicy::Nearby, GoalPolicy::Exact] {
+            for (label, failed, cached, count) in [
+                ("reachable", false, false, 100),
+                ("unreachable", true, false, 10),
+                ("cached refusal", true, true, 100_000),
+            ] {
+                let mut minimum = f64::INFINITY;
+                for _ in 0..5 {
+                    let mut sim = hero_simulation(|column, _| failed && column == 12);
+                    let hero = sim.hero_world_id().unwrap();
+                    let target = if failed {
+                        Cell::new(16, 8)
+                    } else {
+                        Cell::new(100, 100)
+                    };
+                    if cached {
+                        assert!(sim.world.move_to_with_policy(hero, target, policy).is_err());
+                    }
+                    let start = Instant::now();
+                    for _ in 0..count {
+                        if !cached {
+                            sim.world.stop(hero).unwrap();
+                        }
+                        black_box(sim.world.move_to_with_policy(hero, target, policy)).ok();
+                    }
+                    minimum = minimum.min(start.elapsed().as_secs_f64() * 1e6 / f64::from(count));
+                }
+                println!("{policy:?} {label}: {minimum:.6} us/order");
+            }
+        }
+        let mut sim = hero_simulation(|_, _| false);
+        let hero = sim.hero_world_id().unwrap();
+        let start = Instant::now();
+        for _ in 0..5000 {
+            black_box(sim.tick());
+        }
+        println!(
+            "independent simulation tick: {:.6} us/tick",
+            start.elapsed().as_secs_f64() * 1e6 / 5000.0
+        );
+        let start = Instant::now();
+        for _ in 0..100 {
+            sim.world.stop(hero).unwrap();
+            black_box(sim.order_hero_move(Cell::new(100, 100))).unwrap();
+        }
+        println!(
+            "typed hero reachable: {:.6} us/order",
+            start.elapsed().as_secs_f64() * 1e6 / 100.0
+        );
     }
 
     #[test]

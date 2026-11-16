@@ -254,6 +254,8 @@ pub struct Animator {
     /// Левый верхний угол куска в пикселях карты, до смещения кадра.
     pub x: i32,
     pub y: i32,
+    /// Explicit frame sampled by a consumer's progress; `None` follows the scene clock.
+    pub sampled_frame: Option<usize>,
     /// Кадр, показанный сейчас; пишет [apply_animators].
     shown: Option<usize>,
 }
@@ -266,6 +268,7 @@ impl Animator {
             phase: 0,
             x,
             y,
+            sampled_frame: None,
             shown: None,
         }
     }
@@ -278,6 +281,7 @@ impl Animator {
             phase,
             x,
             y,
+            sampled_frame: None,
             shown: None,
         }
     }
@@ -307,6 +311,7 @@ impl Animator {
         self.sequence = sequence;
         self.x = anchor.0;
         self.y = anchor.1;
+        self.sampled_frame = None;
         self.shown = None;
     }
 }
@@ -367,7 +372,9 @@ fn apply_animators(
     mut query: Query<(&mut Animator, &mut Sprite, &mut Transform, &mut Visibility)>,
 ) {
     for (mut animator, mut sprite, mut transform, mut visibility) in &mut query {
-        let index = animator.sequence.frame_at(clock.ticks, animator.phase);
+        let index = animator
+            .sampled_frame
+            .unwrap_or_else(|| animator.sequence.frame_at(clock.ticks, animator.phase));
         if animator.shown == Some(index) {
             continue;
         }

@@ -67,9 +67,18 @@ pub enum SaveStatus {
     Failed(SaveError),
 }
 
+/// The selected section of the settings screen.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum SettingsTab {
+    #[default]
+    General,
+    Deviations,
+}
+
 /// The state of the settings screen while it is open.
 #[derive(Clone, PartialEq, Debug)]
 pub struct SettingsScreen {
+    pub tab: SettingsTab,
     /// The edited, not yet persisted settings. Every `SettingsAction::Change`
     /// edits it; `ApplyAndPersist` carries it away on save; on
     /// `PersistOutcome::SaveFailed` it survives for another `Save`.
