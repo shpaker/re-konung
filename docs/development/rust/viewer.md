@@ -336,15 +336,17 @@ regressions compare uninterrupted and replayed clip frames/transforms, natural
 special completion, walking special-reset behavior, reset boundaries, and
 mismatched replay progress.
 
-The visual layers and shell state use the same scoped `DebugSnapshot`. Signed
-raw group corners are retained; only the spawn rectangle receives a confirmed
-role label. Geometry entities are pooled. A toggle-only update changes
-visibility; cached frames do not reinsert sprite/text geometry. Missing simulation
-hides the pool. Marker, overlay and selection geometry still synchronize during
-capture after input and time are frozen, so saved pixels match the frozen state.
-Empty or entirely black readback returns `capture_failed` before either output
-file is written. Window focus/visibility and last observed occlusion are exposed
-as diagnostics, without claiming they prove render availability.
+Оверлеи и интерфейс используют один `DebugSnapshot` с выбранным охватом.
+Прямоугольники сохраняют исходные знаковые координаты: область появления
+и [подтверждённая область удержания](../../research/k1/creatures/combat.md#hostile-squad-behavior)
+получают отдельные подписи. Срез `pursuit` показывает runtime-цель маркера,
+последнюю назначенную клетку и фазу; это не конечная свободная клетка маршрута.
+Пул геометрии переиспользуется, переключение слоя меняет только видимость,
+а отсутствие симуляции скрывает пул. Во время захвата маркер, оверлеи и
+выделение синхронизируются после заморозки ввода и времени. Пустой или чёрный
+кадр возвращает `capture_failed` до записи обоих файлов. Фокус, видимость и
+последнее событие перекрытия окна доступны для диагностики, но сами по себе
+не доказывают готовности изображения.
 
 ### Local debug-player verification
 
