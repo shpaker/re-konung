@@ -50,10 +50,28 @@ pub enum GoalPolicy {
     Exact,
 }
 
+/// Pace selected for one order; the active step always keeps its original duration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MovementMode {
+    #[default]
+    Walk,
+    Run,
+}
+
+impl MovementMode {
+    fn step_ticks(self, base: u32) -> u32 {
+        match self {
+            Self::Walk => base.max(1),
+            Self::Run => base.div_ceil(2).max(1),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MoveOrder {
     goal: Cell,
     policy: GoalPolicy,
+    mode: MovementMode,
 }
 
 /// What happened to a creature on this tick.
@@ -149,6 +167,7 @@ struct Actor {
     /// was mid-step and will be executed at the cell border.
     pending: bool,
     goal_policy: GoalPolicy,
+    movement_mode: MovementMode,
     /// Ticks the creature has stood with a route it cannot start.
     waiting_ticks: u32,
     /// Tick of the last route search.
@@ -164,6 +183,7 @@ impl Actor {
             failed_goal: None,
             pending: false,
             goal_policy: GoalPolicy::Nearby,
+            movement_mode: MovementMode::Walk,
             waiting_ticks: 0,
             last_search: 0,
         }
@@ -367,11 +387,22 @@ impl<P: Passage, K: Pace> World<P, K> {
         goal: Cell,
         policy: GoalPolicy,
     ) -> Result<usize, WorldError> {
+        self.move_to_with_mode(creature, goal, policy, MovementMode::Walk)
+    }
+
+    /// Selects pace for this order without changing the world clock or an active step.
+    pub fn move_to_with_mode(
+        &mut self,
+        creature: CreatureId,
+        goal: Cell,
+        policy: GoalPolicy,
+        mode: MovementMode,
+    ) -> Result<usize, WorldError> {
         let index = self.index(creature).ok_or(WorldError::UnknownCreature)?;
         if !self.grid.contains(goal) {
             return Err(WorldError::OutsideGrid);
         }
-        let order = MoveOrder { goal, policy };
+        let order = MoveOrder { goal, policy, mode };
         if self.actor(index).last_commanded == Some(order) {
             return Ok(self.actor(index).walker.route_len());
         }
@@ -383,6 +414,7 @@ impl<P: Passage, K: Pace> World<P, K> {
         }
         self.actor_mut(index).goal = Some(goal);
         self.actor_mut(index).goal_policy = policy;
+        self.actor_mut(index).movement_mode = mode;
         self.actor_mut(index).pending = true;
         self.actor_mut(index).waiting_ticks = 0;
         if self.actor(index).walker.is_walking() {
@@ -648,6 +680,7 @@ impl<P: Passage, K: Pace> World<P, K> {
         let order = MoveOrder {
             goal,
             policy: actor.goal_policy,
+            mode: actor.movement_mode,
         };
         let mut route_rules = self.rules.route;
         if order.policy == GoalPolicy::Exact {
@@ -706,7 +739,10 @@ impl<P: Passage, K: Pace> World<P, K> {
         if !self.occupancy.reserve(next, creature) {
             return;
         }
-        let ticks = self.pace.step_ticks(creature, direction);
+        let ticks = self
+            .actor(index)
+            .movement_mode
+            .step_ticks(self.pace.step_ticks(creature, direction));
         if self.actor_mut(index).walker.start_step(ticks).is_none() {
             self.occupancy.release(next, creature);
             return;
@@ -783,6 +819,168 @@ mod tests {
             WorldRules::default(),
             0,
         )
+    }
+
+    #[test]
+    fn run_mode_halves_step_duration_with_rounding_and_a_one_tick_floor() {
+        for (base, running) in [(12, 6), (3, 2), (1, 1), (0, 1)] {
+            for (mode, expected) in [
+                (MovementMode::Walk, base.max(1)),
+                (MovementMode::Run, running),
+            ] {
+                let mut world = world(20, 20);
+                *world.pace_mut() = Uniform(base);
+                let mover = world.add(Cell::new(2, 4)).unwrap();
+                let target = Cell::new(3, 4);
+                world
+                    .move_to_with_mode(mover, target, GoalPolicy::Exact, mode)
+                    .unwrap();
+                assert!(world.tick_step().iter().any(|event| matches!(event,
+                    Event::StepStarted { creature, ticks, .. } if *creature == mover && *ticks == expected
+                )));
+                for _ in 1..expected {
+                    assert!(
+                        !world
+                            .tick_step()
+                            .iter()
+                            .any(|event| matches!(event, Event::Arrived { .. }))
+                    );
+                }
+                assert!(world.tick_step().contains(&Event::Arrived {
+                    creature: mover,
+                    cell: target
+                }));
+                assert_eq!(world.tick_number(), u64::from(expected) + 1);
+            }
+        }
+    }
+
+    #[test]
+    fn changing_mode_for_the_same_target_waits_for_the_active_step_boundary() {
+        let mut world = world(20, 20);
+        *world.pace_mut() = Uniform(12);
+        let mover = world.add(Cell::new(2, 4)).unwrap();
+        let target = Cell::new(10, 4);
+        world
+            .move_to_with_policy(mover, target, GoalPolicy::Exact)
+            .unwrap();
+        world.tick_step();
+        assert_eq!(world.state(mover).unwrap().step_ticks, 12);
+        assert_eq!(
+            world.move_to_with_mode(mover, target, GoalPolicy::Exact, MovementMode::Run),
+            Ok(0)
+        );
+        for _ in 0..11 {
+            world
+                .move_to_with_mode(mover, target, GoalPolicy::Exact, MovementMode::Run)
+                .unwrap();
+            assert_eq!(world.state(mover).unwrap().step_ticks, 12);
+            assert!(
+                !world
+                    .tick_step()
+                    .iter()
+                    .any(|event| matches!(event, Event::RouteSet { .. }))
+            );
+        }
+        let events = world.tick_step();
+        assert!(
+            events.iter().any(
+                |event| matches!(event, Event::RouteSet { creature, .. } if *creature == mover)
+            )
+        );
+        assert_eq!(world.state(mover).unwrap().step_ticks, 6);
+        world
+            .move_to_with_policy(mover, target, GoalPolicy::Exact)
+            .unwrap();
+        for _ in 0..5 {
+            world
+                .move_to_with_policy(mover, target, GoalPolicy::Exact)
+                .unwrap();
+            assert_eq!(world.state(mover).unwrap().step_ticks, 6);
+            assert!(
+                !world
+                    .tick_step()
+                    .iter()
+                    .any(|event| matches!(event, Event::RouteSet { .. }))
+            );
+        }
+        let events = world.tick_step();
+        assert!(
+            events.iter().any(
+                |event| matches!(event, Event::RouteSet { creature, .. } if *creature == mover)
+            )
+        );
+        assert_eq!(world.state(mover).unwrap().step_ticks, 12);
+    }
+
+    #[test]
+    fn run_mode_has_its_own_idempotent_refusal_identity_and_keeps_exact_targets() {
+        let mut world = world(20, 20);
+        let mover = world.add(Cell::new(2, 4)).unwrap();
+        let target = Cell::new(10, 4);
+        world.add(target).unwrap();
+        assert_eq!(
+            world.move_to_with_policy(mover, target, GoalPolicy::Exact),
+            Err(WorldError::NoRoute)
+        );
+        assert_eq!(
+            world.move_to_with_mode(mover, target, GoalPolicy::Exact, MovementMode::Run),
+            Err(WorldError::NoRoute)
+        );
+        assert_eq!(
+            world
+                .tick_step()
+                .iter()
+                .filter(|event| matches!(event, Event::NoRoute { .. }))
+                .count(),
+            2
+        );
+        for _ in 0..20 {
+            assert_eq!(
+                world.move_to_with_mode(mover, target, GoalPolicy::Exact, MovementMode::Run),
+                Err(WorldError::NoRoute)
+            );
+            assert!(
+                !world
+                    .tick_step()
+                    .iter()
+                    .any(|event| matches!(event, Event::NoRoute { .. } | Event::RouteSet { .. }))
+            );
+        }
+        assert_eq!(world.cell_of(mover), Some(Cell::new(2, 4)));
+    }
+
+    #[test]
+    fn run_mode_is_kept_when_a_route_repaths_around_new_terrain() {
+        let mut world = world(20, 20);
+        *world.pace_mut() = Uniform(12);
+        let mover = world.add(Cell::new(2, 4)).unwrap();
+        let target = Cell::new(10, 4);
+        world
+            .move_to_with_mode(mover, target, GoalPolicy::Exact, MovementMode::Run)
+            .unwrap();
+        world.tick_step();
+        world.passage_mut().blocked.insert(Cell::new(5, 4));
+        let events: Vec<_> = (0..200).flat_map(|_| world.tick_step()).collect();
+        assert!(
+            events.iter().any(
+                |event| matches!(event, Event::RouteSet { creature, .. } if *creature == mover)
+            )
+        );
+        assert!(
+            events
+                .iter()
+                .filter_map(|event| if let Event::StepStarted { ticks, .. } = event {
+                    Some(*ticks)
+                } else {
+                    None
+                })
+                .all(|ticks| ticks == 6)
+        );
+        assert!(events.contains(&Event::Arrived {
+            creature: mover,
+            cell: target
+        }));
     }
 
     #[test]

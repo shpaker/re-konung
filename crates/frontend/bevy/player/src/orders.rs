@@ -3,6 +3,7 @@
 use bevy::{picking::hover::Hovered, prelude::*, window::PrimaryWindow};
 use kn_app::Screen;
 use kn_game::{
+    movement::MovementMode,
     movement::grid::{Cell, Grid},
     simulation::HeroOrderStatus,
 };
@@ -12,6 +13,49 @@ use kn_ui::{palette, pointer_over_ui};
 use crate::flow::{AppFlow, FlowSet};
 
 const DRAG_DISTANCE: f32 = 4.0;
+const DOUBLE_CLICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(350);
+const DOUBLE_CLICK_DISTANCE: f32 = 6.0;
+
+#[derive(Clone, Copy)]
+struct LastClick {
+    target: Cell,
+    cursor: Vec2,
+    at: std::time::Duration,
+}
+
+#[derive(Resource, Default)]
+struct DoubleClick {
+    enabled: bool,
+    last: Option<LastClick>,
+}
+
+impl DoubleClick {
+    fn configure(&mut self, enabled: bool) {
+        if self.enabled != enabled {
+            self.last = None;
+            self.enabled = enabled;
+        }
+    }
+
+    fn mode(&mut self, target: Cell, cursor: Vec2, at: std::time::Duration) -> MovementMode {
+        if !self.enabled {
+            self.last = None;
+            return MovementMode::Walk;
+        }
+        let paired = self.last.is_some_and(|last| {
+            last.target == target
+                && cursor.distance_squared(last.cursor)
+                    <= DOUBLE_CLICK_DISTANCE * DOUBLE_CLICK_DISTANCE
+                && at.saturating_sub(last.at) <= DOUBLE_CLICK_INTERVAL
+        });
+        self.last = (!paired).then_some(LastClick { target, cursor, at });
+        if paired {
+            MovementMode::Run
+        } else {
+            MovementMode::Walk
+        }
+    }
+}
 
 #[derive(Resource, Default)]
 pub(crate) struct MapGesture {
@@ -68,6 +112,7 @@ pub struct PlayerOrdersPlugin;
 impl Plugin for PlayerOrdersPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MapGesture>()
+            .init_resource::<DoubleClick>()
             .init_resource::<MapViewport>()
             .add_systems(
                 Update,
@@ -83,20 +128,25 @@ impl Plugin for PlayerOrdersPlugin {
 #[allow(clippy::too_many_arguments)]
 fn read_orders(
     flow: Res<AppFlow>,
+    time: Res<Time<Real>>,
     buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     hovered: Query<&Hovered, With<Node>>,
     viewport: Res<MapViewport>,
     cameras: Query<(&Camera, &GlobalTransform), With<MapCamera>>,
     mut gesture: ResMut<MapGesture>,
+    mut double_click: ResMut<DoubleClick>,
     mut simulation: ResMut<CreatureSim>,
 ) {
+    double_click.configure(flow.state().applied.deviations.double_click_run);
     let Some(window) = windows.iter().next() else {
         gesture.reset();
+        double_click.last = None;
         return;
     };
     let Some(cursor) = window.cursor_position() else {
         gesture.reset();
+        double_click.last = None;
         return;
     };
     let inside = cursor.x >= 0.0
@@ -111,10 +161,20 @@ fn read_orders(
         && window.focused
         && inside
         && !pointer_over_ui(hovered.iter().map(|hovered| hovered.0));
-    if !gesture.update(&buttons, cursor, allowed) {
+    let was_dragging = gesture.dragging;
+    let clicked = gesture.update(&buttons, cursor, allowed);
+    if !allowed
+        || was_dragging
+        || gesture.dragging
+        || (buttons.just_released(MouseButton::Left) && !clicked)
+    {
+        double_click.last = None;
+    }
+    if !clicked {
         return;
     }
     let Some((camera, transform)) = cameras.iter().next() else {
+        double_click.last = None;
         return;
     };
     if let Some(target) = camera
@@ -123,7 +183,10 @@ fn read_orders(
         .and_then(world_cell)
         && let Some(simulation) = simulation.sim.as_mut()
     {
-        let _ = simulation.order_hero_move(target);
+        let mode = double_click.mode(target, cursor, time.elapsed());
+        let _ = simulation.order_hero_move_with_mode(target, mode);
+    } else {
+        double_click.last = None;
     }
 }
 
@@ -241,6 +304,9 @@ pub(crate) fn teardown(world: &mut World) {
     if let Some(mut gesture) = world.get_resource_mut::<MapGesture>() {
         gesture.reset();
     }
+    if let Some(mut double_click) = world.get_resource_mut::<DoubleClick>() {
+        double_click.last = None;
+    }
     let mut markers = world.query_filtered::<Entity, With<OrderMarker>>();
     let markers: Vec<_> = markers.iter(world).collect();
     for marker in markers {
@@ -252,6 +318,56 @@ pub(crate) fn teardown(world: &mut World) {
 mod tests {
     use super::*;
     use bevy::camera::{CameraProjection, ComputedCameraValues, RenderTargetInfo, Viewport};
+
+    #[test]
+    fn running_requires_an_enabled_close_pair_and_consumes_it() {
+        let target = Cell::new(40, 80);
+        let cursor = Vec2::new(400.0, 300.0);
+        let at = |milliseconds| std::time::Duration::from_millis(milliseconds);
+        let mut clicks = DoubleClick::default();
+        assert_eq!(clicks.mode(target, cursor, at(0)), MovementMode::Walk);
+        assert_eq!(clicks.mode(target, cursor, at(100)), MovementMode::Walk);
+        clicks.configure(true);
+        assert_eq!(clicks.mode(target, cursor, at(200)), MovementMode::Walk);
+        assert_eq!(
+            clicks.mode(target, cursor + Vec2::X * 6.0, at(550)),
+            MovementMode::Run
+        );
+        assert_eq!(clicks.mode(target, cursor, at(600)), MovementMode::Walk);
+        assert_eq!(clicks.mode(target, cursor, at(951)), MovementMode::Walk);
+        assert_eq!(
+            clicks.mode(target, cursor + Vec2::X * 7.0, at(1000)),
+            MovementMode::Walk
+        );
+        assert_eq!(
+            clicks.mode(Cell::new(41, 80), cursor + Vec2::X * 7.0, at(1050)),
+            MovementMode::Walk
+        );
+        clicks.configure(false);
+        clicks.configure(true);
+        assert_eq!(
+            clicks.mode(Cell::new(41, 80), cursor + Vec2::X * 7.0, at(1100)),
+            MovementMode::Walk
+        );
+    }
+
+    #[test]
+    fn session_teardown_forgets_a_pending_double_click() {
+        let mut world = World::new();
+        let mut clicks = DoubleClick::default();
+        clicks.configure(true);
+        clicks.mode(Cell::new(40, 80), Vec2::ZERO, std::time::Duration::ZERO);
+        world.insert_resource(clicks);
+        teardown(&mut world);
+        assert_eq!(
+            world.resource_mut::<DoubleClick>().mode(
+                Cell::new(40, 80),
+                Vec2::ZERO,
+                std::time::Duration::from_millis(100)
+            ),
+            MovementMode::Walk
+        );
+    }
 
     #[test]
     fn clicking_and_dragging_are_exclusive_and_blocked_gestures_stay_cancelled() {

@@ -130,6 +130,7 @@ impl AppController {
                 self.state.settings_screen = Some(SettingsScreen {
                     draft: self.state.applied,
                     status: SaveStatus::Idle,
+                    tab: Default::default(),
                 });
             }
             (Screen::MainMenu, Action::MainMenu(MainMenuAction::Exit)) => {
@@ -147,7 +148,15 @@ impl AppController {
                         SettingsField::Vsync(vsync) => {
                             settings_screen.draft.video.vsync = vsync;
                         }
+                        SettingsField::DoubleClickRun(enabled) => {
+                            settings_screen.draft.deviations.double_click_run = enabled;
+                        }
                     }
+                }
+            }
+            (Screen::Settings, Action::Settings(SettingsAction::SelectTab(tab))) => {
+                if let Some(settings_screen) = self.state.settings_screen.as_mut() {
+                    settings_screen.tab = tab;
                 }
             }
             (Screen::Settings, Action::Settings(SettingsAction::Save)) => {
@@ -316,6 +325,7 @@ mod tests {
                 fullscreen: true,
                 vsync: true,
             },
+            ..Settings::default()
         }
     }
 

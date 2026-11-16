@@ -308,3 +308,206 @@ fn all_partial_selections_block_mouse_keyboard_and_direct_activation() {
         }
     }
 }
+
+#[test]
+fn deviation_tab_checkbox_and_language_preview_follow_the_save_lifecycle() {
+    use bevy::feathers::controls::FeathersButton;
+    use bevy::input_focus::{FocusCause, InputFocus};
+    use bevy::ui::Checked;
+    use bevy::ui_widgets::{Activate, Checkbox, ValueChange};
+    use kn_app::SettingsTab;
+
+    fn control(app: &mut App, text: &str, is_control: impl Fn(&World, Entity) -> bool) -> Entity {
+        let mut query = app.world_mut().query::<(Entity, &Text)>();
+        let mut entity = query
+            .iter(app.world())
+            .find_map(|(entity, caption)| caption.0.contains(text).then_some(entity))
+            .unwrap_or_else(|| panic!("missing {text}"));
+        loop {
+            if is_control(app.world(), entity) {
+                return entity;
+            }
+            entity = app
+                .world()
+                .get::<ChildOf>(entity)
+                .expect("control ancestor")
+                .parent();
+        }
+    }
+    let mut app = headless_app();
+    app.init_resource::<InputFocus>();
+    app.update();
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::MainMenu(MainMenuAction::OpenSettings));
+    app.update();
+    let shown = strings(&mut app);
+    assert!(shown.iter().any(|s| s.contains("Полный экран")));
+    assert!(!shown.iter().any(|s| s.contains("Бег по двойному клику")));
+    let tab = control(
+        &mut app,
+        "Отличия от оригинала",
+        |w, e| w.get::<FeathersButton>(e).is_some(),
+    );
+    app.world_mut()
+        .resource_mut::<InputFocus>()
+        .set(tab, FocusCause::Navigated);
+    app.world_mut().trigger(Activate { entity: tab });
+    app.update();
+    let new_tab = control(
+        &mut app,
+        "Отличия от оригинала",
+        |w, e| w.get::<FeathersButton>(e).is_some(),
+    );
+    assert_eq!(app.world().resource::<InputFocus>().get(), Some(new_tab));
+    assert_eq!(
+        app.world()
+            .resource::<AppFlow>()
+            .state()
+            .settings_screen
+            .as_ref()
+            .unwrap()
+            .tab,
+        SettingsTab::Deviations
+    );
+    let shown = strings(&mut app);
+    assert!(!shown.iter().any(|s| s.contains("Полный экран")));
+    assert!(shown.iter().any(|s| s.contains("Бег по двойному клику")));
+    assert!(shown.iter().any(|s| s.contains("Сохранить")));
+    let mut text_query = app.world_mut().query::<(Entity, &Text)>();
+    let help = text_query
+        .iter(app.world())
+        .find_map(|(entity, text)| text.0.contains("Скорость ×2").then_some(entity))
+        .unwrap();
+    let help_parent = app.world().get::<ChildOf>(help).unwrap().parent();
+    let help_font = app
+        .world()
+        .get::<bevy::feathers::font_styles::InheritableFont>(help_parent)
+        .unwrap();
+    assert_eq!(
+        help_font.font,
+        app.world().resource::<kn_ui::KonungFonts>().regular
+    );
+    assert_eq!(help_font.font_size, kn_ui::typo::CAPTION);
+    let checkbox = control(
+        &mut app,
+        "Бег по двойному клику",
+        |w, e| w.get::<Checkbox>(e).is_some(),
+    );
+    assert!(app.world().get::<Checked>(checkbox).is_none());
+    app.world_mut().trigger(ValueChange {
+        source: checkbox,
+        value: true,
+        is_final: true,
+    });
+    app.update();
+    assert!(app.world().get::<Checked>(checkbox).is_some());
+    assert!(
+        !app.world()
+            .resource::<AppliedSettings>()
+            .0
+            .deviations
+            .double_click_run
+    );
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::Settings(SettingsAction::Change(
+            SettingsField::Language(kn_settings::Language::English),
+        )));
+    app.update();
+    assert_eq!(
+        app.world()
+            .resource::<AppFlow>()
+            .state()
+            .settings_screen
+            .as_ref()
+            .unwrap()
+            .tab,
+        SettingsTab::Deviations
+    );
+    assert!(
+        strings(&mut app)
+            .iter()
+            .any(|s| s.contains("Run on double-click"))
+    );
+    assert!(!strings(&mut app).iter().any(|s| s.contains("Fullscreen")));
+    let checkbox = control(&mut app, "Run on double-click", |w, e| {
+        w.get::<Checkbox>(e).is_some()
+    });
+    assert!(app.world().get::<Checked>(checkbox).is_some());
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::Settings(SettingsAction::Save));
+    app.update();
+    let flow = app.world().resource::<AppFlow>();
+    assert!(
+        flow.state()
+            .settings_screen
+            .as_ref()
+            .unwrap()
+            .draft
+            .deviations
+            .double_click_run
+    );
+    assert!(!flow.state().applied.deviations.double_click_run);
+    assert!(
+        !app.world()
+            .resource::<AppliedSettings>()
+            .0
+            .deviations
+            .double_click_run
+    );
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::Settings(SettingsAction::Cancel));
+    app.update();
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::MainMenu(MainMenuAction::OpenSettings));
+    app.update();
+    let screen = app
+        .world()
+        .resource::<AppFlow>()
+        .state()
+        .settings_screen
+        .as_ref()
+        .unwrap();
+    assert_eq!(screen.tab, SettingsTab::General);
+    assert!(!screen.draft.deviations.double_click_run);
+
+    let path = std::env::temp_dir().join(format!("re-konung-settings-{}.json", std::process::id()));
+    app.world_mut()
+        .resource_mut::<kn_fe_player::flow::SettingsPath>()
+        .0 = Some(path.clone());
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::Settings(SettingsAction::Change(
+            SettingsField::DoubleClickRun(true),
+        )));
+    app.world_mut()
+        .resource_mut::<AppFlow>()
+        .submit(Action::Settings(SettingsAction::Save));
+    app.update();
+    assert!(
+        kn_settings::load(&path)
+            .unwrap()
+            .deviations
+            .double_click_run
+    );
+    assert!(
+        app.world()
+            .resource::<AppliedSettings>()
+            .0
+            .deviations
+            .double_click_run
+    );
+    assert!(
+        app.world()
+            .resource::<AppFlow>()
+            .state()
+            .applied
+            .deviations
+            .double_click_run
+    );
+    std::fs::remove_file(path).unwrap();
+}

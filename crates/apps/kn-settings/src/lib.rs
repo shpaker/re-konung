@@ -61,6 +61,13 @@ impl Default for VideoSettings {
     }
 }
 
+/// Optional player-facing departures from the original game.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub struct DeviationSettings {
+    #[serde(default)]
+    pub double_click_run: bool,
+}
+
 /// The settings of the player application.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub struct Settings {
@@ -68,6 +75,8 @@ pub struct Settings {
     pub language: Language,
     #[serde(default)]
     pub video: VideoSettings,
+    #[serde(default)]
+    pub deviations: DeviationSettings,
 }
 
 /// The on-disk shape: everything of [`Settings`] plus the version key.
@@ -282,6 +291,9 @@ mod tests {
                 fullscreen: true,
                 vsync: false,
             },
+            deviations: DeviationSettings {
+                double_click_run: true,
+            },
         };
         save(&path, &saved).unwrap();
         assert_eq!(load(&path).unwrap(), saved);
@@ -351,6 +363,20 @@ mod tests {
         let path = path(&dir, "settings.json");
         std::fs::write(&path, br#"{"version": 1}"#).unwrap();
         assert_eq!(load(&path).unwrap(), defaults());
+    }
+
+    #[test]
+    fn deviations_are_backward_compatible_and_validate_their_shape() {
+        for input in [
+            br#"{"version":1}"#.as_slice(),
+            br#"{"version":1,"deviations":{}}"#,
+        ] {
+            assert!(!parse(input).unwrap().deviations.double_click_run);
+        }
+        assert!(matches!(
+            parse(br#"{"version":1,"deviations":{"double_click_run":"yes"}}"#),
+            Err(LoadError::Corrupted)
+        ));
     }
 
     #[test]

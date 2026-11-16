@@ -10,7 +10,11 @@ use bevy::{
 };
 use kn_app::{Action, HeroSelectAction, MainMenuAction, Screen};
 use kn_fe_player::{flow::AppFlow, orders::PlayerOrdersPlugin, session};
-use kn_game::{Game, movement::Cell, simulation::HeroOrderStatus};
+use kn_game::{
+    Game,
+    movement::{Cell, MovementMode},
+    simulation::HeroOrderStatus,
+};
 use kn_render::{Clock, CreatureSim, MapCamera};
 
 fn start(app: &mut App, hero: u32) {
@@ -320,4 +324,141 @@ fn an_occupied_clicked_target_shows_a_refusal_and_outside_points_issue_nothing()
             .count(),
         2
     );
+}
+
+#[test]
+fn the_applied_setting_enables_double_click_run_and_ui_cancels_the_pair() {
+    let Some(directory) = common::game_dir() else {
+        return;
+    };
+    for enabled in [false, true] {
+        let game = Game::open(&directory).unwrap();
+        let hero = common::first_hero(&game);
+        let mut settings = kn_settings::defaults();
+        settings.deviations.double_click_run = enabled;
+        let mut app = common::player_app_with(game, vec![hero], settings);
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(50),
+        ))
+        .init_resource::<ButtonInput<MouseButton>>()
+        .add_plugins(PlayerOrdersPlugin);
+        let mut window = Window {
+            resolution: (800, 600).into(),
+            focused: true,
+            ..default()
+        };
+        window.set_cursor_position(Some(Vec2::new(400.0, 300.0)));
+        let window = app.world_mut().spawn((window, PrimaryWindow)).id();
+        let ui = app
+            .world_mut()
+            .spawn((Node::default(), Hovered(false)))
+            .id();
+        start(&mut app, hero);
+        let simulation = app.world().resource::<CreatureSim>().sim.as_ref().unwrap();
+        let target = simulation
+            .states()
+            .into_iter()
+            .find(|state| Some(state.id) == simulation.hero_id())
+            .unwrap()
+            .cell;
+        camera_at(&mut app, Cell::new(target.0, target.1), 1.0);
+        let mode = |app: &App| {
+            app.world()
+                .resource::<CreatureSim>()
+                .sim
+                .as_ref()
+                .unwrap()
+                .hero_order()
+                .unwrap()
+                .mode
+        };
+        click(&mut app);
+        assert_eq!(mode(&app), MovementMode::Walk);
+        click(&mut app);
+        assert_eq!(
+            mode(&app),
+            if enabled {
+                MovementMode::Run
+            } else {
+                MovementMode::Walk
+            }
+        );
+        click(&mut app);
+        assert_eq!(
+            mode(&app),
+            MovementMode::Walk,
+            "a third click starts a fresh pair"
+        );
+        app.world_mut().entity_mut(ui).insert(Hovered(true));
+        app.update();
+        app.world_mut().entity_mut(ui).insert(Hovered(false));
+        click(&mut app);
+        assert_eq!(
+            mode(&app),
+            MovementMode::Walk,
+            "crossing UI cancels the previous click"
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        app.update();
+        next(&mut app);
+        app.world_mut()
+            .entity_mut(window)
+            .get_mut::<Window>()
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(410.0, 300.0)));
+        app.update();
+        next(&mut app);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
+        app.update();
+        next(&mut app);
+        app.world_mut()
+            .entity_mut(window)
+            .get_mut::<Window>()
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(400.0, 300.0)));
+        click(&mut app);
+        assert_eq!(
+            mode(&app),
+            MovementMode::Walk,
+            "dragging cancels the previous click"
+        );
+        app.world_mut()
+            .entity_mut(window)
+            .get_mut::<Window>()
+            .unwrap()
+            .focused = false;
+        app.update();
+        app.world_mut()
+            .entity_mut(window)
+            .get_mut::<Window>()
+            .unwrap()
+            .focused = true;
+        click(&mut app);
+        assert_eq!(
+            mode(&app),
+            MovementMode::Walk,
+            "losing focus cancels the previous click"
+        );
+        app.world_mut()
+            .entity_mut(window)
+            .get_mut::<Window>()
+            .unwrap()
+            .set_cursor_position(None);
+        app.update();
+        app.world_mut()
+            .entity_mut(window)
+            .get_mut::<Window>()
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(400.0, 300.0)));
+        click(&mut app);
+        assert_eq!(
+            mode(&app),
+            MovementMode::Walk,
+            "losing the cursor cancels the previous click"
+        );
+    }
 }

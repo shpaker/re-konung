@@ -1128,9 +1128,9 @@ pub fn sync_creature_animation(
             )
         })
         .collect();
-    let elapsed: HashMap<usize, u32> = states
+    let progress: HashMap<usize, (u32, u32)> = states
         .iter()
-        .map(|state| (state.id, state.step_elapsed))
+        .map(|state| (state.id, (state.step_elapsed, state.step_ticks)))
         .collect();
     let replay_anchors: HashMap<usize, u64> = debug
         .as_ref()
@@ -1175,6 +1175,19 @@ pub fn sync_creature_animation(
         let (walking, direction) = facing.get(&tag.creature_id).copied().unwrap_or((false, 0));
         let clip = select_clip(layer, walking, direction, in_special);
         let Some(clip) = clip else { continue };
+        let (elapsed, step_ticks) = progress.get(&tag.creature_id).copied().unwrap_or((0, 0));
+        let sampled_frame = (walking
+            && !in_special
+            && layer
+                .walk
+                .get(direction as usize)
+                .is_some_and(Option::is_some))
+        .then(|| {
+            let point = sampled_step_tick(clip.sequence.ticks, elapsed, step_ticks);
+            clip.sequence
+                .frame_at(point, clip.sequence.phase_for(clip.base))
+        });
+        animator.sampled_frame = sampled_frame;
         let replay_anchor = replay_anchors.get(&tag.creature_id).copied();
         if Arc::ptr_eq(&animator.sequence, &clip.sequence)
             && !(restep.contains(&tag.creature_id) && !in_special)
@@ -1202,7 +1215,6 @@ pub fn sync_creature_animation(
             .get(&tag.creature_id)
             .copied()
             .unwrap_or(origin);
-        let elapsed = elapsed.get(&tag.creature_id).copied().unwrap_or(0);
         // Anchor the swap so the current tick shows the correct frame: the
         // special opens on the tick its frame counter started, the walk opens
         // on the tick the step began (elapsed - 1 ago).
@@ -1216,7 +1228,16 @@ pub fn sync_creature_animation(
                 .saturating_sub(u64::from(elapsed.saturating_sub(1)))
         };
         apply_clip(&mut animator, clip, base, step_start);
+        animator.sampled_frame = sampled_frame;
     }
+}
+
+fn sampled_step_tick(sequence_ticks: u64, elapsed: u32, step_ticks: u32) -> u64 {
+    let last_step_tick = step_ticks.saturating_sub(1);
+    let spent = elapsed.saturating_sub(1).min(last_step_tick);
+    // Include both ends of the clip when a shorter step skips source frames.
+    (u128::from(spent) * u128::from(sequence_ticks.saturating_sub(1))
+        / u128::from(last_step_tick.max(1))) as u64
 }
 
 /// Installs `clip` on `animator`, re-anchored on the clip's own base corner
@@ -1296,6 +1317,227 @@ mod tests {
 
     use super::*;
     use crate::animation::Frame;
+
+    #[test]
+    fn shortened_steps_sample_the_entire_walk_cycle_without_changing_normal_steps() {
+        assert_eq!(
+            (1..=6)
+                .map(|elapsed| sampled_step_tick(12, elapsed, 6))
+                .collect::<Vec<_>>(),
+            [0, 2, 4, 6, 8, 11]
+        );
+        assert_eq!(
+            (1..=12)
+                .map(|elapsed| sampled_step_tick(12, elapsed, 12))
+                .collect::<Vec<_>>(),
+            (0..12).collect::<Vec<_>>()
+        );
+        assert_eq!(sampled_step_tick(12, 1, 1), 0);
+        assert_eq!(sampled_step_tick(0, 0, 0), 0);
+    }
+
+    #[test]
+    fn mode_changes_finish_the_current_clip_and_sample_body_equipment_and_shadow_together() {
+        use k1_data::{
+            game_state::{Character, GameState, Group},
+            map::KonungMap,
+        };
+        use kn_game::movement::{Cell, MovementMode};
+        let mut characters = vec![None; 8];
+        characters[7] = Some(Character {
+            slot: 7,
+            x: 8,
+            y: 8,
+            group: 0,
+            ..default()
+        });
+        let simulation = Simulation::new(
+            &KonungMap {
+                ground: vec![],
+                overlay: vec![],
+                foot: vec![],
+                decorations: vec![],
+                objects: vec![],
+            },
+            &GameState {
+                items: vec![],
+                groups: vec![Some(Group {
+                    slot: 0,
+                    first_character: 7,
+                    size: 1,
+                    kind: 0x20,
+                    ..default()
+                })],
+                loot: vec![],
+                exits: vec![],
+                characters,
+                villages: vec![],
+            },
+            1,
+            Some(0),
+            vec![[12; 8]],
+            vec![0],
+            vec![],
+            42,
+            None,
+        );
+        assert_eq!(simulation.hero_id(), Some(7));
+        let sequence = Arc::new(Sequence::new(
+            (0..12)
+                .map(|index| {
+                    Frame::new(
+                        Handle::default(),
+                        Vec2::splat(8.0),
+                        Vec2::new(index as f32 * 58.0 / 12.0, 0.0),
+                    )
+                })
+                .collect(),
+        ));
+        let clip = || Clip {
+            sequence: Arc::clone(&sequence),
+            base: 0,
+            corner: (0, 0),
+        };
+        let layer = || LayerSequences {
+            rest: Some(Clip {
+                sequence: Arc::new(Sequence::new(vec![Frame::new(
+                    Handle::default(),
+                    Vec2::splat(8.0),
+                    Vec2::ZERO,
+                )])),
+                base: 0,
+                corner: (0, 0),
+            }),
+            walk: (0..8).map(|_| Some(clip())).collect(),
+            special: None,
+        };
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, crate::AnimPlugin::new(60.0)))
+            .insert_resource(CreatureSim {
+                sim: Some(simulation),
+                ..default()
+            })
+            .insert_resource(CreatureAnim {
+                creatures: HashMap::from([(
+                    7,
+                    CreatureSequences {
+                        body: HashMap::from([(0, layer()), (1, layer())]),
+                        shadow: layer(),
+                    },
+                )]),
+                ..default()
+            })
+            .insert_resource(CreatureSpawns {
+                origins: HashMap::from([(7, (0, 0))]),
+                ..default()
+            })
+            .add_systems(
+                Update,
+                sync_creature_animation
+                    .after(AnimSet::Clock)
+                    .before(AnimSet::Sprites),
+            );
+        app.world_mut()
+            .resource_mut::<Clock>()
+            .goto(crate::PlayState::Paused);
+        for (layer, shadow) in [(0, false), (1, false), (0, true)] {
+            app.world_mut().spawn((
+                CreatureSprite {
+                    creature_id: 7,
+                    layer,
+                    is_shadow: shadow,
+                },
+                Animator::new(Arc::clone(&sequence), 0, 0),
+                Sprite::default(),
+                Transform::default(),
+                Visibility::Inherited,
+            ));
+        }
+        let target = Cell::new(12, 8);
+        app.world_mut()
+            .resource_mut::<CreatureSim>()
+            .sim
+            .as_mut()
+            .unwrap()
+            .order_hero_move(target)
+            .unwrap();
+        let mut prior_x = f32::NEG_INFINITY;
+        let mut saw_run_step = false;
+        let mut returned_to_walk = false;
+        for tick in 1..=55 {
+            if tick == 4 {
+                app.world_mut()
+                    .resource_mut::<CreatureSim>()
+                    .sim
+                    .as_mut()
+                    .unwrap()
+                    .order_hero_move_with_mode(target, MovementMode::Run)
+                    .unwrap();
+            }
+            if tick == 17 {
+                app.world_mut()
+                    .resource_mut::<CreatureSim>()
+                    .sim
+                    .as_mut()
+                    .unwrap()
+                    .order_hero_move(target)
+                    .unwrap();
+            }
+            app.world_mut()
+                .resource_mut::<CreatureSim>()
+                .sim
+                .as_mut()
+                .unwrap()
+                .tick();
+            app.world_mut().resource_mut::<Clock>().step(1);
+            app.update();
+            let state = app
+                .world()
+                .resource::<CreatureSim>()
+                .sim
+                .as_ref()
+                .unwrap()
+                .states()[0];
+            if tick <= 12 {
+                assert_eq!(state.step_ticks, 12);
+            }
+            if (13..=18).contains(&tick) {
+                assert_eq!(state.step_ticks, 6);
+                saw_run_step = true;
+            }
+            if tick >= 19 && state.moving {
+                assert_eq!(state.step_ticks, 12);
+                returned_to_walk = true;
+            }
+            let expected =
+                sampled_step_tick(sequence.ticks, state.step_elapsed, state.step_ticks) as usize;
+            let mut sprites = app.world_mut().query::<(&Animator, &Transform)>();
+            for (animator, transform) in sprites.iter(app.world()) {
+                if state.moving {
+                    assert_eq!(animator.sampled_frame, Some(expected));
+                    assert_eq!(animator.shown(), Some(expected));
+                } else {
+                    assert_eq!(animator.sampled_frame, None);
+                }
+                let x = state.pixel.0 as f32 + transform.translation.x;
+                assert!(x >= prior_x, "tick {tick}: {x} < {prior_x}");
+            }
+            let mut sprites = app.world_mut().query::<&Transform>();
+            prior_x =
+                state.pixel.0 as f32 + sprites.iter(app.world()).next().unwrap().translation.x;
+        }
+        assert!(saw_run_step && returned_to_walk);
+        assert_eq!(app.world().resource::<Clock>().rate(), 1.0);
+        assert_eq!(
+            app.world()
+                .resource::<CreatureSim>()
+                .sim
+                .as_ref()
+                .unwrap()
+                .hero_goal_reaches(),
+            1
+        );
+    }
 
     fn synthetic_simulation() -> Simulation {
         use k1_data::{

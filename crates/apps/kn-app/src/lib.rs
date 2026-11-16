@@ -47,5 +47,5 @@ pub use controller::AppController;
 pub use effect::Effect;
 pub use state::{
     AppState, CharacterCreationDraft, NewGameDraft, SaveError, SaveStatus, Screen, SessionError,
-    SettingsScreen,
+    SettingsScreen, SettingsTab,
 };
