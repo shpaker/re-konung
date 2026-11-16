@@ -514,6 +514,24 @@ fn attack_value(order: kn_game::simulation::AttackOrder) -> Value {
     json!({"target_id":order.target_id,"status":status,"error":error})
 }
 
+fn pursuit_value(order: kn_game::simulation::DebugPursuit) -> Value {
+    use kn_game::simulation::{PursuitError, PursuitStatus};
+    let (status, error) = match order.status {
+        PursuitStatus::Pending => ("pending", None),
+        PursuitStatus::Approaching => ("approaching", None),
+        PursuitStatus::InRange => ("in_range", None),
+        PursuitStatus::Finished => ("finished", None),
+        PursuitStatus::Refused(error) => (
+            "refused",
+            Some(match error {
+                PursuitError::TargetUnavailable => "target_unavailable",
+                PursuitError::NoRoute => "no_route",
+            }),
+        ),
+    };
+    json!({"target_id":order.target_id,"target_cell":order.target_cell,"status":status,"error":error})
+}
+
 pub(crate) fn state_value(world: &mut World) -> Value {
     let viewer = world.resource::<Viewer>();
     let requested = viewer
@@ -546,8 +564,9 @@ pub(crate) fn state_value(world: &mut World) -> Value {
             let special_frame=creature.animation_stage.and_then(|stage|match stage {kn_game::simulation::CreatureStage::Special {frame}=>Some(frame),_=>None});
             let melee_frame=creature.animation_stage.and_then(|stage|match stage {kn_game::simulation::CreatureStage::Melee {frame}=>Some(frame),_=>None});
             let attack=creature.attack.map(attack_value);
+            let pursuit=creature.pursuit.map(pursuit_value);
             let group_state=match creature.group_state {kn_game::simulation::GroupState::Calm=>"calm",kn_game::simulation::GroupState::PlayerInside=>"player_inside",kn_game::simulation::GroupState::MemberOutside=>"member_outside"};
-            json!({"id":creature.id,"label":creature.label,"recorded_state":creature.recorded_state,"animation_state":creature.animation_state,"animation_stage":stage,"animation_special_frame":special_frame,"animation_melee_frame":melee_frame,"attack":attack,"walk_state":creature.walk_state.map(|state|format!("{state:?}").to_lowercase()),"group":creature.group,"group_state":group_state,"group_state_value":creature.group_state.byte(),"group_state_tick":creature.group_state_tick,"cell":state.map(|state|state.cell),"pixel":state.map(|state|state.pixel),"direction":state.and_then(|state|state.direction)})
+            json!({"id":creature.id,"label":creature.label,"recorded_state":creature.recorded_state,"animation_state":creature.animation_state,"animation_stage":stage,"animation_special_frame":special_frame,"animation_melee_frame":melee_frame,"attack":attack,"pursuit":pursuit,"walk_state":creature.walk_state.map(|state|format!("{state:?}").to_lowercase()),"group":creature.group,"group_state":group_state,"group_state_value":creature.group_state.byte(),"group_state_tick":creature.group_state_tick,"cell":state.map(|state|state.cell),"pixel":state.map(|state|state.pixel),"direction":state.and_then(|state|state.direction)})
         }).collect::<Vec<_>>()
     }).unwrap_or_default();
     let mut layers_query =

@@ -745,6 +745,12 @@ fn sync_workspace(
                                 details.push_str(&format!("\nAttack refusal: {}", friendly(&c["attack"]["error"])));
                             }
                         }
+                        if !c["pursuit"].is_null() {
+                            details.push_str(&format!("\nPursuit: {}\nTarget: Debug player #{}\nTarget cell: {}", friendly(&c["pursuit"]["status"]), friendly(&c["pursuit"]["target_id"]), friendly(&c["pursuit"]["target_cell"])));
+                            if !c["pursuit"]["error"].is_null() {
+                                details.push_str(&format!("\nPursuit refusal: {}", friendly(&c["pursuit"]["error"])));
+                            }
+                        }
                         if !c["animation_melee_frame"].is_null() {
                             details.push_str(&format!("\nMelee frame: {}", friendly(&c["animation_melee_frame"])));
                         }
@@ -1357,6 +1363,35 @@ mod layout_tests {
         ] {
             assert!(text.contains(detail), "missing {detail:?}: {text}");
         }
+    }
+
+    #[test]
+    fn inspector_distinguishes_runtime_pursuit_from_an_attack() {
+        let mut app = app(960, 640);
+        app.world_mut().resource_mut::<ReadProjection>().0 = json!({
+            "displayed_map":{"source":"game","number":17},
+            "simulation_available":true,
+            "creatures":[{
+                "id":4,"label":"Synthetic pursuer","recorded_state":0,
+                "animation_state":0,"animation_stage":"idle",
+                "group":1,"group_state":"player_inside","group_state_tick":20,
+                "pursuit":{"target_id":7,"target_cell":[10,12],"status":"refused","error":"no_route"}
+            }]
+        });
+        app.world_mut()
+            .resource_mut::<ViewerWorkspace>()
+            .selected_creature = Some(4);
+        app.update();
+        let inspector = only::<Inspector>(&mut app);
+        let text = &app.world().get::<Text>(inspector).unwrap().0;
+        for detail in [
+            "Pursuit: refused",
+            "Target: Debug player #7",
+            "Pursuit refusal: no route",
+        ] {
+            assert!(text.contains(detail), "missing {detail:?}: {text}");
+        }
+        assert!(!text.contains("Attack:"));
     }
 
     #[test]

@@ -26,7 +26,9 @@ pub use k1_game::rules::GroupState;
 use crate::rules;
 
 mod melee;
-pub use melee::{AttackError, AttackOrder, AttackStatus};
+pub use melee::{
+    AttackError, AttackOrder, AttackStatus, DebugPursuit, PursuitError, PursuitStatus,
+};
 
 /// Walkability from the map's foot grid.
 #[derive(Clone)]
@@ -100,6 +102,7 @@ pub struct CreatureInspection {
     pub group_state: GroupState,
     pub group_state_tick: Option<u64>,
     pub attack: Option<AttackOrder>,
+    pub pursuit: Option<DebugPursuit>,
 }
 
 struct DebugActor {
@@ -790,6 +793,7 @@ impl Simulation {
                     used_group_state: self.group_states[index].byte(),
                     preview_group_state: preview[index].byte(),
                     used_group_tick: self.group_state_tick,
+                    pursuit: self.melee.pursuits[index],
                     movement: self.ids[index]
                         .and_then(|id| self.world.debug_state(id))
                         .map(Into::into),
@@ -852,6 +856,7 @@ impl Simulation {
             group_state: self.group_states[index],
             group_state_tick: self.group_state_tick,
             attack: self.attack_order(id),
+            pursuit: self.melee.pursuits[index],
         }
     }
 

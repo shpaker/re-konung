@@ -9,6 +9,7 @@ use bevy::prelude::*;
 use kn_game::{
     debug::{DebugCommand, DebugScript, DebugSnapshot, GridRectangle, MovementDebugSnapshot},
     movement::grid::{Cell, Grid, ODD_ROW_SHIFT, STEP_X, STEP_Y},
+    simulation::{PursuitError, PursuitStatus},
 };
 use kn_render::{CreatureSet, CreatureSim, DebugReplay, GameResource, MapCamera, ortho_scale};
 use serde_json::{Value, json};
@@ -285,6 +286,38 @@ fn geometry(
     for creature in &creatures {
         if let Some(movement) = creature.movement.as_ref() {
             geometry.movement(movement, scale);
+            if let Some(pursuit) = creature.pursuit {
+                let status = match pursuit.status {
+                    PursuitStatus::Pending => "pending",
+                    PursuitStatus::Approaching => "approaching",
+                    PursuitStatus::InRange => "in range",
+                    PursuitStatus::Finished => "finished",
+                    PursuitStatus::Refused(PursuitError::NoRoute) => "no route",
+                    PursuitStatus::Refused(PursuitError::TargetUnavailable) => "target unavailable",
+                };
+                let active = matches!(
+                    pursuit.status,
+                    PursuitStatus::Pending | PursuitStatus::Approaching | PursuitStatus::InRange
+                );
+                if active {
+                    geometry.line(
+                        pixel(movement.pixel),
+                        cell(pursuit.target_cell),
+                        kn_ui::palette::DANGER,
+                        2,
+                        scale,
+                    );
+                }
+                geometry.labels.push(Label {
+                    position: pixel(movement.pixel) - Vec2::Y * 12.0 * scale,
+                    text: format!(
+                        "#{} -> Debug player #{}: {status}",
+                        creature.record_id, pursuit.target_id
+                    ),
+                    layer: 2,
+                    color: kn_ui::palette::TEXT,
+                });
+            }
             geometry.labels.push(Label {
                 position: pixel(movement.pixel) + Vec2::Y * 12.0 * scale,
                 text: format!(
@@ -316,7 +349,7 @@ fn geometry(
             geometry.rectangle(
                 group.second_rectangle,
                 group.group,
-                "Second rectangle (raw data)",
+                "Pursuit retention area",
                 kn_ui::palette::TEXT_MUTED,
                 scale,
             );
@@ -660,12 +693,60 @@ mod tests {
             geometry
                 .labels
                 .iter()
-                .any(|label| label.text.contains("Second rectangle (raw data)"))
+                .any(|label| label.text.contains("Pursuit retention area"))
         );
         assert!(
             scoped_snapshot(snapshot, None, DebugScope::Selected)
                 .groups
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn pursuit_targets_name_the_runtime_actor_in_both_scopes() {
+        let mut simulation = simulation();
+        simulation
+            .apply_debug_command(
+                &DebugCommand::Place { cell: (10, 10) },
+                Some(&profile()),
+                || unreachable!(),
+            )
+            .unwrap();
+        simulation.tick();
+        let snapshot = simulation.debug_snapshot();
+        let creature = &snapshot.creatures[0];
+        let pursuit = creature
+            .pursuit
+            .expect("hostile group acquires the debug player");
+        assert_eq!(pursuit.target_id, snapshot.player.as_ref().unwrap().id);
+        for scope in [DebugScope::Selected, DebugScope::All] {
+            let geometry = geometry(&snapshot, Some(creature.record_id), scope, 1.0);
+            assert!(geometry.labels.iter().any(|label| {
+                label.layer == 2
+                    && label
+                        .text
+                        .contains(&format!("Debug player #{}", pursuit.target_id))
+            }));
+            assert!(geometry.lines.iter().any(|line| line.layer == 2
+                && line.start == pixel(creature.movement.as_ref().unwrap().pixel)
+                && line.end == cell(pursuit.target_cell)));
+        }
+        assert!(
+            geometry(&snapshot, None, DebugScope::Selected, 1.0)
+                .labels
+                .iter()
+                .all(|label| !label.text.contains("-> Debug player"))
+        );
+        let record_id = creature.record_id;
+        let json = serde_json::to_value(scoped_snapshot(
+            snapshot,
+            Some(record_id),
+            DebugScope::Selected,
+        ))
+        .unwrap();
+        assert_eq!(
+            json["creatures"][0]["pursuit"]["target_id"],
+            pursuit.target_id
         );
     }
 

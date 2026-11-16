@@ -114,6 +114,7 @@ pub struct DebugCreatureSnapshot {
     pub used_group_state: u8,
     pub preview_group_state: u8,
     pub used_group_tick: Option<u64>,
+    pub pursuit: Option<crate::simulation::DebugPursuit>,
     pub movement: Option<MovementDebugSnapshot>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

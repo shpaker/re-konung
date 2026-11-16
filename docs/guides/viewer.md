@@ -56,25 +56,30 @@ changes; overlays do not rebuild the scene or reset playback.
 
 <a id="debug-player"></a>
 
-## Debug player and diagnostic geometry
+## Отладочный игрок и диагностическая геометрия
 
-Choose **Player** (debug player) in the left rail. The first map click places a temporary
-world actor; later clicks request a route to the clicked fine-grid cell. Movement
-uses ordinary occupancy and pathfinding with the source hero's eight directional
-paces. A rejected click reports the actual command error; it does not teleport
-the actor or clamp an off-grid point. **Remove** unregisters the actor. Its marker
-remains visible when Characters is hidden and is excluded from creature picking.
-No original game file is changed. If source profile loading fails, placement is
-unavailable while ordinary playback, seeking and resets remain usable.
+Выберите **Player** в левой панели. Первый щелчок ставит временного игрока,
+следующие задают маршрут к клетке мелкой сетки. Используются обычные правила
+занятости и восемь направленных длительностей шага выбранного героя.
+Недопустимая команда показывает причину отказа; телепортации нет.
+**Remove** удаляет игрока. Маркер виден и при скрытом слое Characters,
+но не участвует в выборе обычных существ. Оригинальные файлы не меняются.
+При ошибке профиля постановка недоступна, остальные инструменты продолжают работать.
 
-Display offers routes and targets, group states, and group rectangles. Requested
-and accepted targets are separate facts; group labels distinguish the state used
-for the last evaluation from the current preview. **Spawn area** is the recovered
-role; **Second rectangle (raw data)** intentionally assigns no gameplay meaning.
-Signed raw corners remain unchanged. Selected scope shows the selected creature
-and its group; All shows the current map. The player marker is independent of
-these overlays. Visibility and scope changes reuse geometry without scene or
-texture rebuilds.
+Вход в область появления враждебного отряда позволяет существам выбрать
+отладочного игрока целью и преследовать его. У ближайшей свободной соседней
+клетки они останавливаются: маркер не получает ударов или урона. Настоящий
+герой сохраняет существующее боевое поведение. **Targets** показывает линию
+к выбранному маркеру, его runtime ID и фазу; инспектор — те же сведения
+и причину отказа. Запрошенная и принятая клетка маршрута показываются отдельно.
+
+В Display доступны маршруты, цели, состояния и прямоугольники групп.
+Подписи различают использованное на последнем тике состояние и текущий
+предварительный пересчёт. **Spawn area** — область обнаружения;
+**Pursuit retention area** — область удержания изменившей клетку цели,
+а не запрет выходить за границу для каждого шага. Исходные знаковые координаты
+сохранены. Selected показывает выбранное существо и его группу, All — всю карту.
+Смена видимости и охвата не пересобирает сцену и текстуры.
 
 Commands apply immediately while paused, after logical tick T and before T+1.
 Backward seeking retains future history. Any new command attempt after a rewind,
