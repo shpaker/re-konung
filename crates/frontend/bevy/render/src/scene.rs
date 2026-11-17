@@ -10,13 +10,13 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use bevy::sprite_render::SpriteMaterial;
 use kn_game::{Game, Piece, PieceGroup, Scene, TextureId};
 
 use crate::animation::{Animator, Frame, Sequence};
 use crate::camera::{PendingFrame, frame_scene};
-use crate::lighting::{LightingMaterials, SurfaceLighting, piece_surface_lighting};
+use crate::lighting::attach_piece_lighting;
 use crate::textures::{TextureCache, TextureEntry, TextureProblem};
+use kn_lighting::classic::LightingMaterials;
 
 /// Шаг z между соседними кусками сцены.
 pub const Z_STEP: f32 = 0.01;
@@ -193,21 +193,7 @@ pub fn spawn_scene(
                 piece_visibility(base),
                 piece_transform(piece.x, piece.y, piece.w, piece.h, size, order),
             ));
-            if let Some(materials) = lighting {
-                match piece_surface_lighting(piece) {
-                    SurfaceLighting::TerrainMasked(index) => {
-                        entity.insert(SpriteMaterial(materials.terrain(Some(index))));
-                    }
-                    SurfaceLighting::TerrainPlain => {
-                        entity.insert(SpriteMaterial(materials.terrain(None)));
-                    }
-                    SurfaceLighting::Ambient => {
-                        entity.insert(SpriteMaterial(materials.ambient()));
-                    }
-                    // Flames, self-lit pieces, shadows and overlays draw unlit.
-                    SurfaceLighting::None => {}
-                }
-            }
+            attach_piece_lighting(&mut entity, piece, lighting);
             if let (Some(sequence), Some(animation)) = (sequence, piece.animation.as_ref()) {
                 entity.insert(Animator::with_base(
                     sequence,

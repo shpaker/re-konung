@@ -93,7 +93,7 @@
 Подробности — в [формате карты](formats/map.md#walkability).
 
 Движок не знает `foot`; поставщик передаёт проходимость через
-`kn_game::movement::passage::Passage`.
+`kn_movement::passage::Passage`.
 
 <a id="cell-occupancy"></a>
 

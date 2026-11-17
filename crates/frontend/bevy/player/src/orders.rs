@@ -2,11 +2,9 @@
 
 use bevy::{picking::hover::Hovered, prelude::*, window::PrimaryWindow};
 use kn_app::Screen;
-use kn_game::{
-    movement::MovementMode,
-    movement::grid::{Cell, Grid},
-    simulation::{AttackStatus, HeroOrderStatus},
-};
+use kn_game::{session::AttackStatus, session::HeroOrderStatus};
+use kn_isometric::Cell;
+use kn_movement::MovementMode;
 use kn_render::{
     CameraInput, CreaturePicker, CreatureSet, CreatureSim, MapCamera, MapViewport, ortho_scale,
 };
@@ -213,7 +211,7 @@ fn world_cell(point: Vec2) -> Option<Cell> {
     if !point.is_finite() {
         return None;
     }
-    Grid::fine().cell_at(
+    kn_game::fine_grid().cell_at(
         point.x.round_ties_even() as i32,
         (-point.y).round_ties_even() as i32,
     )

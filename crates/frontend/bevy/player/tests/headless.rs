@@ -11,7 +11,8 @@ use bevy::ui::widget::Text;
 use kn_app::{Action, HeroSelectAction, MainMenuAction, SettingsAction, SettingsField};
 use kn_fe_player::flow::{AppFlow, AppliedSettings};
 use kn_fe_player::session::SessionInit;
-use kn_render::{CreatureMotion, CreatureSim, KonungLightMaterial};
+use kn_lighting::classic::KonungLightMaterial;
+use kn_render::{CreatureMotion, CreatureSim};
 
 /// The pipeline headless: the plugin, its screen views (which need assets,
 /// the scene machinery, a theme and the bundled fonts — everything

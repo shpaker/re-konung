@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use kn_game::{Game, MapRef, SceneOptions, TICK_MS, simulation::CreatureStage};
+use kn_game::{Game, MapRef, SceneOptions, TICK_MS, session::CreatureStage};
 use kn_render::{
     AnimPlugin, Clock, CreatureAnimationPlugin, CreatureMotion, CreatureSim, CreatureSprite,
     GameResource, PlayState, Sequence, TextureCache, reset_creature_animations,

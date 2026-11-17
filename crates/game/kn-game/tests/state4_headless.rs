@@ -12,8 +12,8 @@ use k1_data::{
 use k1_game::{
     creature_anim::{Machine, SPECIAL_STATE, Seed, Stage},
     creatures,
+    presentation::scene::{Graphics, PoseKind, pose_in},
     resources::Resources,
-    scene::{Graphics, PoseKind, pose_in},
 };
 use kn_game::{Game, MapRef, MapSource};
 
@@ -113,7 +113,7 @@ fn a_state_four_record_and_its_state_six_pair_compose_the_same_layers() {
             let pair = pose_in(record, px, py, &state, &graphics, &asked)
                 .unwrap()
                 .expect("Ion has an idle pose");
-            let keys_of = |pose: &k1_game::scene::Pose| {
+            let keys_of = |pose: &k1_game::presentation::scene::Pose| {
                 pose.layer_keys
                     .iter()
                     .map(|key| format!("{key:?}"))

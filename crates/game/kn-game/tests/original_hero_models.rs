@@ -8,8 +8,8 @@ use k1_data::{
     repo::{GAME_FILES, GameDir},
 };
 use k1_game::{
+    presentation::scene::{DrawPiece, Graphics, Pose, pose_in},
     resources::Resources,
-    scene::{DrawPiece, Graphics, Pose, pose_in},
 };
 use kn_game::{
     CreatureClips, CreatureLayer, Game, LayerKey, MapSource, PieceGroup, PoseKind, SceneOptions,

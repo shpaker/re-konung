@@ -12,10 +12,8 @@ use k1_data::{
     repo::{GAME_FILES, GameDir},
 };
 use k1_game::{creatures, resources::Resources};
-use kn_game::{
-    movement::{CreatureId, Direction, Pace},
-    step_durations::StepDurations,
-};
+use kn_isometric::Direction;
+use kn_movement::{CreatureId, Pace, step_durations::StepDurations};
 
 fn game_dirs() -> Vec<(&'static str, GameDir)> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../original/k1");

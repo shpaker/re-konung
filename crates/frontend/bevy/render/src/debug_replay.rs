@@ -5,9 +5,8 @@ use std::time::Instant;
 use crate::{CreatureSim, SimulationCatchUpBudget, StepKey};
 use bevy::prelude::*;
 use kn_game::{
-    Game, MapRef,
-    debug::{DebugCommand, DebugJournal, DebugPlayerProfile, DispatchOutcome},
-    simulation::{CreatureStage, CreatureState, Simulation},
+    Game, MapRef, debug::DebugCommand, debug::DebugJournal, debug::DebugPlayerProfile,
+    debug::DispatchOutcome, session::CreatureStage, session::CreatureState, session::Simulation,
 };
 
 #[derive(Resource, Default)]

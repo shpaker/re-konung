@@ -1,7 +1,7 @@
 //! Sprite geometry rides the creature's own scene composition base, while the
 //! node's world position rides the simulation (review of #101, finding P2-#2).
 //!
-//! The pieces are composed around `(px, py)` by `k1_game::scene::pose_in`, so
+//! The pieces are composed around `(px, py)` by `k1_game::presentation::scene::pose_in`, so
 //! an absolute piece corner is `base + internal offset`. The plan must store
 //! the *internal* offset: reducing against the simulation's initial pixel
 //! instead displaces the image on the node by `base − origin` — zero for a

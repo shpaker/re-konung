@@ -5,15 +5,11 @@
 //! `konung/k1/render.py`, живёт здесь. Bevy не используется — логика
 //! проверяется headless.
 
-pub mod combat;
 pub mod creature_anim;
 pub mod creatures;
-pub mod lighting;
-pub mod placement;
+pub mod geometry;
 pub mod resources;
 pub mod rules;
-pub mod scene;
-pub mod textures;
-pub mod time_of_day;
 
-pub mod new_game;
+pub mod presentation;
+pub mod simulation;

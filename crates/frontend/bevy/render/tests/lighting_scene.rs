@@ -3,14 +3,15 @@
 //! confirmed surface rules, and a changed [`LightingState`] reaches every
 //! material without touching the scene's entity count.
 
+use kn_lighting::classic::ClassicSurface;
+use kn_lighting::classic::{
+    KonungLightMaterial, LightingMaterials, LightingState, update_lighting_uniforms,
+};
 use std::path::{Path, PathBuf};
 
 use bevy::{asset::Assets, prelude::*, sprite_render::SpriteMaterial};
 use kn_game::{Game, MapSource, PieceGroup, SceneOptions};
-use kn_render::{
-    KonungLightMaterial, LightingMaterials, LightingState, ScenePiece, SurfaceLighting,
-    TextureCache, Z_STEP, spawn_scene, surface_lighting, update_lighting_uniforms,
-};
+use kn_render::{ScenePiece, SurfaceLighting, TextureCache, Z_STEP, spawn_scene, surface_lighting};
 
 fn game_roots() -> Vec<(&'static str, PathBuf)> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../original/k1");
@@ -192,7 +193,12 @@ fn a_real_map_materials_exactly_the_pieces_the_rules_name() {
                 SurfaceLighting::TerrainMasked(index) => {
                     assert_eq!(
                         material,
-                        Some(&pool.terrain(Some(index))),
+                        Some(&material_handle(
+                            pool,
+                            ClassicSurface::Terrain {
+                                mask_index: Some(index)
+                            }
+                        )),
                         "{edition}: кусок №{order}: масочная земля"
                     );
                     masked_terrain += 1;
@@ -200,7 +206,10 @@ fn a_real_map_materials_exactly_the_pieces_the_rules_name() {
                 SurfaceLighting::TerrainPlain => {
                     assert_eq!(
                         material,
-                        Some(&pool.terrain(None)),
+                        Some(&material_handle(
+                            pool,
+                            ClassicSurface::Terrain { mask_index: None }
+                        )),
                         "{edition}: кусок №{order}: земля или декорация без маски"
                     );
                     plain_terrain_or_decor += 1;
@@ -208,7 +217,7 @@ fn a_real_map_materials_exactly_the_pieces_the_rules_name() {
                 SurfaceLighting::Ambient => {
                     assert_eq!(
                         material,
-                        Some(&pool.ambient()),
+                        Some(&material_handle(pool, ClassicSurface::Ambient)),
                         "{edition}: кусок №{order}: объект под обычным ambient"
                     );
                     ambient_objects += 1;
@@ -265,7 +274,10 @@ fn a_changed_lighting_state_rewrites_the_uniforms_and_touches_no_entities() {
         assert!(sprites_before > 0, "{edition}: карта без спрайтов");
         let (terrain_plain, ambient) = {
             let pool = app.world().resource::<LightingMaterials>();
-            (pool.terrain(None), pool.ambient())
+            (
+                material_handle(pool, ClassicSurface::Terrain { mask_index: None }),
+                material_handle(pool, ClassicSurface::Ambient),
+            )
         };
 
         // Zero default first: the writer turns it into uniform no-ops.
@@ -324,4 +336,25 @@ fn a_changed_lighting_state_rewrites_the_uniforms_and_touches_no_entities() {
             "{edition}: смена света не пересобирала сцену"
         );
     }
+}
+
+fn material_handle(
+    pool: &kn_lighting::classic::LightingMaterials,
+    surface: kn_lighting::classic::ClassicSurface,
+) -> bevy::prelude::Handle<kn_lighting::classic::KonungLightMaterial> {
+    use bevy::{ecs::world::CommandQueue, prelude::*, sprite_render::SpriteMaterial};
+    let mut world = World::new();
+    let mut queue = CommandQueue::default();
+    let id = {
+        let mut commands = Commands::new(&mut queue, &world);
+        let mut entity = commands.spawn_empty();
+        pool.attach(&mut entity, surface);
+        entity.id()
+    };
+    queue.apply(&mut world);
+    world
+        .get::<SpriteMaterial<kn_lighting::classic::KonungLightMaterial>>(id)
+        .unwrap()
+        .0
+        .clone()
 }

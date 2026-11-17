@@ -10,9 +10,9 @@ use k1_data::{
     repo::{GAME_FILES, GameDir},
 };
 use k1_game::{
+    presentation::scene::{self, Overlays, SceneInput},
+    presentation::textures::TextureKey,
     resources::Resources,
-    scene::{self, Overlays, SceneInput},
-    textures::TextureKey,
 };
 
 fn game_dirs() -> Vec<(&'static str, GameDir)> {
@@ -242,12 +242,12 @@ fn overlays_follow_map_data() {
                 .count()
         };
         assert_eq!(
-            foot(k1_game::textures::FOOT_BLOCKED_COLOR),
+            foot(k1_game::presentation::textures::FOOT_BLOCKED_COLOR),
             blocked,
             "{edition}: непроходимые клетки"
         );
         assert_eq!(
-            foot(k1_game::textures::FOOT_ARROWS_COLOR),
+            foot(k1_game::presentation::textures::FOOT_ARROWS_COLOR),
             arrows,
             "{edition}: клетки стрел"
         );

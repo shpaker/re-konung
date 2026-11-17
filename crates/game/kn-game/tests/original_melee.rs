@@ -2,10 +2,10 @@
 use std::path::PathBuf;
 
 use kn_game::{
-    Game,
-    movement::{Cell, Direction},
-    simulation::{AttackStatus, CreatureStage, HeroOrderStatus, Simulation},
+    Game, session::AttackStatus, session::CreatureStage, session::HeroOrderStatus,
+    session::Simulation,
 };
+use kn_isometric::{Cell, Direction};
 
 fn editions() -> Vec<PathBuf> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../original/k1");
@@ -169,7 +169,7 @@ fn melee_tick_cost() {
         }
     }
     let mut candidates: Vec<_> = (0..50)
-        .map(|id| k1_game::combat::Combatant {
+        .map(|id| k1_game::rules::combat::Combatant {
             id,
             group: 1,
             group_kind: 0x41,
@@ -179,7 +179,7 @@ fn melee_tick_cost() {
             target: None,
         })
         .collect();
-    candidates.push(k1_game::combat::Combatant {
+    candidates.push(k1_game::rules::combat::Combatant {
         id: 50,
         group: 0,
         group_kind: 0x20,
@@ -191,7 +191,7 @@ fn melee_tick_cost() {
     let started = Instant::now();
     for _ in 0..10000 {
         for actor in &candidates[..50] {
-            black_box(k1_game::combat::monster_target(*actor, &candidates));
+            black_box(k1_game::rules::combat::monster_target(*actor, &candidates));
         }
     }
     eprintln!(

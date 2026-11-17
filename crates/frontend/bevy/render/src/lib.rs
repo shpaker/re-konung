@@ -11,6 +11,7 @@ pub mod creature_animation;
 pub mod creatures;
 pub mod debug_replay;
 pub mod lighting;
+mod lighting_adapter;
 pub mod picking;
 pub mod scene;
 pub mod textures;
@@ -39,9 +40,7 @@ pub use creatures::{
 };
 pub use debug_replay::DebugReplay;
 pub use lighting::{
-    FineLightGrid, KonungLightMaterial, KonungLightingPlugin, LightingMaterials, LightingState,
-    SurfaceLighting, light_mask_image, piece_surface_lighting, surface_lighting,
-    update_creature_lighting, update_lighting_uniforms,
+    SurfaceLighting, piece_surface_lighting, surface_lighting, update_creature_lighting,
 };
 pub use picking::CreaturePicker;
 pub use scene::{
@@ -55,3 +54,5 @@ use bevy::prelude::*;
 /// Открытая игра как ресурс Bevy: обёртка, потому что [`kn_game::Game`] не знает про ECS.
 #[derive(Resource)]
 pub struct GameResource(pub kn_game::Game);
+
+pub use lighting_adapter::{lighting_state, load_light_masks};

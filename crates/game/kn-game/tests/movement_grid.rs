@@ -4,11 +4,12 @@
 //! The only engine test that knows about `k1-data`: a comparison of formulas,
 //! not a layer dependency — the engine never uses K1.
 
-use kn_game::movement::grid::{Cell, Direction, FINE_HEIGHT, FINE_WIDTH, Grid};
+use kn_game::{FINE_HEIGHT, FINE_WIDTH};
+use kn_isometric::{Cell, Direction};
 
 #[test]
 fn fine_grid_matches_k1_data() {
-    let grid = Grid::fine();
+    let grid = kn_game::fine_grid();
     assert_eq!((grid.columns as usize, grid.rows as usize), (160, 320));
     for row in 0..FINE_HEIGHT {
         for column in 0..FINE_WIDTH {
@@ -33,7 +34,7 @@ fn fine_grid_matches_k1_data() {
 
 #[test]
 fn neighbours_on_the_fine_grid_match_the_original_table() {
-    let grid = Grid::fine();
+    let grid = kn_game::fine_grid();
     // The original's offset table (Slavik game.cpp:2918-2947): rows of different
     // parity are shifted, so a neighbour depends on the row's parity.
     let expected_even = [
@@ -92,23 +93,19 @@ fn neighbours_on_the_fine_grid_match_the_original_table() {
     }
 }
 
-/// The K1 rules re-declare the offset table because `k1-game` must not depend
-/// on `kn-game`; this holds the two copies together, so a change to the
-/// engine's table cannot silently reorder the rules' "first free neighbour of
-/// the workplace" (issue #36, criterion 3).
+/// K1 adjacency uses the shared directions while retaining signed record coordinates.
 #[test]
-fn the_rules_copy_of_the_offset_table_matches_the_engine() {
-    for (index, direction) in Direction::ALL.into_iter().enumerate() {
-        let (even, odd) = k1_game::rules::NEIGHBOUR_OFFSETS[index];
-        assert_eq!(
-            direction.offset(false),
-            even,
-            "{direction:?} (index {index}) on an even row"
-        );
-        assert_eq!(
-            direction.offset(true),
-            odd,
-            "{direction:?} (index {index}) on an odd row"
-        );
+fn the_rules_use_shared_neighbours() {
+    for row in [100, 101] {
+        let from = Cell::new(80, row);
+        let signed_from = (from.column as i16, from.row as i16);
+        for direction in Direction::ALL {
+            let to = from.neighbour(direction).unwrap();
+            assert!(k1_game::rules::is_adjacent(
+                signed_from,
+                (to.column as i16, to.row as i16)
+            ));
+        }
+        assert!(!k1_game::rules::is_adjacent(signed_from, signed_from));
     }
 }

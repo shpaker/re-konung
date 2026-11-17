@@ -1,6 +1,7 @@
 //! Runtime-only debugging and deterministic command replay. Nothing writes game files.
 
-use crate::{movement::world::ActorDebugState, simulation::Simulation};
+use crate::session::Simulation;
+use kn_movement::world::ActorDebugState;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,16 +18,7 @@ pub struct DebugPlayerProfile {
 
 impl DebugPlayerProfile {
     pub fn validate(&self) -> Result<(), String> {
-        if self.step_ticks.contains(&0) {
-            return Err("Debug player source has a missing walk duration".into());
-        }
-        if self.direction >= 8 {
-            return Err("Debug player source has an invalid direction".into());
-        }
-        if self.class_id & 0x80 != 0 || matches!(self.recorded_state, 3 | 9) {
-            return Err("Debug player source is not alive".into());
-        }
-        Ok(())
+        k1_game::simulation::ActorProfile::from(self).validate()
     }
 }
 
@@ -57,7 +49,7 @@ pub struct MovementDebugSnapshot {
 }
 impl From<ActorDebugState> for MovementDebugSnapshot {
     fn from(value: ActorDebugState) -> Self {
-        let cell = |cell: crate::movement::grid::Cell| (cell.column, cell.row);
+        let cell = |cell: kn_isometric::Cell| (cell.column, cell.row);
         let state = value.state;
         Self {
             world_id: state.creature.raw(),
@@ -114,7 +106,7 @@ pub struct DebugCreatureSnapshot {
     pub used_group_state: u8,
     pub preview_group_state: u8,
     pub used_group_tick: Option<u64>,
-    pub pursuit: Option<crate::simulation::DebugPursuit>,
+    pub pursuit: Option<crate::session::DebugPursuit>,
     pub movement: Option<MovementDebugSnapshot>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,10 +355,66 @@ impl DebugJournal {
     }
 }
 
+impl From<&DebugPlayerProfile> for k1_game::simulation::ActorProfile {
+    fn from(value: &DebugPlayerProfile) -> Self {
+        Self {
+            hero: value.hero,
+            character: value.character,
+            group: value.group,
+            direction: value.direction,
+            class_id: value.class_id,
+            recorded_state: value.recorded_state,
+            step_ticks: value.step_ticks,
+        }
+    }
+}
+
+impl From<k1_game::simulation::ActorSnapshot> for DebugPlayerSnapshot {
+    fn from(value: k1_game::simulation::ActorSnapshot) -> Self {
+        Self {
+            id: value.id,
+            source_hero: value.source_hero,
+            source_character: value.source_character,
+            movement: value.movement.into(),
+        }
+    }
+}
+
+impl From<k1_game::simulation::RuntimeSnapshot> for DebugSnapshot {
+    fn from(value: k1_game::simulation::RuntimeSnapshot) -> Self {
+        Self {
+            tick: value.tick,
+            player: value.player.map(Into::into),
+            groups: value
+                .groups
+                .into_iter()
+                .map(|group| GroupGeometry {
+                    group: group.group,
+                    spawn: group.spawn.into(),
+                    second_rectangle: group.second_rectangle.into(),
+                })
+                .collect(),
+            creatures: value
+                .creatures
+                .into_iter()
+                .map(|creature| DebugCreatureSnapshot {
+                    record_id: creature.record_id,
+                    group: creature.group,
+                    used_group_state: creature.used_group_state,
+                    preview_group_state: creature.preview_group_state,
+                    used_group_tick: creature.used_group_tick,
+                    pursuit: creature.pursuit.map(Into::into),
+                    movement: creature.movement.map(Into::into),
+                })
+                .collect(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::movement::grid::{FINE_HEIGHT, FINE_WIDTH};
+    use crate::{FINE_HEIGHT, FINE_WIDTH};
     use k1_data::{
         game_state::{Character, GameState, Group, Rect},
         map::KonungMap,
@@ -469,6 +517,55 @@ mod tests {
             None,
         ))
     }
+    #[test]
+    fn runtime_boundary_preserves_validation_errors_and_precedence() {
+        let mut sim = factory().unwrap();
+        let cell = free_inside(&sim);
+        let command = DebugCommand::Place { cell };
+        let mut invalid = profile();
+        invalid.step_ticks[0] = 0;
+        invalid.direction = 8;
+        invalid.class_id |= 0x80;
+        assert_eq!(
+            sim.apply_debug_command(&command, Some(&invalid), factory),
+            Err("Debug player source has a missing walk duration".into())
+        );
+        invalid.step_ticks[0] = 1;
+        assert_eq!(
+            sim.apply_debug_command(&command, Some(&invalid), factory),
+            Err("Debug player source has an invalid direction".into())
+        );
+        invalid.direction = 0;
+        assert_eq!(
+            sim.apply_debug_command(&command, Some(&invalid), factory),
+            Err("Debug player source is not alive".into())
+        );
+        assert_eq!(
+            sim.apply_debug_command(&command, None, factory),
+            Err("Debug player profile is unavailable".into())
+        );
+        assert_eq!(
+            sim.apply_debug_command(&DebugCommand::Remove, None, factory),
+            Err("Debug player is not placed".into())
+        );
+        sim.apply_debug_command(&command, Some(&profile()), factory)
+            .unwrap();
+        assert_eq!(
+            sim.apply_debug_command(&command, None, factory),
+            Err("Debug player is already placed".into())
+        );
+        let before = sim.debug_snapshot();
+        assert_eq!(
+            sim.apply_debug_command(&DebugCommand::ResetPositions, None, || {
+                let mut fresh = factory()?;
+                fresh.tick();
+                Ok(fresh)
+            }),
+            Err("Position reset factory returned a different roster or nonzero tick".into())
+        );
+        assert_eq!(sim.debug_snapshot(), before);
+    }
+
     fn free_inside(sim: &Simulation) -> (u32, u32) {
         (4..=8)
             .flat_map(|row| (4..=8).map(move |column| (column, row)))

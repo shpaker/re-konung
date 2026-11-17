@@ -1,14 +1,14 @@
 //! Shared fixtures of the player's integration tests: the app the window
 //! runs, minus the window.
 
+use kn_lighting::classic::KonungLightMaterial;
 use std::path::PathBuf;
 
 use bevy::prelude::*;
 use kn_fe_player::flow::PlayerFlowPlugin;
 use kn_game::{Game, MapSource, TICK_MS};
 use kn_render::{
-    AnimPlugin, Clock, CreatureAnimationPlugin, GameResource, KonungLightMaterial, PendingFrame,
-    PlayState, TextureCache,
+    AnimPlugin, Clock, CreatureAnimationPlugin, GameResource, PendingFrame, PlayState, TextureCache,
 };
 
 /// First edition directory with data, or `None` to skip.

@@ -13,8 +13,8 @@ use k1_data::{
     repo::{GAME_FILES, GameDir},
 };
 use k1_game::{
+    presentation::scene::{self, Overlays, SceneInput},
     resources::Resources,
-    scene::{self, Overlays, SceneInput},
 };
 
 // ---------------------------------------------------------------------------

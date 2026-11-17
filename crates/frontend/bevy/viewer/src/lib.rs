@@ -11,6 +11,10 @@ mod workspace;
 
 #[cfg(test)]
 use bevy::feathers::controls::FeathersSlider;
+use kn_lighting::classic::{
+    FineLightGrid, KonungLightingPlugin, LightingMaterials, LightingState,
+    install_classic_lighting, update_lighting_uniforms,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,7 +28,6 @@ use bevy::{
     ecs::schedule::common_conditions::resource_exists,
     prelude::*,
     render::view::screenshot::{Capturing, Screenshot, save_to_disk},
-    sprite_render::SpriteMaterial,
     ui::Pressed,
     ui_widgets::{Activate, SliderValue, ValueChange},
     window::PresentMode,
@@ -32,24 +35,20 @@ use bevy::{
 // Re-exported: `run_viewer` hands the app's exit back and the windowed
 // binary must be able to name the type to turn it into a process exit code.
 pub use bevy::app::AppExit;
-use k1_data::lights_res;
-use k1_data::map;
-use k1_data::repo::{GAME_FILES, GameDir, TUTORIAL_FILES};
-use k1_game::lighting;
-use k1_game::time_of_day::CYCLE_TICKS;
+use kn_game::CYCLE_TICKS;
 use kn_game::{
     DayPhase, Game, MapRef, MapSource, Piece, PieceGroup, SceneOptions, TICK_MS, group_is_shown,
-    simulation::{CreatureState, Simulation, WalkState},
+    session::CreatureState, session::Simulation, session::WalkState,
 };
 use kn_render::{
     AnimPlugin, AnimSet, Animator, CameraApply, CameraBounds, CameraInput, CameraState, Clock,
     CreatureAnim, CreatureAnimReport, CreatureAnimationPlugin, CreatureMotion, CreatureNode,
     CreatureNodesVisible, CreatureRoot, CreatureSet, CreatureShadow, CreatureSim, CreatureSprite,
-    FineLightGrid, GameResource, KonungLightMaterial, KonungLightingPlugin, LightingMaterials,
-    LightingState, MapCamera, MapCameraPlugin, PendingFrame, PlayState, SceneGroup, ScenePiece,
+    GameResource, MapCamera, MapCameraPlugin, PendingFrame, PlayState, SceneGroup, ScenePiece,
     Sequence, TextureCache, clear_scene, load_scene, piece_center, piece_size,
-    reset_creature_animations, reset_creature_positions, update_lighting_uniforms,
+    reset_creature_animations, reset_creature_positions,
 };
+use kn_render::{lighting_state, load_light_masks};
 use kn_ui::{KonungFonts, KonungUiPlugin};
 
 /// Отладочный оверлей, который включает просмотрщик.
@@ -94,7 +93,7 @@ pub struct Viewer {
     /// движение не останавливает (одного `Play`/`Pause` вместо прежних двух).
     pub playback: PlayState,
     /// "Constant day": `true` holds the lighting input at its constant day
-    /// value (`k1_game::lighting::params_gated`) while time keeps running —
+    /// value (`kn_game::lighting_params`) while time keeps running —
     /// the phase advances exactly as with the cycle on, as in the original,
     /// whose counter no option ever gates. A viewer session setting, not
     /// simulation state: it survives a map switch (which rebuilds the
@@ -239,80 +238,6 @@ struct LightingSetup {
     masks: Vec<(Vec<u8>, u32, u32)>,
 }
 
-/// The LIGHTS.RES tile masks of the opened game: raw brightness bytes with
-/// their pixel size, ready for [`LightingMaterials::new`]. A game without a
-/// readable LIGHTS.RES gets an empty pool — the scene still lights, the tiles
-/// just carry no tile mask. Every way the file can fail warns with its path
-/// and reason: an empty pool reached silently reads as a broken night scene
-/// (review #106).
-fn lights_res_masks(game: &Game) -> Vec<(Vec<u8>, u32, u32)> {
-    let Some(path) = k1_game::resources::find_named(game.root(), "lights.res") else {
-        warn!(
-            "LIGHTS.RES not found in {}; the scene lights without tile masks",
-            game.root().display()
-        );
-        return Vec::new();
-    };
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            warn!(
-                "LIGHTS.RES unreadable at {}: {error}; the scene lights without tile masks",
-                path.display()
-            );
-            return Vec::new();
-        }
-    };
-    let res = match lights_res::parse(&bytes) {
-        Ok(res) => res,
-        Err(error) => {
-            warn!(
-                "LIGHTS.RES unparsable at {}: {error}; the scene lights without tile masks",
-                path.display()
-            );
-            return Vec::new();
-        }
-    };
-    res.tiles
-        .into_iter()
-        .map(|mask| {
-            (
-                mask,
-                lights_res::TILE_MASK_WIDTH as u32,
-                lights_res::TILE_MASK_HEIGHT as u32,
-            )
-        })
-        .collect()
-}
-
-/// The map's LIGHTS.N fine grid — the tile-light index per fine cell, what the
-/// creature lighting reads to tell a lit patch from a dark one. `None` when
-/// the map has no LIGHTS.N: every cell counts as dark, exactly as on a map
-/// without lights.
-fn map_fine_lights(game: &Game, map_ref: MapRef) -> Option<Vec<Vec<u8>>> {
-    let files = match map_ref.source {
-        MapSource::Game => GAME_FILES,
-        MapSource::Tutorial => TUTORIAL_FILES,
-    };
-    let bytes = GameDir::new(game.root())
-        .lights_bytes(map_ref.number, files)
-        .ok()??;
-    map::parse_lights(&bytes).ok().map(|lights| lights.fine)
-}
-
-/// The k1 reading of `k1_game::lighting::params` into the render contract:
-/// terrain and decorations get the ground ambient only inside the ground-light
-/// window (outside it a zero blend is the shader's no-op), objects and
-/// characters the plain ambient always, plus the ground tile-light colour.
-fn lighting_state(params: lighting::LightingParams) -> LightingState {
-    LightingState {
-        terrain_blend: Vec3::from(params.ambient),
-        ambient_blend: Vec3::from(params.ambient),
-        light_color: Vec3::from(params.ground_light),
-        light_gain: if params.ground_window { 1.0 } else { 0.0 },
-    }
-}
-
 /// Writes the lighting state for the scene clock — the single time source the
 /// scrub moves and the simulation is caught up to — or for the tick pinned by
 /// `--light-tick`, which holds a night scene up for screenshots and
@@ -337,7 +262,7 @@ fn update_lighting_state(
         .and_then(|stats| stats.map)
         .or_else(|| viewer.maps.get(viewer.selected).copied())
         .map_or(0, |map| map.number);
-    let next = lighting_state(lighting::params_for_map(
+    let next = lighting_state(kn_game::lighting_params(
         tick,
         SIM_SEED,
         map,
@@ -352,19 +277,15 @@ fn update_lighting_state(
 /// Builds the material pool from the game's LIGHTS.RES at startup: lighting is
 /// part of the scene, not an option — the uniforms arrive every frame through
 /// [`update_lighting_state`].
-fn setup_lighting(
-    setup: Res<LightingSetup>,
-    mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<KonungLightMaterial>>,
-    mut commands: Commands,
-) {
-    let pool = LightingMaterials::new(&mut images, &mut materials, &setup.masks);
-    info!(
-        "lighting: {} materials ({} tile masks from LIGHTS.RES)",
-        pool.len(),
-        setup.masks.len(),
-    );
-    commands.insert_resource(pool);
+fn setup_lighting(world: &mut World) {
+    world.resource_scope::<LightingSetup, _>(|world, setup| {
+        install_classic_lighting(world, &setup.masks);
+        info!(
+            "lighting: {} materials ({} tile masks from LIGHTS.RES)",
+            world.resource::<LightingMaterials>().len(),
+            setup.masks.len()
+        );
+    });
 }
 
 // --- Time-of-day scrub -----------------------------------------------------
@@ -619,7 +540,7 @@ fn capture(
     state: Res<LightingState>,
     mut zoom: ResMut<CameraState>,
     mut camera: Single<&mut Transform, With<MapCamera>>,
-    lit: Query<(), With<SpriteMaterial<KonungLightMaterial>>>,
+    lit: Query<(), With<kn_lighting::LightingSurface>>,
     capturing: Query<(), With<Capturing>>,
     time: Res<Time>,
     mut phase: Local<CapturePhase>,
@@ -1042,7 +963,7 @@ pub fn run_viewer(config: ViewerConfig) -> AppExit {
     // LIGHTS.RES is read before the game moves into its resource
     let setup = LightingSetup {
         tick: config.lighting_tick,
-        masks: lights_res_masks(&config.game),
+        masks: load_light_masks(&config.game),
     };
     let mut app = App::new();
     app.add_plugins(
@@ -1250,7 +1171,7 @@ fn rebuild_scene(
     };
     // The fine grid of the map just loaded: what the creature lighting reads.
     // Maps without LIGHTS.N insert `None` — every cell dark.
-    commands.insert_resource(FineLightGrid(map_fine_lights(&game.0, map_ref)));
+    commands.insert_resource(FineLightGrid(game.0.map_light_grid(map_ref)));
     // aim the capture camera at the first lit terrain tile and count the
     // terrain pieces for the exit report
     if let (Some(mut capture), Some(mut target)) = (capture, target)
@@ -1683,7 +1604,7 @@ fn game_time_line(tick: Option<u64>) -> String {
     let Some(tick) = tick else {
         return String::new();
     };
-    let time = k1_game::time_of_day::game_time(tick);
+    let time = kn_game::game_time(tick);
     format!(
         "\nclock {:02}:{:02} · {} · day {} of the cycle · {}%",
         time.clock_hour,
@@ -1720,7 +1641,7 @@ fn scrub_clock_label(
     let Ok(mut text) = texts.get_mut(entity) else {
         return;
     };
-    let time = k1_game::time_of_day::game_time(clock.ticks);
+    let time = kn_game::game_time(clock.ticks);
     let label = format!("{:02}:{:02}", time.clock_hour, time.clock_minute);
     if text.0 != label {
         text.0 = label;
@@ -1788,13 +1709,37 @@ fn creature_report(report: &CreatureAnimReport) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    fn material_handle(
+        pool: &kn_lighting::classic::LightingMaterials,
+        surface: kn_lighting::classic::ClassicSurface,
+    ) -> bevy::prelude::Handle<kn_lighting::classic::KonungLightMaterial> {
+        use bevy::{ecs::world::CommandQueue, prelude::*, sprite_render::SpriteMaterial};
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        let id = {
+            let mut commands = Commands::new(&mut queue, &world);
+            let mut entity = commands.spawn_empty();
+            pool.attach(&mut entity, surface);
+            entity.id()
+        };
+        queue.apply(&mut world);
+        world
+            .get::<SpriteMaterial<kn_lighting::classic::KonungLightMaterial>>(id)
+            .unwrap()
+            .0
+            .clone()
+    }
+
+    use k1_game::presentation::lighting;
+    use kn_lighting::classic::{ClassicSurface, KonungLightMaterial, add_classic_surface_system};
     use std::collections::HashSet;
     use std::num::NonZero;
     use std::sync::Arc;
 
     use super::*;
-    use kn_game::simulation::{CreatureState, Simulation, WalkState};
     use kn_game::{GameTime, LayerKey, PieceGroup};
+    use kn_game::{session::CreatureState, session::Simulation, session::WalkState};
     use kn_render::{
         Animator, Clip, CreatureAnim, CreatureDepth, CreatureSpawns, LayerSequences, Sequence,
         advance_creature_sim, build_creature_anim, build_creature_spawns, build_depth_map,
@@ -1884,7 +1829,7 @@ mod tests {
     /// without `original/`).
     #[test]
     fn walk_frames_carry_the_step() {
-        // Pixel step per direction index, mirroring kn_game::movement::grid.
+        // Pixel step per direction index, mirroring kn_isometric::Direction.
         let step: [(i32, i32); 8] = [
             (-58, 0),
             (-29, -16),
@@ -3197,7 +3142,7 @@ mod tests {
         let fixed = scrub_lighting(&app);
         assert_eq!(
             fixed,
-            lighting_state(lighting::params_for_map(12000, SIM_SEED, 44, true, true))
+            lighting_state(kn_game::lighting_params(12000, SIM_SEED, 44, true, true))
         );
         assert_ne!(fixed.ambient_blend, Vec3::ZERO);
         assert_eq!(fixed.light_gain, 0.0);
@@ -4239,7 +4184,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 inspection.animation_stage,
-                Some(kn_game::simulation::CreatureStage::Idle)
+                Some(kn_game::session::CreatureStage::Idle)
             );
             let rest = states
                 .iter()
@@ -4864,8 +4809,8 @@ mod tests {
     #[test]
     fn a_moving_creature_switches_material_handles_with_its_cell() {
         use bevy::sprite_render::SpriteMaterial;
-        use kn_game::movement::grid::{FINE_HEIGHT, FINE_WIDTH};
-        use kn_render::KonungLightMaterial;
+        use kn_game::{FINE_HEIGHT, FINE_WIDTH};
+        use kn_lighting::classic::KonungLightMaterial;
         #[allow(unused_imports)]
         use kn_render::update_creature_lighting;
 
@@ -4908,8 +4853,8 @@ mod tests {
 
         let mut materials = Assets::<KonungLightMaterial>::default();
         let pool = LightingMaterials::new(&mut images, &mut materials, &[]);
-        let ambient = pool.ambient();
-        let neutral = pool.neutral();
+        let ambient = material_handle(&pool, ClassicSurface::Ambient);
+        let neutral = material_handle(&pool, ClassicSurface::Moving { cell: None });
 
         let mut app = App::new();
         app.add_plugins((
@@ -4932,7 +4877,8 @@ mod tests {
         .insert_resource(spawns)
         .insert_resource(pool)
         // The system under test, at the place the plugin runs it.
-        .add_systems(Update, update_creature_lighting.after(CreatureSet::Nodes));
+        ;
+        add_classic_surface_system(&mut app);
         app.world_mut()
             .resource_mut::<Clock>()
             .goto(PlayState::Paused);
@@ -5270,9 +5216,9 @@ mod tests {
             .find_map(|deep| {
                 (1..deep).find_map(|green| {
                     ((lighting::night_palette(green, SIM_SEED)
-                        == k1_game::time_of_day::NightPalette::Green)
+                        == k1_game::rules::time_of_day::NightPalette::Green)
                         && (lighting::night_palette(deep, SIM_SEED)
-                            == k1_game::time_of_day::NightPalette::Deep))
+                            == k1_game::rules::time_of_day::NightPalette::Deep))
                         .then_some((green, deep))
                 })
             })
@@ -5491,7 +5437,16 @@ mod tests {
         // One mask so both material kinds are judged: masked and plain terrain
         // take the ground blend, the ambient one the plain blend.
         let pool = LightingMaterials::new(&mut images, &mut materials, &[(vec![1u8; 4], 2, 2)]);
-        let handles = (pool.terrain(Some(0)), pool.terrain(None), pool.ambient());
+        let handles = (
+            material_handle(
+                &pool,
+                ClassicSurface::Terrain {
+                    mask_index: Some(0),
+                },
+            ),
+            material_handle(&pool, ClassicSurface::Terrain { mask_index: None }),
+            material_handle(&pool, ClassicSurface::Ambient),
+        );
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))

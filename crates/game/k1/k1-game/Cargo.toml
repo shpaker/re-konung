@@ -6,6 +6,8 @@ publish = false
 description = "«Князь: Легенды Лесной страны» (1999): ресурсы и правила отображения первой части"
 
 [dependencies]
+kn-movement = { path = "../../../shared/movement" }
+kn-isometric = { path = "../../../shared/isometric" }
 k1-data = { path = "../k1-data" }
 thiserror = "2"
 

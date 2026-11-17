@@ -5,11 +5,9 @@ use k1_data::{
     game_state,
     repo::{GAME_FILES, GameDir},
 };
-use kn_game::{
-    Game, MapSource,
-    movement::{Cell, Direction, Event},
-    simulation::HeroOrderStatus,
-};
+use kn_game::{Game, MapSource, session::HeroOrderStatus};
+use kn_isometric::{Cell, Direction};
+use kn_movement::Event;
 
 #[test]
 fn every_starting_hero_accepts_exact_orders_while_the_world_keeps_running() {

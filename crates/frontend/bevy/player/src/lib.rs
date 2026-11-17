@@ -15,6 +15,7 @@ pub mod session;
 pub mod screens;
 pub mod widgets;
 
+use kn_lighting::classic::{KonungLightingPlugin, LightingState, update_lighting_uniforms};
 use std::path::PathBuf;
 
 use bevy::{
@@ -23,13 +24,11 @@ use bevy::{
     prelude::*,
     window::{MonitorSelection, PresentMode, VideoModeSelection, WindowMode},
 };
-use k1_game::lighting;
 use kn_game::TICK_MS;
 use kn_input::{ZoomScroll, pan_direction, wheel_steps};
 use kn_render::{
     AnimPlugin, CameraInput, CameraState, CreatureAnimationPlugin, CreatureMotion, CreatureSim,
-    GameResource, KonungLightingPlugin, LightingState, MapCamera, MapCameraPlugin, PAN_SPEED,
-    TextureCache, ortho_scale, update_lighting_uniforms,
+    GameResource, MapCamera, MapCameraPlugin, PAN_SPEED, TextureCache, lighting_state, ortho_scale,
 };
 use kn_settings::Settings;
 use kn_ui::{KonungUiPlugin, pointer_over_ui};
@@ -147,15 +146,6 @@ pub fn run_player(config: PlayerConfig) {
     app.run();
 }
 
-fn lighting_state(params: lighting::LightingParams) -> LightingState {
-    LightingState {
-        terrain_blend: Vec3::from(params.ambient),
-        ambient_blend: Vec3::from(params.ambient),
-        light_color: Vec3::from(params.ground_light),
-        light_gain: if params.ground_window { 1.0 } else { 0.0 },
-    }
-}
-
 /// Writes the lighting state for the simulation's current tick. Without a
 /// simulation nothing is written: the contract keeps its safe zero default
 /// instead of lighting a frozen scene from an invented clock.
@@ -174,7 +164,7 @@ fn update_lighting_state(
     let map = motion
         .and_then(|motion| motion.map)
         .map_or(0, |map| map.number);
-    let next = lighting_state(lighting::params_for_map(tick, START_SEED, map, true, true));
+    let next = lighting_state(kn_game::lighting_params(tick, START_SEED, map, true, true));
     if *state != next {
         *state = next;
     }

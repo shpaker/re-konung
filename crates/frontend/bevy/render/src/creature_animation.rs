@@ -6,8 +6,7 @@
 //!
 //! The boundary this module must keep (ARCHITECTURE.md, "Boundary rules"): the
 //! game state and its transitions live in the Bevy-free game layer
-//! ([`k1_game::creature_anim::Machine`], reached through
-//! [`kn_game::simulation::Simulation`]). This module reads that answer as data
+//! ([`kn_game::session::Simulation`]). This module reads that answer as data
 //! and turns it into clips; it never decides that a state-4 special is over or
 //! that a creature may enter idle. It also owns no clock: it consumes the scene
 //! [`Clock`] the caller already runs, and the simulation only ever moves on the
@@ -21,11 +20,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bevy::{prelude::*, sprite_render::SpriteMaterial};
-use kn_game::simulation::{CreatureStage, CreatureState, Simulation, WalkState};
+use bevy::prelude::*;
 use kn_game::{
     CreatureAnimation, CreatureClips, CreatureLayer as GameCreatureLayer, Game, MapRef, Piece,
     PieceGroup, Scene,
+};
+use kn_game::{
+    session::CreatureStage, session::CreatureState, session::Simulation, session::WalkState,
 };
 
 use crate::GameResource;
@@ -34,9 +35,10 @@ use crate::creatures::{
     CreatureData, CreatureNode, CreatureRoot, CreatureShadow, DepthMap, LayerAnimation, LayerData,
     spawn_creature, update_creature_depth,
 };
-use crate::lighting::LightingMaterials;
+use crate::lighting::{attach_creature_lighting, update_creature_lighting};
 use crate::scene::{Z_STEP, piece_sequence, piece_size};
 use crate::textures::TextureCache;
+use kn_lighting::{LightingSet, classic::LightingMaterials};
 
 /// What identifies the step a creature is on, for [`CreatureAnim::locked`].
 pub type StepKey = ((i32, i32), Option<(i32, i32)>);
@@ -370,6 +372,12 @@ impl Plugin for CreatureAnimationPlugin {
             .init_resource::<CreatureDepth>()
             .init_resource::<CreatureMotion>()
             .init_resource::<CreatureNodesVisible>()
+            .add_systems(
+                Update,
+                update_creature_lighting
+                    .after(CreatureSet::Nodes)
+                    .before(LightingSet::Apply),
+            )
             .add_systems(
                 Update,
                 (
@@ -1139,11 +1147,7 @@ pub fn spawn_creature_nodes(
                 layer,
                 is_shadow: false,
             });
-            if let Some(pool) = &lighting {
-                commands
-                    .entity(*child)
-                    .insert(SpriteMaterial(pool.neutral()));
-            }
+            attach_creature_lighting(&mut commands.entity(*child), lighting.as_deref());
         }
         if let Some(shadow) = spawned.shadow {
             commands.entity(shadow).insert(CreatureSprite {
@@ -1450,6 +1454,28 @@ pub fn sync_creature_nodes(
 
 #[cfg(test)]
 mod tests {
+
+    fn material_handle(
+        pool: &kn_lighting::classic::LightingMaterials,
+        surface: kn_lighting::classic::ClassicSurface,
+    ) -> bevy::prelude::Handle<kn_lighting::classic::KonungLightMaterial> {
+        use bevy::{ecs::world::CommandQueue, prelude::*, sprite_render::SpriteMaterial};
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        let id = {
+            let mut commands = Commands::new(&mut queue, &world);
+            let mut entity = commands.spawn_empty();
+            pool.attach(&mut entity, surface);
+            entity.id()
+        };
+        queue.apply(&mut world);
+        world
+            .get::<SpriteMaterial<kn_lighting::classic::KonungLightMaterial>>(id)
+            .unwrap()
+            .0
+            .clone()
+    }
+
     use std::sync::Arc;
 
     use kn_game::{CreatureClips, CreatureLayer, LayerKey};
@@ -1787,7 +1813,8 @@ mod tests {
             game_state::{Character, GameState, Group},
             map::KonungMap,
         };
-        use kn_game::movement::{Cell, MovementMode};
+        use kn_isometric::Cell;
+        use kn_movement::MovementMode;
         let mut characters = vec![None; 8];
         characters[7] = Some(Character {
             slot: 7,
@@ -2041,15 +2068,18 @@ mod tests {
 
     #[test]
     fn creature_layers_keep_the_material_type_across_light_boundaries() {
-        use crate::lighting::{FineLightGrid, KonungLightMaterial, update_creature_lighting};
+        use bevy::sprite_render::SpriteMaterial;
+        use kn_lighting::classic::{
+            ClassicSurface, FineLightGrid, KonungLightMaterial, add_classic_surface_system,
+        };
 
         let simulation = synthetic_simulation();
         let state = simulation.states().into_iter().next().unwrap();
         let mut images = Assets::<Image>::default();
         let mut materials = Assets::<KonungLightMaterial>::default();
         let pool = LightingMaterials::new(&mut images, &mut materials, &[]);
-        let ambient = pool.ambient();
-        let neutral = pool.neutral();
+        let ambient = material_handle(&pool, ClassicSurface::Ambient);
+        let neutral = material_handle(&pool, ClassicSurface::Moving { cell: None });
         let layer = || LayerData {
             image: Handle::default(),
             size: Vec2::splat(8.0),
@@ -2091,8 +2121,12 @@ mod tests {
         .insert_resource(pool)
         .add_systems(
             Update,
-            (spawn_creature_nodes, update_creature_lighting).chain(),
+            (spawn_creature_nodes, update_creature_lighting)
+                .chain()
+                .before(LightingSet::Apply),
         );
+
+        add_classic_surface_system(&mut app);
 
         // Even before a grid is supplied, hidden and static layers are born with
         // the custom material, before the renderer can extract a standard one.
@@ -2145,6 +2179,50 @@ mod tests {
                 .world_mut()
                 .query_filtered::<Entity, Changed<SpriteMaterial<KonungLightMaterial>>>();
             assert_eq!(changed.iter(app.world()).count(), 0);
+        }
+        let unavailable = sprites.iter().find(|(_, shadow, _)| !shadow).unwrap().0;
+        app.world_mut()
+            .get_mut::<CreatureSprite>(unavailable)
+            .unwrap()
+            .creature_id = usize::MAX;
+        app.insert_resource(FineLightGrid(Some(vec![
+            vec![9; state.cell.0 as usize + 1];
+            state.cell.1 as usize + 1
+        ])));
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<SpriteMaterial<KonungLightMaterial>>(unavailable)
+                .unwrap()
+                .0,
+            ambient
+        );
+        let prior: Vec<_> = sprites
+            .iter()
+            .filter_map(|(entity, _, _)| {
+                app.world()
+                    .get::<SpriteMaterial<KonungLightMaterial>>(*entity)
+                    .map(|material| (*entity, material.0.clone()))
+            })
+            .collect();
+        app.world_mut().resource_mut::<CreatureSim>().sim = None;
+        app.insert_resource(FineLightGrid(Some(vec![
+            vec![0; state.cell.0 as usize + 1];
+            state.cell.1 as usize + 1
+        ])));
+        app.update();
+        for (entity, handle) in prior {
+            assert_eq!(
+                app.world()
+                    .get::<SpriteMaterial<KonungLightMaterial>>(entity)
+                    .unwrap()
+                    .0,
+                handle
+            );
+            assert_eq!(
+                app.world().get::<ClassicSurface>(entity),
+                Some(&ClassicSurface::Moving { cell: None })
+            );
         }
     }
 

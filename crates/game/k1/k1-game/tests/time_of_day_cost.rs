@@ -14,7 +14,7 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use k1_game::time_of_day::{
+use k1_game::rules::time_of_day::{
     CYCLE_TICKS, ambient_kind, ambient_value, clock_face, day_phase, game_time, ground_window,
 };
 

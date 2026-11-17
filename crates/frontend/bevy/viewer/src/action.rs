@@ -493,8 +493,8 @@ pub(crate) fn project_state(world: &mut World) {
     world.resource_mut::<ReadProjection>().0 = state;
 }
 
-fn attack_value(order: kn_game::simulation::AttackOrder) -> Value {
-    use kn_game::simulation::{AttackError, AttackStatus};
+fn attack_value(order: kn_game::session::AttackOrder) -> Value {
+    use kn_game::{session::AttackError, session::AttackStatus};
     let (status, error) = match order.status {
         AttackStatus::Pending => ("pending", None),
         AttackStatus::Approaching => ("approaching", None),
@@ -514,8 +514,8 @@ fn attack_value(order: kn_game::simulation::AttackOrder) -> Value {
     json!({"target_id":order.target_id,"status":status,"error":error})
 }
 
-fn pursuit_value(order: kn_game::simulation::DebugPursuit) -> Value {
-    use kn_game::simulation::{PursuitError, PursuitStatus};
+fn pursuit_value(order: kn_game::session::DebugPursuit) -> Value {
+    use kn_game::{session::PursuitError, session::PursuitStatus};
     let (status, error) = match order.status {
         PursuitStatus::Pending => ("pending", None),
         PursuitStatus::Approaching => ("approaching", None),
@@ -557,15 +557,15 @@ pub(crate) fn state_value(world: &mut World) -> Value {
         sim.inspect_creatures().into_iter().map(|creature| {
             let state=states.iter().find(|state|state.id==creature.id);
             let stage=creature.animation_stage.map(|stage|match stage {
-                kn_game::simulation::CreatureStage::Special { .. } => "special",
-                kn_game::simulation::CreatureStage::Melee { .. } => "melee",
-                kn_game::simulation::CreatureStage::Idle => "idle",
+                kn_game::session::CreatureStage::Special { .. } => "special",
+                kn_game::session::CreatureStage::Melee { .. } => "melee",
+                kn_game::session::CreatureStage::Idle => "idle",
             });
-            let special_frame=creature.animation_stage.and_then(|stage|match stage {kn_game::simulation::CreatureStage::Special {frame}=>Some(frame),_=>None});
-            let melee_frame=creature.animation_stage.and_then(|stage|match stage {kn_game::simulation::CreatureStage::Melee {frame}=>Some(frame),_=>None});
+            let special_frame=creature.animation_stage.and_then(|stage|match stage {kn_game::session::CreatureStage::Special {frame}=>Some(frame),_=>None});
+            let melee_frame=creature.animation_stage.and_then(|stage|match stage {kn_game::session::CreatureStage::Melee {frame}=>Some(frame),_=>None});
             let attack=creature.attack.map(attack_value);
             let pursuit=creature.pursuit.map(pursuit_value);
-            let group_state=match creature.group_state {kn_game::simulation::GroupState::Calm=>"calm",kn_game::simulation::GroupState::PlayerInside=>"player_inside",kn_game::simulation::GroupState::MemberOutside=>"member_outside"};
+            let group_state=match creature.group_state {kn_game::session::GroupState::Calm=>"calm",kn_game::session::GroupState::PlayerInside=>"player_inside",kn_game::session::GroupState::MemberOutside=>"member_outside"};
             json!({"id":creature.id,"label":creature.label,"recorded_state":creature.recorded_state,"animation_state":creature.animation_state,"animation_stage":stage,"animation_special_frame":special_frame,"animation_melee_frame":melee_frame,"attack":attack,"pursuit":pursuit,"walk_state":creature.walk_state.map(|state|format!("{state:?}").to_lowercase()),"group":creature.group,"group_state":group_state,"group_state_value":creature.group_state.byte(),"group_state_tick":creature.group_state_tick,"cell":state.map(|state|state.cell),"pixel":state.map(|state|state.pixel),"direction":state.and_then(|state|state.direction)})
         }).collect::<Vec<_>>()
     }).unwrap_or_default();
@@ -687,7 +687,7 @@ mod tests {
     }
     #[test]
     fn attack_projection_names_phase_target_and_refusal() {
-        use kn_game::simulation::{AttackError, AttackOrder, AttackStatus};
+        use kn_game::{session::AttackError, session::AttackOrder, session::AttackStatus};
         assert_eq!(
             attack_value(AttackOrder {
                 target_id: 41,

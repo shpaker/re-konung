@@ -1,5 +1,5 @@
 //! Allocation constants checked against both original executables, not Slavik tables.
-use k1_game::new_game::{COST_BANDS, LIMITS};
+use k1_game::rules::new_game::{COST_BANDS, LIMITS};
 use std::path::PathBuf;
 
 #[test]

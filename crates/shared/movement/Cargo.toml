@@ -1,0 +1,10 @@
+[package]
+name = "kn-movement"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Детерминированное перемещение по изометрической сетке"
+
+[dependencies]
+kn-isometric = { path = "../isometric" }
+pathfinding = "4.16.0"

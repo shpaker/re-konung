@@ -3398,6 +3398,8 @@ name = "k1-game"
 version = "0.1.0"
 dependencies = [
  "k1-data",
+ "kn-isometric",
+ "kn-movement",
  "tempfile",
  "thiserror 2.0.21",
 ]
@@ -3431,11 +3433,12 @@ name = "kn-fe-player"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "k1-data",
- "k1-game",
  "kn-app",
  "kn-game",
  "kn-input",
+ "kn-isometric",
+ "kn-lighting",
+ "kn-movement",
  "kn-render",
  "kn-settings",
  "kn-ui",
@@ -3451,6 +3454,8 @@ dependencies = [
  "k1-game",
  "kn-game",
  "kn-input",
+ "kn-isometric",
+ "kn-lighting",
  "kn-render",
  "kn-ui",
  "serde",
@@ -3464,8 +3469,10 @@ version = "0.1.0"
 dependencies = [
  "k1-data",
  "k1-game",
- "pathfinding",
+ "kn-isometric",
+ "kn-movement",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
 ]
@@ -3475,6 +3482,25 @@ name = "kn-input"
 version = "0.1.0"
 dependencies = [
  "bevy",
+]
+
+[[package]]
+name = "kn-isometric"
+version = "0.1.0"
+
+[[package]]
+name = "kn-lighting"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+]
+
+[[package]]
+name = "kn-movement"
+version = "0.1.0"
+dependencies = [
+ "kn-isometric",
+ "pathfinding",
 ]
 
 [[package]]
@@ -3494,6 +3520,9 @@ dependencies = [
  "bevy",
  "k1-data",
  "kn-game",
+ "kn-isometric",
+ "kn-lighting",
+ "kn-movement",
  "thiserror 2.0.21",
 ]
 
@@ -3521,6 +3550,7 @@ dependencies = [
  "clap",
  "kn-fe-viewer",
  "kn-game",
+ "kn-movement",
  "serde",
  "serde_json",
  "tempfile",

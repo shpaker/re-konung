@@ -7,6 +7,7 @@
 
 mod common;
 
+use kn_lighting::classic::{FineLightGrid, LightingMaterials};
 use std::sync::Arc;
 
 use bevy::prelude::*;
@@ -17,8 +18,7 @@ use kn_fe_player::flow::AppFlow;
 use kn_fe_player::session;
 use kn_game::{Game, MapRef, SceneOptions};
 use kn_render::{
-    Clock, CreatureMotion, CreatureNode, CreatureRoot, CreatureSim, FineLightGrid,
-    LightingMaterials, MapRoot, PlayState, Sequence,
+    Clock, CreatureMotion, CreatureNode, CreatureRoot, CreatureSim, MapRoot, PlayState, Sequence,
 };
 
 /// The sequence the body sprite of `creature` draws right now.
