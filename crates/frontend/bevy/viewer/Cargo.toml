@@ -6,14 +6,12 @@ publish = false
 description = "Bevy frontend of the «Князь» map viewer: window, Feathers panel, overlays, diagnostics, scene rebuild"
 
 [dependencies]
+kn-isometric = { path = "../../../shared/isometric" }
+kn-lighting = { path = "../lighting" }
 kn-game = { path = "../../../game/kn-game" }
 kn-render = { path = "../render" }
 kn-input = { path = "../input" }
 kn-ui = { path = "../ui" }
-# The lighting of the scene is K1 knowledge: the LIGHTS.RES masks, the map's
-# LIGHTS.N fine grid and the per-tick light params all come from the K1 layer
-k1-data = { path = "../../../game/k1/k1-data" }
-k1-game = { path = "../../../game/k1/k1-game" }
 bevy = { workspace = true, features = ["bevy_feathers"] }
 
 serde = { version = "1", features = ["derive"] }
@@ -24,4 +22,6 @@ getrandom = "0.3"
 dynamic = ["bevy/dynamic_linking"]
 
 [dev-dependencies]
+k1-data = { path = "../../../game/k1/k1-data" }
+k1-game = { path = "../../../game/k1/k1-game" }
 tempfile = "3"

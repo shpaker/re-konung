@@ -29,9 +29,10 @@ use k1_data::{
 };
 use k1_game::creatures;
 use k1_game::resources::Resources;
-use kn_game::movement::{Cell, Grid, Passage};
-use kn_game::simulation::{MapPassage, Simulation};
 use kn_game::{Game, MapSource};
+use kn_game::{session::MapPassage, session::Simulation};
+use kn_isometric::{Cell, Grid};
+use kn_movement::Passage;
 
 /// The same fixed seed the viewer replays with and the player window starts a
 /// session with — one reproducible world everywhere.
@@ -155,7 +156,7 @@ impl Start {
     }
 
     fn grid(&self) -> Grid {
-        Grid::fine()
+        kn_game::fine_grid()
     }
 }
 

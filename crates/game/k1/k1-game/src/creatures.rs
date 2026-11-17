@@ -240,7 +240,7 @@ pub fn melee_frame_counts(
 ///
 /// Game texts live only in a window: no fixture, no CI report carries them
 /// (issue #84 AC3), so the pure function is judged on synthetic tables. The
-/// frontend reads the finished strings off `kn_game::simulation::Simulation`
+/// frontend reads the finished strings off `kn_game::session::Simulation`
 /// and imports neither this module nor the name tables itself.
 pub fn labels(roster: &[Creature], texts: Option<&Texts>) -> HashMap<usize, String> {
     roster

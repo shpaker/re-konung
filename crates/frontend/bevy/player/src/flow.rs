@@ -84,7 +84,7 @@ pub struct FlowSet;
 /// Adds the AppFlow pipeline with its resources. The app must already run the
 /// creature subsystem (`kn_render::CreatureAnimationPlugin`) and provide
 /// [`kn_render::GameResource`], a [`kn_render::TextureCache`]
-/// and `Assets<Image>`/`Assets<KonungLightMaterial>` — what any window drawing
+/// and the image/classic-lighting assets — what any window drawing
 /// this game has anyway.
 pub struct PlayerFlowPlugin {
     /// The heroes the new-game flow offers, as the game directory resolves

@@ -7,7 +7,7 @@
 //! without touching the callers.
 
 use kn_app::{SaveError, SessionError};
-use kn_game::simulation::{AttackError, AttackStatus};
+use kn_game::{session::AttackError, session::AttackStatus};
 use kn_settings::Language;
 
 /// One interface string. The payloads are the typed errors the app state

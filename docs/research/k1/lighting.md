@@ -348,7 +348,7 @@ The synthetic probe exercises the actual material, shader, sRGB texture decoding
 and output encoding without game content:
 
 ```sh
-cargo run --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-render \
+cargo run --profile dev-runtime --manifest-path crates/Cargo.toml -p kn-lighting \
   --example lighting_probe -- out/lighting-audit/probe.png
 uv run python tools/check_lighting_probe.py out/lighting-audit/probe.png
 ```

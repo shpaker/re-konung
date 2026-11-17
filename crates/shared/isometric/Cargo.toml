@@ -1,0 +1,6 @@
+[package]
+name = "kn-isometric"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Геометрия изометрической сетки без игровых форматов и Bevy"

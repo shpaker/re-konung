@@ -1,0 +1,9 @@
+[package]
+name = "kn-lighting"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Освещение поверхностей Bevy с изолированной классической реализацией"
+
+[dependencies]
+bevy = { workspace = true }

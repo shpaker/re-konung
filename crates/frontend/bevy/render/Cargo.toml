@@ -6,10 +6,13 @@ publish = false
 description = "Отображение сцены игр серии «Князь» на Bevy: рендер, камера, анимации"
 
 [dependencies]
+kn-lighting = { path = "../lighting" }
 kn-game = { path = "../../../game/kn-game" }
 bevy = { workspace = true }
 
 thiserror = "2"
 
 [dev-dependencies]
+kn-isometric = { path = "../../../shared/isometric" }
+kn-movement = { path = "../../../shared/movement" }
 k1-data = { path = "../../../game/k1/k1-data" }

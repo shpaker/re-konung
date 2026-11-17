@@ -14,6 +14,7 @@ name = "re-konung-viewer"
 path = "src/main.rs"
 
 [dependencies]
+kn-movement = { path = "../../shared/movement" }
 kn-fe-viewer = { path = "../../frontend/bevy/viewer" }
 kn-game = { path = "../../game/kn-game" }
 clap = { version = "4", features = ["derive"] }

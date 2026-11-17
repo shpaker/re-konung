@@ -179,11 +179,11 @@ pub fn simulate_reports(
                     let events = sim.tick();
                     for event in &events {
                         match event {
-                            kn_game::movement::world::Event::StepStarted { creature, .. } => {
+                            kn_movement::world::Event::StepStarted { creature, .. } => {
                                 steps += 1;
                                 ever_walked.insert(creature.raw());
                             }
-                            kn_game::movement::world::Event::RouteSet { .. } => route_sets += 1,
+                            kn_movement::world::Event::RouteSet { .. } => route_sets += 1,
                             _ => {}
                         }
                     }

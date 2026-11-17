@@ -23,7 +23,7 @@ use bevy::{
     ui::{Checked, ScrollPosition},
     ui_widgets::{Activate, SliderStep, ValueChange},
 };
-use k1_game::time_of_day::CYCLE_TICKS;
+use kn_game::CYCLE_TICKS;
 use kn_ui::spacing::{PANEL_PADDING, SPACE_4, SPACE_8};
 
 #[derive(Component, Clone, Default)]
@@ -783,7 +783,7 @@ fn sync_workspace(
 
     if let Ok(mut t) = text.p2().single_mut() {
         let tick = data["tick"].as_u64().unwrap_or(0);
-        let clock = k1_game::time_of_day::game_time(tick);
+        let clock = kn_game::game_time(tick);
         **t = format!(
             "{} | tick {} | {:02}:{:02} {}",
             if data["playing"] == true {

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use k1_data::{characters, game_state, repo::GAME_FILES, repo::GameDir};
-use k1_game::{resources::Resources, scene};
+use k1_game::{presentation::scene, resources::Resources};
 
 /// The measurement runs on the map with the most creatures of the first hero.
 const MAP: u32 = 1;

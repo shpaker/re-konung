@@ -16,7 +16,8 @@ use k1_data::{
     repo::{GAME_FILES, GameDir},
 };
 use k1_game::{
-    creatures, placement,
+    creatures,
+    rules::placement,
     rules::{self, CreatureType, Decision, Ground, GroupState, Live, Random, class, group::PLAYER},
 };
 

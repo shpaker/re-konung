@@ -2,10 +2,13 @@
 
 # Движок перемещения
 
-Общий слой мелкой изометрической сетки, проходимости, занятости, маршрутов,
-ходьбы и тика. Без Bevy и K1: особенности части в `k1-*`, показ в `kn-render`.
+kn-movement владеет проходимостью, занятостью, маршрутами, ходьбой и тиком.
+Геометрия находится в kn-isometric. Оба крейта работают без Bevy и K1:
+особенности части в `k1-*`, показ в `kn-render`.
 
-- `grid`: Cell, восемь Direction, клетка ↔ пиксели, несдвинутые lattice-координаты и расстояние.
+- `kn-isometric`: Cell, восемь Direction, Grid, клетка ↔ пиксели и несдвинутые lattice-координаты.
+- `metric`: цена шага и округлённое расстояние для эвристики A*, отдельно от геометрии.
+- `k1_game::geometry`: размеры сетки K1 и `fine_grid`; фасад реэкспортирует их для потребителей.
 - `passage`: Passage поставляет проходимость.
 - `pace`: Pace поставляет длительность шага по направлению.
 - `occupancy`: одна клетка — одно существо или резерв шага.
@@ -14,6 +17,10 @@
 - `world`: World объединяет существ, тики, спор за клетки, поиск и Event;
   единственный выход событий — tick_step.
 - `rng`: собственный детерминированный splitmix64.
+- `step_durations`: готовая таблица длительностей по CreatureId и направлению.
+
+Потребители импортируют геометрию из kn-isometric, движение из kn-movement.
+Реализация применения решений находится в k1_game::rules::movement.
 
 route не знает тик/длительность, walk — проходимость и происхождение пути.
 Они встречаются и считают время только в World. Passage — данные карты,
@@ -158,7 +165,7 @@ World::stop очищает failed_goal
 чередование двух недостижимых ищет каждый раз
 (`alternating_unreachable_orders_each_search_inside_the_window`).
 
-Частота разных целей ИИ ограничивается выше: kn_game::rules::FailedOrderCooldown
+Частота разных целей ИИ ограничивается выше: k1_game::rules::movement::FailedOrderCooldown
 после NoRoute держит приказы существа window_ticks и возвращает Applied::Held
 без World. `an_unreachable_area_costs_one_search_per_window` проверяет
 4 поиска за 40 тиков вместо 40;
@@ -260,11 +267,11 @@ kn_game::TICK_MS, 60 мс для K1. Проходимость и длитель�
 
 ## Стоимость движка
 
-Release, Apple M4 Pro, сетка 160×320, `kn-game/tests/movement_cost.rs`
+Release, Apple M4 Pro, сетка 160×320, `crates/shared/movement/tests/movement_cost.rs`
 под `#[ignore]`; обычный cargo test не запускает замер:
 
 ```bash
-cargo test --release --manifest-path crates/Cargo.toml -p kn-game \
+cargo test --release --manifest-path crates/Cargo.toml -p kn-movement \
     --test movement_cost -- --ignored --nocapture
 ```
 
@@ -300,7 +307,7 @@ repath_cooldown_ticks; цикл недостижимых приказов опл
 `simulation::tests::hero_order_costs` запускается явно:
 
 ```sh
-cargo test --release --manifest-path crates/Cargo.toml -p kn-game \
+cargo test --release --manifest-path crates/Cargo.toml -p k1-game \
     --lib hero_order_costs -- --ignored --nocapture
 ```
 

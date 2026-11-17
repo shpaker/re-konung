@@ -10,11 +10,14 @@ use std::collections::HashSet;
 use k1_data::game_state::Rect;
 use k1_game::creatures::Creature;
 use k1_game::rules::{self, Context, Decision, GroupState};
-use kn_game::movement::grid::{Cell, Grid};
-use kn_game::movement::rng::Rng;
-use kn_game::movement::world::{Event, World, WorldRules};
-use kn_game::movement::{CreatureId, Direction, Pace, Passage};
-use kn_game::rules::{Applied, FailedOrderCooldown, live};
+use k1_game::{
+    rules::movement::Applied, rules::movement::FailedOrderCooldown, rules::movement::live,
+};
+use kn_isometric::Direction;
+use kn_isometric::{Cell, Grid};
+use kn_movement::rng::Rng;
+use kn_movement::{CreatureId, Pace, Passage};
+use kn_movement::{world::Event, world::World, world::WorldRules};
 
 /// Walkability as a set of blocked cells.
 #[derive(Default)]

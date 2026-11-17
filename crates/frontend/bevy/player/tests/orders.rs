@@ -10,11 +10,9 @@ use bevy::{
 };
 use kn_app::{Action, HeroSelectAction, MainMenuAction, Screen};
 use kn_fe_player::{flow::AppFlow, orders::PlayerOrdersPlugin, session};
-use kn_game::{
-    Game,
-    movement::{Cell, MovementMode},
-    simulation::HeroOrderStatus,
-};
+use kn_game::{Game, session::HeroOrderStatus};
+use kn_isometric::Cell;
+use kn_movement::MovementMode;
 use kn_render::{Clock, CreatureSim, MapCamera};
 
 fn start(app: &mut App, hero: u32) {

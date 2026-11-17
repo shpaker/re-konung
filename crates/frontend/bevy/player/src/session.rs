@@ -9,12 +9,12 @@
 
 use bevy::ecs::world::CommandQueue;
 use bevy::prelude::*;
-use k1_data::repo::{GAME_FILES, GameDir};
 use kn_app::SessionError;
 use kn_game::{Game, GameError, MapRef, Scene, SceneOptions};
+use kn_lighting::classic::{FineLightGrid, LightingMaterials, install_classic_lighting};
 use kn_render::{
-    CreatureMotion, CreatureRoot, CreatureSim, FineLightGrid, GameResource, KonungLightMaterial,
-    LightingMaterials, MapRoot, PendingFrame, TextureCache, load_scene,
+    CreatureMotion, CreatureRoot, CreatureSim, GameResource, MapRoot, PendingFrame, TextureCache,
+    load_light_masks, load_scene,
 };
 
 /// Present from a successful [`init`] until the watcher reports the session's
@@ -103,14 +103,9 @@ pub fn init(world: &mut World, hero: u32, draft: kn_app::NewGameDraft) -> Result
     // frame from the simulation tick through `update_lighting_state`.
     let (masks, fine) = {
         let game = world.resource::<GameResource>();
-        (lights_res_masks(&game.0), map_fine_lights(&game.0, map_ref))
+        (load_light_masks(&game.0), game.0.map_light_grid(map_ref))
     };
-    world.resource_scope::<Assets<Image>, _>(|world, mut images| {
-        world.resource_scope::<Assets<KonungLightMaterial>, _>(|world, mut materials| {
-            let pool = LightingMaterials::new(&mut images, &mut materials, &masks);
-            world.insert_resource(pool);
-        });
-    });
+    install_classic_lighting(world, &masks);
     world.insert_resource(FineLightGrid(fine));
 
     // The pool and the pending camera frame are taken out of the world because
@@ -211,62 +206,4 @@ pub fn teardown(world: &mut World) {
     if let Some(mut game) = world.get_resource_mut::<GameResource>() {
         game.0.clear_new_game();
     }
-}
-
-/// The LIGHTS.RES tile masks of the opened game: raw brightness bytes with
-/// their pixel size, ready for [`LightingMaterials::new`]. A game without a
-/// readable LIGHTS.RES gets an empty pool — the scene still lights, the tiles
-/// just carry no tile mask. Every way the file can fail warns with its path
-/// and reason: an empty pool reached silently reads as a broken night scene
-/// (review #106).
-fn lights_res_masks(game: &Game) -> Vec<(Vec<u8>, u32, u32)> {
-    let Some(path) = k1_game::resources::find_named(game.root(), "lights.res") else {
-        warn!(
-            "LIGHTS.RES not found in {}; the scene lights without tile masks",
-            game.root().display()
-        );
-        return Vec::new();
-    };
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            warn!(
-                "LIGHTS.RES unreadable at {}: {error}; the scene lights without tile masks",
-                path.display()
-            );
-            return Vec::new();
-        }
-    };
-    let res = match k1_data::lights_res::parse(&bytes) {
-        Ok(res) => res,
-        Err(error) => {
-            warn!(
-                "LIGHTS.RES unparsable at {}: {error}; the scene lights without tile masks",
-                path.display()
-            );
-            return Vec::new();
-        }
-    };
-    res.tiles
-        .into_iter()
-        .map(|mask| {
-            (
-                mask,
-                k1_data::lights_res::TILE_MASK_WIDTH as u32,
-                k1_data::lights_res::TILE_MASK_HEIGHT as u32,
-            )
-        })
-        .collect()
-}
-
-/// The map's LIGHTS.N fine grid — the tile-light index per fine cell, what the
-/// creature lighting reads to tell a lit patch from a dark one. `None` when
-/// the map has no LIGHTS.N: every cell counts as dark.
-fn map_fine_lights(game: &Game, map_ref: MapRef) -> Option<Vec<Vec<u8>>> {
-    let bytes = GameDir::new(game.root())
-        .lights_bytes(map_ref.number, GAME_FILES)
-        .ok()??;
-    k1_data::map::parse_lights(&bytes)
-        .ok()
-        .map(|lights| lights.fine)
 }

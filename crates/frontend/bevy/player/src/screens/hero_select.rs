@@ -106,32 +106,24 @@ pub(crate) fn spawn(world: &mut World) {
         .and_then(|game| game.0.hero_summaries(MapSource::Game).ok())
         .unwrap_or_default();
     if !world.contains_resource::<HeroPortraits>() {
-        // The game's root first, so the world borrow ends before the assets
-        // borrow starts.
-        let game_root = world
+        let records = world
             .get_resource::<GameResource>()
-            .map(|game| game.0.root().to_path_buf());
-        let records = game_root.and_then(|root| {
-            ["NEWH800R.RES", "NEWH800E.RES"].iter().find_map(|name| {
-                let bytes = std::fs::read(root.join(name)).ok()?;
-                k1_data::newh_res::parse(&bytes).ok()
-            })
-        });
+            .and_then(|game| game.0.menu_portraits());
         let portraits = records.map(|records| {
             let mut images = world.resource_mut::<Assets<Image>>();
             records
-                .images
                 .into_iter()
-                .enumerate()
-                .skip(3)
-                .take(6)
                 .map(|(record, image)| {
                     let portrait = PortraitImage {
-                        handle: images.add(portrait_texture(&image)),
+                        handle: images.add(portrait_texture_raw(
+                            image.width,
+                            image.height,
+                            image.data,
+                        )),
                         width: image.width as f32,
                         height: image.height as f32,
                     };
-                    (record as u8, portrait)
+                    (record, portrait)
                 })
                 .collect::<HashMap<u8, PortraitImage>>()
         });
@@ -198,20 +190,6 @@ fn portrait_texture_raw(width: u32, height: u32, rgba: Vec<u8>) -> Image {
         },
         TextureDimension::D2,
         rgba,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::default(),
-    )
-}
-
-fn portrait_texture(image: &k1_data::newh_res::Image) -> Image {
-    Image::new(
-        Extent3d {
-            width: u32::from(image.width),
-            height: u32::from(image.height),
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        image.rgba.clone(),
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::default(),
     )

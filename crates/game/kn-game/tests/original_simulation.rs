@@ -20,14 +20,12 @@ use k1_data::{
     map::{self, KonungMap},
     repo::{GAME_FILES, GameDir},
 };
-use k1_game::{creatures, placement, resources::Resources, rules};
-use kn_game::{
-    movement::{
-        Cell, CreatureId, DIRECTION_COUNT, Grid, Passage, Rng,
-        world::{Event, World, WorldRules},
-    },
-    rules::{FailedOrderCooldown, live},
-    step_durations::StepDurations,
+use k1_game::{creatures, resources::Resources, rules, rules::placement};
+use k1_game::{rules::movement::FailedOrderCooldown, rules::movement::live};
+use kn_isometric::{Cell, DIRECTION_COUNT};
+use kn_movement::{
+    CreatureId, Passage, Rng, step_durations::StepDurations, world::Event, world::World,
+    world::WorldRules,
 };
 
 /// How many ticks each map runs: "several hundred" of the criterion.
@@ -217,7 +215,7 @@ impl Simulation {
 
         let world_rules = WorldRules::default();
         let mut world = World::new(
-            Grid::fine(),
+            kn_game::fine_grid(),
             ground,
             StepDurations::new(rows),
             world_rules,

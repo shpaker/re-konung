@@ -14,8 +14,8 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use k1_game::lighting::{apply_channel, params};
-use k1_game::time_of_day::CYCLE_TICKS;
+use k1_game::presentation::lighting::{apply_channel, params};
+use k1_game::rules::time_of_day::CYCLE_TICKS;
 
 /// Whole cycles per measurement: 21600 ticks each, enough to hide the timer's
 /// own granularity and cheap in release.
@@ -89,13 +89,16 @@ fn the_lighting_model_costs_are_recorded() {
         500_000,
         |tick| {
             let day = black_box(tick / CYCLE_TICKS);
-            black_box(k1_game::lighting::night_palette(day, seed));
+            black_box(k1_game::presentation::lighting::night_palette(day, seed));
         },
     );
 
     // Light color variation: re-rolled every 16 ticks.
     measure("light_color (per-tile)", 0.2, 0, |tick| {
-        black_box(k1_game::lighting::light_color(black_box(tick), seed));
+        black_box(k1_game::presentation::lighting::light_color(
+            black_box(tick),
+            seed,
+        ));
     });
 
     // Combined full pipeline: params + channel application.
@@ -105,7 +108,7 @@ fn the_lighting_model_costs_are_recorded() {
         let lp = params(black_box(tick), seed);
         let base_r = black_box(0.5f32);
         let lightning = black_box(0.15f32); // mask brightness
-        let light_color = k1_game::lighting::light_color(tick, seed); // RGB source
+        let light_color = k1_game::presentation::lighting::light_color(tick, seed); // RGB source
         let r = apply_channel(base_r, lp.ambient[0], lightning, light_color[0], false);
         let g = apply_channel(base_r, lp.ambient[1], lightning, light_color[1], false);
         let b = apply_channel(base_r, lp.ambient[2], lightning, light_color[2], true);

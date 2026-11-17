@@ -6,11 +6,10 @@ use k1_data::{
     repo::{GAME_FILES, GameDir},
 };
 use kn_game::{
-    Game, MapRef, MapSource,
-    debug::{DebugCommand, DebugJournal},
-    movement::{Cell, Direction},
-    simulation::{CreatureStage, PursuitStatus},
+    Game, MapRef, MapSource, debug::DebugCommand, debug::DebugJournal, session::CreatureStage,
+    session::PursuitStatus,
 };
+use kn_isometric::{Cell, Direction};
 
 #[test]
 fn both_editions_acquire_pursue_stop_and_replay_without_attack_frames() {

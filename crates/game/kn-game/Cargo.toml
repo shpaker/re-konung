@@ -6,11 +6,13 @@ publish = false
 description = "Общий фасад игр серии «Князь»: модель сцены и подготовка данных для отображения"
 
 [dependencies]
+kn-isometric = { path = "../../shared/isometric" }
+kn-movement = { path = "../../shared/movement" }
 k1-data = { path = "../k1/k1-data" }
 k1-game = { path = "../k1/k1-game" }
-pathfinding = "4.16.0"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 
 [dev-dependencies]
+serde_json = "1"
 tempfile = "3"

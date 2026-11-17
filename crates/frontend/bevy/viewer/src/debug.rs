@@ -7,10 +7,10 @@ use crate::{
 };
 use bevy::prelude::*;
 use kn_game::{
-    debug::{DebugCommand, DebugScript, DebugSnapshot, GridRectangle, MovementDebugSnapshot},
-    movement::grid::{Cell, Grid, ODD_ROW_SHIFT, STEP_X, STEP_Y},
-    simulation::{PursuitError, PursuitStatus},
+    debug::DebugCommand, debug::DebugScript, debug::DebugSnapshot, debug::GridRectangle,
+    debug::MovementDebugSnapshot, session::PursuitError, session::PursuitStatus,
 };
+use kn_isometric::{Cell, ODD_ROW_SHIFT, STEP_X, STEP_Y};
 use kn_render::{CreatureSet, CreatureSim, DebugReplay, GameResource, MapCamera, ortho_scale};
 use serde_json::{Value, json};
 
@@ -122,7 +122,7 @@ pub(crate) fn world_cell(point: Vec2) -> Option<Cell> {
     if !point.is_finite() {
         return None;
     }
-    Grid::fine().cell_at(
+    kn_game::fine_grid().cell_at(
         point.x.round_ties_even() as i32,
         (-point.y).round_ties_even() as i32,
     )
@@ -664,8 +664,8 @@ mod tests {
 
     #[test]
     fn clicks_use_existing_fine_grid_inverse_without_clamping_off_grid_points() {
-        for row in 0..kn_game::movement::grid::FINE_HEIGHT {
-            for column in 0..kn_game::movement::grid::FINE_WIDTH {
+        for row in 0..kn_game::FINE_HEIGHT {
+            for column in 0..kn_game::FINE_WIDTH {
                 let expected = Cell::new(column, row);
                 assert_eq!(world_cell(pixel(expected.centre())), Some(expected));
             }
