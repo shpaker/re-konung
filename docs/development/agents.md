@@ -8,30 +8,44 @@ git-хуками, а не хуками отдельного агента; исх
 
 <a id="delegation"></a>
 
-## Delegation
+## Делегирование
 
-The primary agent plans, assigns scoped work directly and reviews the result,
-including acceptance and critical checks. The selected primary model is intended
-to be Astra; project configuration does not override it. Assign one writer per
-file set. Subagents do not delegate further and report ambiguity or conflicting
-evidence to the primary agent with concise evidence.
+Основной агент планирует работу, напрямую назначает ограниченные задачи,
+проверяет результаты и отвечает за приёмку и обязательные проверки. В Codex
+проектный `.codex/config.toml` задаёт `gpt-6.2-sol` с effort `medium` для
+основного агента и как стандарт для подагентов без собственной настройки.
+Это значения по умолчанию; явный выбор модели в клиенте может их переопределить.
 
-Codex provides these project roles in `.codex/agents/`:
+Проектные роли Codex описаны в `.codex/agents/`:
 
-| Role | Model and effort | Assignment |
+| Роль | Модель и effort | Назначение |
 |---|---|---|
-| `sol_scout` | `gpt-6.1-sol`, medium | Read-only investigation |
-| `sol_worker` | `gpt-6.1-sol`, high | Complex implementation |
-| `terra_worker` | `gpt-6.1-terra`, medium | Scoped changes and visual checks |
+| `sol_scout` | `gpt-6.2-sol`, medium | Исследование без изменения файлов |
+| `sol_worker` | `gpt-6.2-sol`, medium | Реализация сложных изменений |
+| `terra_worker` | `gpt-6.1-terra`, medium | Небольшие правки и визуальные проверки |
 
-The scout's read-only scope is an instruction, not a separate enforced sandbox.
-The primary agent chooses roles as needed; small tasks do not require all three.
-The project permits up to three concurrent subagents. The configuration format is
-in the [Codex documentation](https://learn.chatgpt.com/docs/agent-configuration/subagents).
+Небольшие задачи основной агент выполняет самостоятельно. Делегирование нужно
+для самостоятельного вопроса или отдельного набора файлов: у каждого набора
+один исполнитель. Повторное исследование результата оправдано обнаруженными
+пробелами или противоречиями; ревью изменений и обязательные проверки сохраняются.
+Подагенты не делегируют дальше и передают основному агенту неоднозначности
+и противоречащие сведения с краткими доказательствами.
 
-Evaluate the workflow by time to completion including repairs, reviewer findings,
-and visual evidence where needed. Other clients follow the general roles in
-AGENTS.md; their separate configurations are deferred.
+Для сложного реверса или архитектурного решения основной агент рекомендует
+явно выбрать Sol 6.2 с effort `high`; если противоречия сохраняются — Astra 6.2
+с effort `medium`. Автоматического переключения основной модели нет. Модель
+и effort, заданные в файле роли, имеют приоритет над параметрами её запуска;
+смена основной модели сама по себе не повышает effort этих ролей.
+
+Запрет записи для scout задан инструкцией, а не отдельной песочницей. Проект
+допускает до трёх одновременно работающих подагентов. Формат и приоритеты
+настроек описаны в
+[документации Codex](https://learn.chatgpt.com/docs/agent-configuration/subagents).
+
+Оценивайте схему по расходу, времени выполнения с учётом исправлений,
+замечаниям ревью и визуальным свидетельствам, когда они нужны. Процент экономии
+без замеров не установлен. Другие клиенты следуют общим ролям из AGENTS.md;
+их отдельные конфигурации и глобальные настройки пользователя не меняются.
 
 <a id="skills-and-plugins"></a>
 
