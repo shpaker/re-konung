@@ -27,6 +27,12 @@ Read the relevant document before working; follow the linked procedures.
 - In Codex, use `sol_scout` for scouting, `sol_worker` for complex implementation,
   and `terra_worker` for scoped changes and visual checks when available. See
   [Agent workflow](docs/development/agents.md#delegation) for details.
+- Codex defaults to Sol 6.2 with medium effort. Handle small tasks directly;
+  delegate only independent questions or bounded file sets. Trust scoped reports
+  unless gaps or conflicting evidence justify further investigation.
+- For difficult reverse engineering or architecture, recommend an explicit switch
+  to Sol 6.2 high, then Astra 6.2 medium if conflicting evidence remains. Do not
+  assume the primary model switches automatically.
 - Subagents do not delegate further. Escalate ambiguity or conflicting evidence
   to the primary agent. Use parallel work only when it helps the task.
 

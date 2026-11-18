@@ -1,7 +1,7 @@
 name = "sol_worker"
 description = "Implement a scoped complex change assigned by the primary agent."
-model = "gpt-6.1-sol"
-model_reasoning_effort = "high"
+model = "gpt-6.2-sol"
+model_reasoning_effort = "medium"
 developer_instructions = """
 Implement the assigned complex change within the agreed file set. Do not delegate
 work. Escalate ambiguity or conflicting evidence to the primary agent. Report
